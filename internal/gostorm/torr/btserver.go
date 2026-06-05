@@ -30,7 +30,8 @@ type BTServer struct {
 
 	storage *torrstor.Storage
 
-	torrents map[metainfo.Hash]*Torrent
+	torrents   map[metainfo.Hash]*Torrent
+	tickerStop chan struct{}
 
 	mu sync.Mutex
 }
@@ -118,6 +119,7 @@ func init() {
 func NewBTS() *BTServer {
 	bts := new(BTServer)
 	bts.torrents = make(map[metainfo.Hash]*Torrent)
+	bts.tickerStop = make(chan struct{})
 	return bts
 }
 
@@ -127,6 +129,7 @@ func (bt *BTServer) Connect() error {
 	bt.configure(context.TODO())
 	bt.client, err = torrent.NewClient(bt.config)
 	bt.torrents = make(map[metainfo.Hash]*Torrent)
+	bt.tickerStop = make(chan struct{})
 	bt.mu.Unlock()
 
 	// V1.4.0: Align anacrolix reader max readahead with configured CacheSize
@@ -145,24 +148,33 @@ func (bt *BTServer) StartTicker() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		bt.mu.Lock()
-		if bt.client == nil {
+	bt.mu.Lock()
+	stop := bt.tickerStop
+	bt.mu.Unlock()
+
+	for {
+		select {
+		case <-ticker.C:
+			bt.mu.Lock()
+			if bt.client == nil {
+				bt.mu.Unlock()
+				return
+			}
+
+			// Snapshot list to avoid holding lock during updates
+			list := make([]*Torrent, 0, len(bt.torrents))
+			for _, t := range bt.torrents {
+				list = append(list, t)
+			}
 			bt.mu.Unlock()
+
+			// Update each torrent concurrently or sequentially?
+			// Sequentially is safer for CPU spikes, and UpdateStats is fast.
+			for _, t := range list {
+				t.UpdateStats()
+			}
+		case <-stop:
 			return
-		}
-
-		// Snapshot list to avoid holding lock during updates
-		list := make([]*Torrent, 0, len(bt.torrents))
-		for _, t := range bt.torrents {
-			list = append(list, t)
-		}
-		bt.mu.Unlock()
-
-		// Update each torrent concurrently or sequentially?
-		// Sequentially is safer for CPU spikes, and UpdateStats is fast.
-		for _, t := range list {
-			t.UpdateStats()
 		}
 	}
 }
@@ -173,6 +185,7 @@ func (bt *BTServer) Disconnect() {
 	if bt.client != nil {
 		bt.client.Close()
 		bt.client = nil
+		close(bt.tickerStop)
 		utils.FreeOSMemGC()
 	}
 }

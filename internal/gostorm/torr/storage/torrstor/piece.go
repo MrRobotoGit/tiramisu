@@ -159,8 +159,12 @@ func (p *Piece) Completion() storage.Completion {
 
 func (p *Piece) Release() {
 	p.mPiece.Release()
-	if !p.cache.isClosed && p.cache.torrent != nil {
-		p.cache.torrent.Piece(p.Id).SetPriority(torrent.PiecePriorityNone)
-		p.cache.torrent.Piece(p.Id).UpdateCompletion()
+	p.cache.muReaders.RLock()
+	closed := p.cache.isClosed.Load()
+	torr := p.cache.torrent
+	p.cache.muReaders.RUnlock()
+	if !closed && torr != nil {
+		torr.Piece(p.Id).SetPriority(torrent.PiecePriorityNone)
+		torr.Piece(p.Id).UpdateCompletion()
 	}
 }
