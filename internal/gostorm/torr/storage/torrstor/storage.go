@@ -60,6 +60,7 @@ func (s *Storage) Close() error {
 	for _, ch := range s.caches {
 		ch.Close()
 	}
+	s.caches = make(map[metainfo.Hash]*Cache)
 	return nil
 }
 

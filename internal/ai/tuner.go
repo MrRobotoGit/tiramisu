@@ -234,7 +234,7 @@ func runTuningCycle(provider AIProvider) {
 		// Check if exactly one priority stream exists (others are Plex scan noise)
 		var priorityList []*torr.Torrent
 		for _, t := range activeTorrents {
-			if t.IsPriority {
+			if t.IsPriority.Load() {
 				priorityList = append(priorityList, t)
 			}
 		}

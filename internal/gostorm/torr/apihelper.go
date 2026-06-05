@@ -198,6 +198,11 @@ func GetTorrent(hashHex string) *Torrent {
 	if tr != nil {
 		tor = tr
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.TLogln("[PANIC] NewTorrent goroutine recovered:", r)
+				}
+			}()
 			log.TLogln("New torrent", tor.Hash())
 
 			btsMu.RLock()

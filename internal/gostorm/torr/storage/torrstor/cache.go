@@ -140,7 +140,8 @@ func (c *Cache) Close() error {
 	c.isClosed = true
 	close(c.cleanStop) // V280: Stop background goroutine (cleanTrigger never closed → no panic on send)
 
-	delete(c.storage.caches, c.hash)
+	// Note: c.storage.caches cleanup is handled by Storage.CloseHash() and Storage.Close()
+	// to avoid concurrent map modification during range iteration in Storage.Close().
 
 	if settings.BTsets.RemoveCacheOnDrop {
 		name := filepath.Join(settings.BTsets.TorrentsSavePath, c.hash.HexString())
@@ -182,6 +183,7 @@ func (c *Cache) GetState() *state.CacheState {
 	piecesState := make(map[int]state.ItemState, 0)
 	var fill int64 = 0
 
+	c.muReaders.RLock()
 	if len(c.pieces) > 0 {
 		for _, p := range c.pieces {
 			if p.Size > 0 {
@@ -194,12 +196,13 @@ func (c *Cache) GetState() *state.CacheState {
 					Id:        p.Id,
 					Size:      p.Size,
 					Length:    c.pieceLength,
-					Completed: p.Complete,
+					Completed: p.Complete.Load(),
 					Priority:  priority,
 				}
 			}
 		}
 	}
+	c.muReaders.RUnlock()
 
 	readersState := make([]*state.ReaderState, 0)
 
@@ -411,7 +414,7 @@ func (c *Cache) setLoadPriority(ranges []Range) {
 		limit := 0
 		c.muPriority.Lock()
 		for i := readerPos; i < end && i < c.pieceCount && limit < count; i++ {
-			if !c.pieces[i].Complete {
+			if !c.pieces[i].Complete.Load() {
 				var prio torrenttypes.PiecePriority
 				if i == readerPos {
 					prio = torrent.PiecePriorityNow

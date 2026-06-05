@@ -274,8 +274,8 @@ func (cm *CleanupManager) runCleanup() {
 				// V273: PeekTorrent instead of GetTorrent — cleanup is read-only monitoring,
 				// must NOT reactivate dormant torrents (same pattern as cache.go fix).
 				if ps.Hash != "" {
-					if t := torr.PeekTorrent(ps.Hash); t != nil && t.Torrent != nil && t.IsPriority {
-						t.IsPriority = false
+					if t := torr.PeekTorrent(ps.Hash); t != nil && t.Torrent != nil && t.IsPriority.Load() {
+						t.IsPriority.Store(false)
 						t.SetAggressiveMode(false, 0)
 						cm.logger.Printf("[V273] Force Priority OFF for zombie torrent: %s", ps.Hash[:8])
 					}

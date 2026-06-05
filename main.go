@@ -83,7 +83,9 @@ var nativeBridge *native.NativeClient
 
 var globalCleanupManager *CleanupManager
 var globalTorrentRemover *TorrentRemover
-var globalConfig config.Config
+var globalConfig atomic.Pointer[config.Config]
+
+func gc() *config.Config { return globalConfig.Load() }
 
 // Global Prowlarr client for indexer queries (nil when disabled).
 var prowlarrClient *prowlarr.Client
@@ -94,7 +96,7 @@ func GetEffectiveConcurrencyLimit() int {
 	if aiLimit > 0 {
 		return aiLimit
 	}
-	return globalConfig.MasterConcurrencyLimit
+	return gc().MasterConcurrencyLimit
 }
 
 // PlaybackState traccia lo stato di una sessione di visione reale
@@ -355,7 +357,7 @@ func fillAttrFromStat(st *syscall.Stat_t, out *fuse.Attr) {
 	out.Gid = st.Gid
 	out.Rdev = uint32(st.Rdev)
 	// out.Blksize = uint32(st.Blksize) // CRITICAL: Samba uses for buffer sizing
-	out.Blksize = uint32(globalConfig.FuseBlockSize) // Configurable block size (default 1MB)
+	out.Blksize = uint32(gc().FuseBlockSize) // Configurable block size (default 1MB)
 	out.Blocks = uint64(st.Blocks)                   // CRITICAL: Samba uses for throughput calc
 	out.Size = uint64(st.Size)
 
@@ -370,10 +372,10 @@ func fillAttrFromStat(st *syscall.Stat_t, out *fuse.Attr) {
 func fillAttrFromMetadata(m *vfs.Metadata, out *fuse.Attr) {
 	out.Size = uint64(m.Size)
 	out.Mode = syscall.S_IFREG | 0644
-	out.Uid, out.Gid = globalConfig.UID, globalConfig.GID
+	out.Uid, out.Gid = gc().UID, gc().GID
 	out.Nlink = 1
 	// out.Blksize = 4096                                 // Standard block size
-	out.Blksize = uint32(globalConfig.FuseBlockSize) // Configurable block size (default 1MB)
+	out.Blksize = uint32(gc().FuseBlockSize) // Configurable block size (default 1MB)
 	out.Blocks = (uint64(m.Size) + 511) / 512        // Estimate blocks based on size
 
 	ts := sanitizeTime(m.Mtime)
@@ -758,7 +760,7 @@ func (n *VirtualMkvNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 }
 
 func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	if globalConfig.LogLevel == "DEBUG" {
+	if gc().LogLevel == "DEBUG" {
 		logger.Printf("=== OPEN VIRTUAL === path=%s", n.vMeta.Path)
 	}
 
@@ -820,8 +822,8 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 			if isHealthy && recentlyConfirmed && state.Hash != "" {
 				hHash := metainfo.NewHashFromHex(state.Hash)
 				if t := web.BTS.GetTorrent(hHash); t != nil {
-					if !t.IsPriority {
-						t.IsPriority = true
+					if !t.IsPriority.Load() {
+						t.IsPriority.Store(true)
 						logger.Printf("[NativeBridge] Priority RESTORED for Silent Re-Open: %s", state.Hash)
 					}
 				}
@@ -844,7 +846,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		var err error
 		finalHash, fileIdx, err = resolveTargetFile(n.vMeta.URL, n.vMeta.Size, n.vMeta.Path)
 		isNative = (err == nil)
-		if !isNative && globalConfig.LogLevel == "DEBUG" {
+		if !isNative && gc().LogLevel == "DEBUG" {
 			logger.Printf("[NativeBridge] Resolution failed for %s: %v. Access will rely on cache/retry.", filepath.Base(n.vMeta.Path), err)
 		}
 	}
@@ -938,10 +940,10 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 
 	// Only allow unconfirmed (background scan) streams to take a slot if we have at least 20 free.
 	canTakeSlot := true
-	if !isHealthy && len(masterDataSemaphore) >= (globalConfig.MasterConcurrencyLimit-5) {
+	if !isHealthy && len(masterDataSemaphore) >= (gc().MasterConcurrencyLimit-5) {
 		canTakeSlot = false
 		logger.Printf("[StrategicReserve] Denying pump slot to background scan (Saturation: %d/%d): %s",
-			len(masterDataSemaphore), globalConfig.MasterConcurrencyLimit, filepath.Base(h.path))
+			len(masterDataSemaphore), gc().MasterConcurrencyLimit, filepath.Base(h.path))
 	}
 
 	if !canTakeSlot {
@@ -1038,7 +1040,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 
 		// Anchor pump to player position when MaxCachedOffset is stale-high to prevent EOF loops.
 		if playerOff := atomic.LoadInt64(&h.lastOff); playerOff > 0 {
-			chunkSize := int64(globalConfig.ReadAheadBase)
+			chunkSize := int64(gc().ReadAheadBase)
 			if chunkSize == 0 {
 				chunkSize = 16 * 1024 * 1024
 			}
@@ -1064,7 +1066,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 
 		// Anchor pump to player position on resume to eliminate anacrolix priority competition.
 		{
-			chunkSize := int64(globalConfig.ReadAheadBase)
+			chunkSize := int64(gc().ReadAheadBase)
 			if chunkSize == 0 {
 				chunkSize = 16 * 1024 * 1024
 			}
@@ -1144,7 +1146,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		logger.Printf("[V239] Native Pump Goroutine Ended: %s", filepath.Base(h.path))
 	}()
 
-	chunkSize := int64(globalConfig.ReadAheadBase)
+	chunkSize := int64(gc().ReadAheadBase)
 	if chunkSize == 0 {
 		chunkSize = 8 * 1024 * 1024
 	}
@@ -1212,7 +1214,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		})
 
 		// Snap pump to player position when seek gap exceeds budget, aligned to chunk boundary.
-		jumpThreshold := int64(globalConfig.ReadAheadBudget)
+		jumpThreshold := int64(gc().ReadAheadBudget)
 		if playerOff > offset+jumpThreshold {
 			jumpTo := (playerOff / chunkSize) * chunkSize
 			if jumpTo < 0 {
@@ -1263,7 +1265,7 @@ func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, p
 		return true, offset
 	}
 
-	budget := globalConfig.ReadAheadBudget
+	budget := gc().ReadAheadBudget
 	diff := offset - playerOff
 
 	if diff > budget {
@@ -1372,7 +1374,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	idleTime := now.Sub(h.lastActivityTime)
-	isFirstBlock := (off == 0) || (idleTime > time.Duration(globalConfig.WarmStartIdleSeconds)*time.Second)
+	isFirstBlock := (off == 0) || (idleTime > time.Duration(gc().WarmStartIdleSeconds)*time.Second)
 	h.lastActivityTime = now
 
 	// V750: Update PlaybackState inference tracking
@@ -1406,7 +1408,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 				isSeek = true
 			}
 		} else if off != 0 {
-			budget := int64(globalConfig.ReadAheadBudget)
+			budget := int64(gc().ReadAheadBudget)
 			if off > prevOff+budget || prevOff > off+budget {
 				isSeek = true
 			}
@@ -1442,7 +1444,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	isTailProbe := h.state.Load() == stateTailProbe
 
 	// Interrupt pump on genuine seeks; skip for SSD tail reads (pump must stay alive).
-	budget := int64(globalConfig.ReadAheadBudget)
+	budget := int64(gc().ReadAheadBudget)
 	if h.nativeReader != nil && !isTailProbe && shouldInterruptForSeek(prevOff, off, budget) {
 		h.nativeReader.Interrupt()
 		torrstor.ResetShield()
@@ -1511,7 +1513,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		atomic.StoreInt64(&h.lastOff, off)
 
 		// Predictive prefetch: fetch next chunk if pump is absent or near boundary.
-		chunkSize := int64(globalConfig.ReadAheadBase)
+		chunkSize := int64(gc().ReadAheadBase)
 		nextChunkStart := (off/chunkSize + 1) * chunkSize
 
 		if (!h.hasSlot || (nextChunkStart-off < chunkSize/4)) && !raCache.Exists(h.path, nextChunkStart) {
@@ -1565,17 +1567,17 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	target := int(end - off + 1)
-	isSeq := (off == h.lastOff+int64(h.lastLen)) || (h.lastOff >= 0 && abs(off-(h.lastOff+int64(h.lastLen))) <= globalConfig.SequentialTolerance)
-	isStreaming := (len(dest) >= int(globalConfig.StreamingThreshold)) || isSeq
+	isSeq := (off == h.lastOff+int64(h.lastLen)) || (h.lastOff >= 0 && abs(off-(h.lastOff+int64(h.lastLen))) <= gc().SequentialTolerance)
+	isStreaming := (len(dest) >= int(gc().StreamingThreshold)) || isSeq
 	timing.IsStreaming = isStreaming
 
 	fetchEnd := end
 	var fetchSize int64 = int64(target)
 	if isStreaming {
-		raSize := int64(globalConfig.ReadAheadBase)
+		raSize := int64(gc().ReadAheadBase)
 
 		if isFirstBlock {
-			raSize = int64(globalConfig.ReadAheadInitial)
+			raSize = int64(gc().ReadAheadInitial)
 		}
 
 		fetchEnd = off + raSize - 1
@@ -1755,7 +1757,7 @@ DATA_READY:
 		nCopy := copy(dest, buf[:n])
 
 		// Prefetch next chunk if in last 25% of current chunk and pump is absent or lagging.
-		chunkSize := int64(globalConfig.ReadAheadBase)
+		chunkSize := int64(gc().ReadAheadBase)
 		currentChunkIndex := off / chunkSize
 		nextChunkStart := (currentChunkIndex + 1) * chunkSize
 		distanceToNext := nextChunkStart - off
@@ -1767,7 +1769,7 @@ DATA_READY:
 			if distanceToNext < chunkSize/4 {
 				prefetchKey := fmt.Sprintf("%s:%d", h.path, nextChunkStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(prefetchKey, true); !loaded {
-					goStart, goSize, goKey, goHash, goFileID := nextChunkStart, int64(globalConfig.ReadAheadBase), prefetchKey, h.hash, h.fileID
+					goStart, goSize, goKey, goHash, goFileID := nextChunkStart, int64(gc().ReadAheadBase), prefetchKey, h.hash, h.fileID
 					safeGo(func() {
 						defer inFlightPrefetches.Delete(goKey)
 
@@ -1967,7 +1969,7 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 				}
 
 				if t := web.BTS.GetTorrent(hHash); t != nil {
-					t.IsPriority = false
+					t.IsPriority.Store(false)
 					t.SetAggressiveMode(false, 0)
 
 					// Fast-drop scanner handles never confirmed by webhook.
@@ -2094,8 +2096,8 @@ func (c *ReadAheadCache) getShard(path string) *raShard {
 
 func (c *ReadAheadCache) recycle(b []byte) {
 	chunkSize := int(16 * 1024 * 1024)
-	if globalConfig.ReadAheadBase > 0 {
-		chunkSize = int(globalConfig.ReadAheadBase)
+	if gc().ReadAheadBase > 0 {
+		chunkSize = int(gc().ReadAheadBase)
 	}
 	if len(b) == chunkSize {
 		select {
@@ -2147,8 +2149,8 @@ func (c *ReadAheadCache) InvalidatePath(p string) {
 // raChunkKey returns a compound key so multiple chunks per file can coexist.
 func raChunkKey(path string, offset int64) string {
 	chunkSize := int64(16 * 1024 * 1024)
-	if globalConfig.ReadAheadBase > 0 {
-		chunkSize = int64(globalConfig.ReadAheadBase)
+	if gc().ReadAheadBase > 0 {
+		chunkSize = int64(gc().ReadAheadBase)
 	}
 	return fmt.Sprintf("%s:%d", path, offset/chunkSize)
 }
@@ -2263,7 +2265,7 @@ func (c *ReadAheadCache) Put(p string, start, end int64, d []byte) {
 	}
 	copy(dataCopy, d)
 
-	globalLimit := globalConfig.ReadAheadBudget
+	globalLimit := gc().ReadAheadBudget
 	if globalLimit <= 0 {
 		globalLimit = 256 * 1024 * 1024 // Fail-safe default
 	}
@@ -2677,7 +2679,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			if exactState.Hash != "" {
 				h := metainfo.NewHashFromHex(exactState.Hash)
 				if t := web.BTS.GetTorrent(h); t != nil {
-					t.IsPriority = true
+					t.IsPriority.Store(true)
 					t.SetAggressiveMode(true, GetEffectiveConcurrencyLimit())
 					logger.Printf("[PLEX] High Priority + Aggressive Mode for: %s", exactState.Hash)
 				}
@@ -2806,7 +2808,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			if stopState.Hash != "" {
 				h := metainfo.NewHashFromHex(stopState.Hash)
 				if t := web.BTS.GetTorrent(h); t != nil {
-					t.IsPriority = false
+					t.IsPriority.Store(false)
 					t.SetAggressiveMode(false, 0) // Back to normal download priority
 					t.AddExpiredTime(30 * time.Second)
 					logger.Printf("[PLEX] STOP detected. Grace period 30s for: %s", stopState.Hash)
@@ -2868,7 +2870,7 @@ func restorePlaybackStates(db *metadb.DB) {
 			if rec.Hash != "" {
 				hHash := metainfo.NewHashFromHex(rec.Hash)
 				if t := web.BTS.GetTorrent(hHash); t != nil {
-					t.IsPriority = true
+					t.IsPriority.Store(true)
 					t.SetAggressiveMode(true, GetEffectiveConcurrencyLimit())
 					priorityApplied++
 					logger.Printf("[V750] Priority RESTORED from DB: %s", filepath.Base(rec.Path))
@@ -2903,29 +2905,30 @@ func main() {
 
 	source, mount := flag.Arg(0), flag.Arg(1)
 
-	globalConfig = config.LoadConfig()
-	prowlarrClient = prowlarr.NewClient(globalConfig.Prowlarr)
-	telemetry.SendHeartbeat(globalConfig, AppVersion)
-	logger.Printf("[DEBUG] BlockListURL loaded: '%s'", globalConfig.BlockListURL)
+	cfg := config.LoadConfig()
+	globalConfig.Store(&cfg)
+	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
+	telemetry.SendHeartbeat(*gc(), AppVersion)
+	logger.Printf("[DEBUG] BlockListURL loaded: '%s'", gc().BlockListURL)
 
 	if dbPath != "" {
 		// If dbPath is a directory, use it as RootPath; if a file, use its parent.
 		if fi, err := os.Stat(dbPath); err == nil && fi.IsDir() {
-			globalConfig.RootPath = dbPath
+			gc().RootPath = dbPath
 		} else {
-			globalConfig.RootPath = filepath.Dir(dbPath)
+			gc().RootPath = filepath.Dir(dbPath)
 		}
 	} else {
 		// Default to /home/pi if no flag provided (for backward compat)
-		globalConfig.RootPath = "/home/pi"
+		gc().RootPath = "/home/pi"
 	}
 
 	// CLI args take precedence; fall back to config.json values if omitted
 	if source == "" {
-		source = globalConfig.PhysicalSourcePath
+		source = gc().PhysicalSourcePath
 	}
 	if mount == "" {
-		mount = globalConfig.FuseMountPath
+		mount = gc().FuseMountPath
 	}
 	if source == "" || mount == "" {
 		fmt.Println("Usage: gostream [--path /path/to/db] <source_path> <mount_path>")
@@ -2935,7 +2938,7 @@ func main() {
 	physicalSourcePath = source
 	virtualMountPath = mount
 
-	globalConfig.LogConfig(logger)
+	gc().LogConfig(logger)
 
 	go func() {
 		logger.Println("Starting Embedded GoStorm Engine...")
@@ -2944,18 +2947,18 @@ func main() {
 	// Give engine a moment to init (hash maps etc)
 	time.Sleep(2 * time.Second)
 
-	warmup.InitDiskWarmup(globalConfig.DiskWarmupQuotaGB)
+	warmup.InitDiskWarmup(gc().DiskWarmupQuotaGB)
 	go registry.StartRegistryWatchdog(backgroundStopChan)
-	go natpmp.NatpmpLoop(backgroundStopChan, globalConfig.NatPMP, logger)
+	go natpmp.NatpmpLoop(backgroundStopChan, gc().NatPMP, logger)
 
-	masterDataSemaphore = make(chan struct{}, globalConfig.MasterConcurrencyLimit)
+	masterDataSemaphore = make(chan struct{}, gc().MasterConcurrencyLimit)
 	startHandleGC()
 
 	// Initialize global helpers
-	globalRateLimiter = ratelimit.NewRateLimiter(globalConfig.RateLimitRequestsPerSec, 1*time.Second)
+	globalRateLimiter = ratelimit.NewRateLimiter(gc().RateLimitRequestsPerSec, 1*time.Second)
 	globalLockManager = lockmgr.NewLockManager(1 * time.Hour)
 
-	poolSize := int(globalConfig.ReadAheadBase)
+	poolSize := int(gc().ReadAheadBase)
 	if poolSize == 0 {
 		poolSize = 16 * 1024 * 1024
 	}
@@ -2970,15 +2973,15 @@ func main() {
 	httpClient = &http.Client{
 		Transport: &http.Transport{
 			DialContext: (&net.Dialer{
-				Timeout:   globalConfig.HTTPConnectTimeout,
+				Timeout:   gc().HTTPConnectTimeout,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 
-			MaxIdleConns:        globalConfig.MaxIdleConns,
-			MaxIdleConnsPerHost: globalConfig.MaxIdleConnsPerHost,
-			MaxConnsPerHost:     globalConfig.MaxConnsPerHost,
+			MaxIdleConns:        gc().MaxIdleConns,
+			MaxIdleConnsPerHost: gc().MaxIdleConnsPerHost,
+			MaxConnsPerHost:     gc().MaxConnsPerHost,
 
-			ResponseHeaderTimeout: globalConfig.HTTPReadTimeout,
+			ResponseHeaderTimeout: gc().HTTPReadTimeout,
 			IdleConnTimeout:       90 * time.Second, // Close idle connections after 90s
 			TLSHandshakeTimeout:   10 * time.Second, // TLS handshake timeout (even for localhost)
 			ExpectContinueTimeout: 1 * time.Second,  // Expect: 100-continue timeout
@@ -2988,24 +2991,24 @@ func main() {
 			DisableCompression: false, // Enable gzip compression (Python default)
 			ForceAttemptHTTP2:  false, // Use HTTP/1.1 only (Python urllib3 default)
 
-			WriteBufferSize: globalConfig.WriteBufferSize,
-			ReadBufferSize:  globalConfig.ReadBufferSize,
+			WriteBufferSize: gc().WriteBufferSize,
+			ReadBufferSize:  gc().ReadBufferSize,
 		},
 	}
 	logger.Printf("HTTP client initialized: ConnectTimeout=%v, ReadTimeout=%v, MaxIdleConns=%d, MaxIdleConnsPerHost=%d, MaxConnsPerHost=%d (V81-optimized)",
-		globalConfig.HTTPConnectTimeout, globalConfig.HTTPReadTimeout, globalConfig.MaxIdleConns, globalConfig.MaxIdleConnsPerHost, globalConfig.MaxConnsPerHost)
+		gc().HTTPConnectTimeout, gc().HTTPReadTimeout, gc().MaxIdleConns, gc().MaxIdleConnsPerHost, gc().MaxConnsPerHost)
 
 	nativeBridge = native.NewNativeClient()
 
-	if globalConfig.AIURL != "" {
+	if gc().AIURL != "" {
 		provider := ai.AIProvider{
-			URL:     globalConfig.AIURL,
-			APIKey:  globalConfig.AI_API_KEY,
-			Model:   globalConfig.AIModel,
-			IsLocal: globalConfig.AIProvider == "" || globalConfig.AIProvider == "local",
+			URL:     gc().AIURL,
+			APIKey:  gc().AI_API_KEY,
+			Model:   gc().AIModel,
+			IsLocal: gc().AIProvider == "" || gc().AIProvider == "local",
 			GetBufferPct: func() int {
 				total, _, _ := raCache.Stats()
-				budget := globalConfig.ReadAheadBudget
+				budget := gc().ReadAheadBudget
 				if budget <= 0 {
 					return 100
 				}
@@ -3022,15 +3025,15 @@ func main() {
 		go ai.StartAITuner(context.Background(), provider)
 	}
 
-	if globalConfig.BlockListURL != "" {
+	if gc().BlockListURL != "" {
 		safeGo(func() {
-			updateBlockList(globalConfig.BlockListURL)
+			updateBlockList(gc().BlockListURL)
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
-					updateBlockList(globalConfig.BlockListURL)
+					updateBlockList(gc().BlockListURL)
 				case <-backgroundStopChan:
 					return
 				}
@@ -3045,7 +3048,7 @@ func main() {
 	peerPreloader = preload.NewPeerPreloader(nativeBridge)
 
 	// Metadata LRU cache: capacity from config, 24h TTL.
-	metaCache = cache.NewLRUCache(globalConfig.MetadataCacheSize, 24*time.Hour)
+	metaCache = cache.NewLRUCache(gc().MetadataCacheSize, 24*time.Hour)
 
 	// Deterministic inode map ensures Plex doesn't see "new files" after restarts.
 	if err := InitGlobalInodeMap(GetStateDir(), logger); err != nil {
@@ -3056,8 +3059,8 @@ func main() {
 	}
 
 	// V1.7.1: Optional SQLite State DB for unified persistence.
-	if globalConfig.EnableStateDB {
-		dbPath := globalConfig.StateDBPath
+	if gc().EnableStateDB {
+		dbPath := gc().StateDBPath
 		if dbPath == "" {
 			dbPath = filepath.Join(GetStateDir(), "gostream.db")
 		}
@@ -3150,7 +3153,7 @@ func main() {
 		// Get read-ahead buffer stats (for dashboard FUSE Buffer display)
 		raTotal, raActive, raEntries := raCache.Stats()
 		raStale := raTotal - raActive
-		raBudget := globalConfig.ReadAheadBudget
+		raBudget := gc().ReadAheadBudget
 		raPercent := float64(raTotal) / float64(raBudget) * 100
 		raActivePercent := float64(raActive) / float64(raBudget) * 100
 		raStalePercent := float64(raStale) / float64(raBudget) * 100
@@ -3159,17 +3162,17 @@ func main() {
 
 		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t}`,
 			AppVersion,
-			globalConfig.ConfigPath,
+			gc().ConfigPath,
 			time.Since(startTime),
 			cacheStats.Entries, float64(cacheStats.Size)/(1024*1024),
 			cleanupStats.DeletedHashesTotal, cleanupStats.OffsetsTotal, cleanupStats.ActivitiesTotal,
 			lockStats.TotalLocks,
-			globalConfig.MasterConcurrencyLimit,
+			gc().MasterConcurrencyLimit,
 			syncCacheStats.NegativeCacheEntries,
 			syncCacheStats.FullpackCacheEntries,
-			globalConfig.StreamingThreshold/1024,
-			globalConfig.PreloadWorkers,
-			globalConfig.MaxConnsPerHost,
+			gc().StreamingThreshold/1024,
+			gc().PreloadWorkers,
+			gc().MaxConnsPerHost,
 			raTotal, raActive, raStale, raEntries, raBudget,
 			raPercent, raActivePercent, raStalePercent,
 			natPort,
@@ -3191,7 +3194,7 @@ func main() {
 			totalReads-streamingReads,
 			float64(avgHTTPLatency.Microseconds())/1000.0,
 			float64(avgCacheLatency.Microseconds())/1000.0,
-			globalConfig.MaxConnsPerHost)
+			gc().MaxConnsPerHost)
 	})
 
 	http.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
@@ -3202,7 +3205,7 @@ func main() {
 	http.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(globalConfig)
+			json.NewEncoder(w).Encode(gc())
 			return
 		}
 		if r.Method == "POST" {
@@ -3213,17 +3216,18 @@ func main() {
 			}
 			// Update file
 			data, _ := json.MarshalIndent(newCfg, "", "  ")
-			if err := os.WriteFile(globalConfig.ConfigPath, data, 0644); err != nil {
+			if err := os.WriteFile(gc().ConfigPath, data, 0644); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
 			// Reload in memory (V1.4.0 Live Update)
-			oldURL := globalConfig.BlockListURL
-			globalConfig = config.LoadConfig()
-			prowlarrClient = prowlarr.NewClient(globalConfig.Prowlarr)
-			if globalConfig.BlockListURL != "" && globalConfig.BlockListURL != oldURL {
+			oldURL := gc().BlockListURL
+			cfg := config.LoadConfig()
+			globalConfig.Store(&cfg)
+			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
+			if gc().BlockListURL != "" && gc().BlockListURL != oldURL {
 				safeGo(func() {
-					updateBlockList(globalConfig.BlockListURL)
+					updateBlockList(gc().BlockListURL)
 				})
 			}
 			logger.Printf("[Config] Updated via Dashboard API")
@@ -3281,58 +3285,58 @@ func main() {
 	})
 
 	// Sync Scheduler (Fase 1)
-	if globalConfig.Scheduler.Enabled {
+	if gc().Scheduler.Enabled {
 		schedCfg := scheduler.SchedulerConfig{
-			Enabled:       globalConfig.Scheduler.Enabled,
-			MoviesSync:    scheduler.DailyJobConfig(globalConfig.Scheduler.MoviesSync),
-			TVSync:        scheduler.DailyJobConfig(globalConfig.Scheduler.TVSync),
-			WatchlistSync: scheduler.WatchlistSyncConfig(globalConfig.Scheduler.WatchlistSync),
+			Enabled:       gc().Scheduler.Enabled,
+			MoviesSync:    scheduler.DailyJobConfig(gc().Scheduler.MoviesSync),
+			TVSync:        scheduler.DailyJobConfig(gc().Scheduler.TVSync),
+			WatchlistSync: scheduler.WatchlistSyncConfig(gc().Scheduler.WatchlistSync),
 		}
 
 		statePath := filepath.Join(GetStateDir(), "scheduler_state.json")
 
-		logsDir := filepath.Join(filepath.Dir(globalConfig.ConfigPath), "logs")
+		logsDir := filepath.Join(filepath.Dir(gc().ConfigPath), "logs")
 
 		// Start midnight log truncation
 		engines.StartLogTruncator(logsDir, backgroundStopChan)
 
 		syncers := map[string]scheduler.Syncer{
 			"movies": engines.NewMoviesSyncer(engines.MoviesSyncerConfig{
-				GoStormURL:   globalConfig.GoStormBaseURL,
-				TMDBAPIKey:   globalConfig.TMDBAPIKey,
-				TorrentioURL: globalConfig.TorrentioURL,
-				PlexURL:      globalConfig.Plex.URL,
-				PlexToken:    globalConfig.Plex.Token,
-				PlexLib:      globalConfig.Plex.LibraryID,
-				MoviesDir:    filepath.Join(globalConfig.PhysicalSourcePath, "movies"),
+				GoStormURL:   gc().GoStormBaseURL,
+				TMDBAPIKey:   gc().TMDBAPIKey,
+				TorrentioURL: gc().TorrentioURL,
+				PlexURL:      gc().Plex.URL,
+				PlexToken:    gc().Plex.Token,
+				PlexLib:      gc().Plex.LibraryID,
+				MoviesDir:    filepath.Join(gc().PhysicalSourcePath, "movies"),
 				StateDir:     GetStateDir(),
 				LogsDir:      logsDir,
-				ProwlarrCfg:  globalConfig.Prowlarr,
+				ProwlarrCfg:  gc().Prowlarr,
 			}),
 			"tv": engines.NewTVSyncer(engines.TVSyncerConfig{
-				GoStormURL:   globalConfig.GoStormBaseURL,
-				TMDBAPIKey:   globalConfig.TMDBAPIKey,
-				TorrentioURL: globalConfig.TorrentioURL,
-				PlexURL:      globalConfig.Plex.URL,
-				PlexToken:    globalConfig.Plex.Token,
-				PlexTVLib:    globalConfig.Plex.TVLibraryID,
-				TVDir:        filepath.Join(globalConfig.PhysicalSourcePath, "tv"),
+				GoStormURL:   gc().GoStormBaseURL,
+				TMDBAPIKey:   gc().TMDBAPIKey,
+				TorrentioURL: gc().TorrentioURL,
+				PlexURL:      gc().Plex.URL,
+				PlexToken:    gc().Plex.Token,
+				PlexTVLib:    gc().Plex.TVLibraryID,
+				TVDir:        filepath.Join(gc().PhysicalSourcePath, "tv"),
 				StateDir:     GetStateDir(),
 				LogsDir:      logsDir,
-				ProwlarrCfg:  globalConfig.Prowlarr,
+				ProwlarrCfg:  gc().Prowlarr,
 				DB:           stateDB,
 			}),
 			"watchlist": engines.NewWatchlistSyncer(engines.WatchlistSyncerConfig{
-				GoStormURL:      globalConfig.GoStormBaseURL,
-				TMDBAPIKey:      globalConfig.TMDBAPIKey,
-				TorrentioURL:    globalConfig.TorrentioURL,
-				PlexURL:         globalConfig.Plex.URL,
-				PlexToken:       globalConfig.Plex.Token,
-				PlexSection:     globalConfig.Plex.LibraryID,
-				MoviesDir:       filepath.Join(globalConfig.PhysicalSourcePath, "movies"),
-				MediaServerType: globalConfig.MediaServerType,
+				GoStormURL:      gc().GoStormBaseURL,
+				TMDBAPIKey:      gc().TMDBAPIKey,
+				TorrentioURL:    gc().TorrentioURL,
+				PlexURL:         gc().Plex.URL,
+				PlexToken:       gc().Plex.Token,
+				PlexSection:     gc().Plex.LibraryID,
+				MoviesDir:       filepath.Join(gc().PhysicalSourcePath, "movies"),
+				MediaServerType: gc().MediaServerType,
 				LogsDir:         logsDir,
-				ProwlarrCfg:     globalConfig.Prowlarr,
+				ProwlarrCfg:     gc().Prowlarr,
 			}),
 		}
 
@@ -3374,15 +3378,15 @@ func main() {
 	// Health Monitor + Dashboard (Fase 5)
 	monCollector := collector.New(
 		"http://127.0.0.1:8090",
-		globalConfig.FuseMountPath,
+		gc().FuseMountPath,
 		physicalSourcePath,
-		globalConfig.NatPMP.VPNInterface,
-		globalConfig.Plex.URL,
-		globalConfig.Plex.Token,
-		globalConfig.NatPMP.LocalPort,
-		globalConfig.MetricsPort,
+		gc().NatPMP.VPNInterface,
+		gc().Plex.URL,
+		gc().Plex.Token,
+		gc().NatPMP.LocalPort,
+		gc().MetricsPort,
 	)
-	logsDir := filepath.Join(filepath.Dir(globalConfig.ConfigPath), "logs")
+	logsDir := filepath.Join(filepath.Dir(gc().ConfigPath), "logs")
 	dashHandler := dashboard.New(monCollector, logsDir)
 	http.HandleFunc("/dashboard", dashHandler.Dashboard)
 	http.HandleFunc("/api/health", dashHandler.Health)
@@ -3394,9 +3398,9 @@ func main() {
 	safeGo(func() {
 		monCollector.Run(backgroundStopChan)
 	})
-	logger.Printf("[Dashboard] enabled at :%d/dashboard", globalConfig.MetricsPort)
+	logger.Printf("[Dashboard] enabled at :%d/dashboard", gc().MetricsPort)
 
-	go http.ListenAndServe(fmt.Sprintf(":%d", globalConfig.MetricsPort), nil)
+	go http.ListenAndServe(fmt.Sprintf(":%d", gc().MetricsPort), nil)
 
 	// Graceful shutdown: saves inode map and sync caches before exit.
 	sigChan := make(chan os.Signal, 1)
@@ -3454,16 +3458,16 @@ func main() {
 	rootData := &VirtualMkvRoot{sourcePath: source}
 
 	// Enable attribute caching from config
-	attrTimeout := time.Duration(globalConfig.AttrTimeoutSeconds * float64(time.Second))
-	entryTimeout := time.Duration(globalConfig.EntryTimeoutSeconds * float64(time.Second))
-	negativeTimeout := time.Duration(globalConfig.NegativeTimeoutSeconds * float64(time.Second))
+	attrTimeout := time.Duration(gc().AttrTimeoutSeconds * float64(time.Second))
+	entryTimeout := time.Duration(gc().EntryTimeoutSeconds * float64(time.Second))
+	negativeTimeout := time.Duration(gc().NegativeTimeoutSeconds * float64(time.Second))
 
 	server, err = fs.Mount(mount, rootData, &fs.Options{
 		AttrTimeout: &attrTimeout, EntryTimeout: &entryTimeout,
 		NegativeTimeout: &negativeTimeout,
 		MountOptions: fuse.MountOptions{
 			AllowOther:    true,
-			MaxBackground: globalConfig.ConcurrencyLimit,
+			MaxBackground: gc().ConcurrencyLimit,
 			// MaxWrite:                 1024 * 1024,
 			MaxWrite: 4 * 1024 * 1024, // Samba Turbo: 4MB write buffer
 			// MaxReadAhead:             1024 * 1024,
@@ -3474,8 +3478,8 @@ func main() {
 			// NFS Export: Stable filesystem identification
 			FsName: "gostream",
 		},
-		UID: globalConfig.UID, // Default file ownership: pi user (1000)
-		GID: globalConfig.GID, // Default file ownership: pi group (1000)
+		UID: gc().UID, // Default file ownership: pi user (1000)
+		GID: gc().GID, // Default file ownership: pi group (1000)
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -3646,10 +3650,10 @@ func updateBlockList(urlStr string) {
 
 // GetStateDir returns the centralized state directory path.
 func GetStateDir() string {
-	if globalConfig.RootPath == "" {
+	if gc().RootPath == "" {
 		return "/home/pi/STATE"
 	}
-	return filepath.Join(globalConfig.RootPath, "STATE")
+	return filepath.Join(gc().RootPath, "STATE")
 }
 
 // --- InodeMap globals & wrappers ---

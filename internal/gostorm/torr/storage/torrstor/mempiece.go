@@ -97,5 +97,5 @@ func (p *MemPiece) Release() {
 		p.buffer = nil
 	}
 	p.piece.Size = 0
-	p.piece.Complete = false
+	p.piece.Complete.Store(false)
 }

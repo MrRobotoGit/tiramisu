@@ -49,8 +49,8 @@ type Piece struct {
 	Id   int   `json:"-"`
 	Size int64 `json:"size"`
 
-	Complete bool  `json:"complete"`
-	Accessed int64 `json:"accessed"`
+	Complete atomic.Bool `json:"-"`
+	Accessed int64       `json:"accessed"`
 
 	mPiece *MemPiece `json:"-"`
 
@@ -78,12 +78,12 @@ func (p *Piece) ReadAt(b []byte, off int64) (n int, err error) {
 }
 
 func (p *Piece) MarkComplete() error {
-	p.Complete = true
+	p.Complete.Store(true)
 	return nil
 }
 
 func (p *Piece) MarkNotComplete() error {
-	p.Complete = false
+	p.Complete.Store(false)
 
 	// V-evict-guard: buffer nil = pezzo evicted dalla cache, non corruzione da peer.
 	// Evita falsi positivi AdaptiveShield durante eviction sotto pressione RAM.
@@ -152,14 +152,14 @@ func (p *Piece) MarkNotComplete() error {
 
 func (p *Piece) Completion() storage.Completion {
 	return storage.Completion{
-		Complete: p.Complete,
+		Complete: p.Complete.Load(),
 		Ok:       true,
 	}
 }
 
 func (p *Piece) Release() {
 	p.mPiece.Release()
-	if !p.cache.isClosed {
+	if !p.cache.isClosed && p.cache.torrent != nil {
 		p.cache.torrent.Piece(p.Id).SetPriority(torrent.PiecePriorityNone)
 		p.cache.torrent.Piece(p.Id).UpdateCompletion()
 	}

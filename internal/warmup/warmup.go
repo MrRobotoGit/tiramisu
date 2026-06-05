@@ -139,8 +139,17 @@ func (d *DiskWarmupCache) handleReaper() {
 		d.handles.Range(func(key, val interface{}) bool {
 			ch := val.(*cachedHandle)
 			if now.UnixNano()-ch.lastUsedNano.Load() > handleIdleMax.Nanoseconds() {
-				d.handles.Delete(key)
-				ch.f.Close()
+				// V2.0: Use LoadAndDelete + double-check to prevent TOCTOU with getHandle.
+				// If getHandle updated lastUsedNano between Range and delete, re-insert.
+				if actual, loaded := d.handles.LoadAndDelete(key); loaded {
+					ac := actual.(*cachedHandle)
+					if now.UnixNano()-ac.lastUsedNano.Load() < handleIdleMax.Nanoseconds() {
+						d.handles.Store(key, ac)
+						return true
+					}
+					ac.closed.Store(true)
+					ac.f.Close()
+				}
 			}
 			return true
 		})

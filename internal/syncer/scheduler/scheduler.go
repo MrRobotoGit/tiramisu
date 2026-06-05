@@ -124,6 +124,9 @@ func (s *Scheduler) TriggerRun(name string) error {
 		return ErrAlreadyRunning
 	}
 
+	// V2.0: Set running before spawn to prevent concurrent launches from tick().
+	jt.SetRunning(true)
+	s.state.Save()
 	go s.runJob(syncer, jt)
 	return nil
 }
@@ -157,6 +160,8 @@ func (s *Scheduler) tick() {
 			continue
 		}
 
+		// V2.0: Set running before spawn to prevent concurrent TriggerRun/tick races.
+		jt.SetRunning(true)
 		go s.runJob(syncer, jt)
 	}
 
@@ -242,7 +247,6 @@ func (s *Scheduler) runJob(syncer Syncer, jt *JobTracker) {
 		s.mu.Unlock()
 	}()
 
-	jt.SetRunning(true)
 	s.state.Save()
 	log.Printf("[Scheduler] %s started", name)
 
