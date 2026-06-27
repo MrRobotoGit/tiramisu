@@ -210,6 +210,10 @@ func (e *TVGoEngine) Name() string { return "tv" }
 
 func (e *TVGoEngine) Run(ctx context.Context) error {
 	e.logger.Printf("Starting TV sync...")
+	// B1.1: reset per-run state so repeated scheduler invocations start clean.
+	// processedThisRun and stats are long-lived struct fields, not local vars.
+	e.processedThisRun = make(map[string]bool)
+	e.stats = TVSyncStats{}
 	e.populateRegistryFromExisting()
 	e.reconcileRegistry()
 
@@ -243,9 +247,12 @@ func (e *TVGoEngine) Run(ctx context.Context) error {
 	if e.db == nil {
 		e.saveRegistry()
 	}
+	// B6.1: rehydrate before cleanup — if an MKV file exists on disk but its
+	// torrent is missing from GoStorm, restore it first. cleanupOrphanedFiles
+	// runs after so it cannot delete a file that rehydrate still needs.
+	e.rehydrateMissingTorrents(ctx)
 	e.cleanupOrphanedFiles()
 	e.cleanupOrphanedTorrents(ctx)
-	e.rehydrateMissingTorrents(ctx)
 
 	e.logger.Printf("TV sync complete: %d shows, %d episodes created, %d skipped, %d upgrades",
 		e.stats.Shows, e.stats.EpisodesCreated, e.stats.EpisodesSkipped, e.stats.Upgrades)
