@@ -1228,7 +1228,6 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				offset/(1024*1024), jumpTo/(1024*1024), playerOff/(1024*1024),
 				(playerOff-offset)/(1024*1024))
 			offset = jumpTo
-			raCache.InvalidatePath(h.path)
 			pumpedBytes = 0 // reset grace period so throttle doesn't fire immediately
 		}
 
@@ -1420,6 +1419,47 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		if isSeek {
 			h.state.Store(stateStreaming)
 			logger.Printf("[Warmup] Seek/Resume detected (off=%dMB): %s→%s.", off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
+
+			// WarmLanding on new handle: pre-fetch chunk at resume position while pump catches
+			// up. Fires only for new handles (prevOff==-1) since V286b covers existing handles.
+			if prevOff == -1 && h.hash != "" {
+				warmChunk := int64(gc().ReadAheadBase)
+				if warmChunk == 0 {
+					warmChunk = 16 * 1024 * 1024
+				}
+				warmStart := (off / warmChunk) * warmChunk
+				warmKey := fmt.Sprintf("warm:%s:%d", h.path, warmStart)
+				if _, loaded := inFlightPrefetches.LoadOrStore(warmKey, true); !loaded {
+					goOff, goKey, goHash, goFileID, goSize := warmStart, warmKey, h.hash, h.fileID, h.size
+					safeGo(func() {
+						defer inFlightPrefetches.Delete(goKey)
+						select {
+						case masterDataSemaphore <- struct{}{}:
+							defer func() { <-masterDataSemaphore }()
+						case <-time.After(300 * time.Millisecond):
+							return
+						}
+						fetchEnd := goOff + warmChunk - 1
+						if fetchEnd >= goSize {
+							fetchEnd = goSize - 1
+						}
+						if fetchEnd <= goOff {
+							return
+						}
+						bufPtr := readBufferPool.Get().(*[]byte)
+						defer readBufferPool.Put(bufPtr)
+						limit := int64(len(*bufPtr))
+						if fetchEnd-goOff+1 < limit {
+							limit = fetchEnd - goOff + 1
+						}
+						n, err := nativeBridge.FetchBlock(goHash, goFileID, goOff, (*bufPtr)[:limit])
+						if err == nil && n > 0 {
+							raCache.Put(h.path, goOff, goOff+int64(n)-1, (*bufPtr)[:n])
+							logger.Printf("[WarmLanding] Pre-fetched chunk at %dMB for new handle", goOff/(1024*1024))
+						}
+					})
+				}
+			}
 		}
 	}
 
@@ -1463,6 +1503,48 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			h.state.Store(stateStreaming)
 			logger.Printf("[V286b] Interrupt pump for seek+shield reset: %dMB → %dMB (%s→%s)",
 				prevOff/(1024*1024), off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
+
+			// Warm landing zone: pre-fetch the first chunk at the seek target while the
+			// pump sleeps its 200ms retry. Starts anacrolix piece download ~200ms earlier,
+			// reducing FetchBlock blocking time in Read() and preventing smbd D-state.
+			if h.hash != "" {
+				warmChunk := int64(gc().ReadAheadBase)
+				if warmChunk == 0 {
+					warmChunk = 16 * 1024 * 1024
+				}
+				warmStart := (off / warmChunk) * warmChunk
+				warmKey := fmt.Sprintf("warm:%s:%d", h.path, warmStart)
+				if _, loaded := inFlightPrefetches.LoadOrStore(warmKey, true); !loaded {
+					goOff, goKey, goHash, goFileID, goSize := warmStart, warmKey, h.hash, h.fileID, h.size
+					safeGo(func() {
+						defer inFlightPrefetches.Delete(goKey)
+						select {
+						case masterDataSemaphore <- struct{}{}:
+							defer func() { <-masterDataSemaphore }()
+						case <-time.After(300 * time.Millisecond):
+							return
+						}
+						fetchEnd := goOff + warmChunk - 1
+						if fetchEnd >= goSize {
+							fetchEnd = goSize - 1
+						}
+						if fetchEnd <= goOff {
+							return
+						}
+						bufPtr := readBufferPool.Get().(*[]byte)
+						defer readBufferPool.Put(bufPtr)
+						limit := int64(len(*bufPtr))
+						if fetchEnd-goOff+1 < limit {
+							limit = fetchEnd - goOff + 1
+						}
+						n, err := nativeBridge.FetchBlock(goHash, goFileID, goOff, (*bufPtr)[:limit])
+						if err == nil && n > 0 {
+							raCache.Put(h.path, goOff, goOff+int64(n)-1, (*bufPtr)[:n])
+							logger.Printf("[WarmLanding] Pre-fetched chunk at %dMB for seek target", goOff/(1024*1024))
+						}
+					})
+				}
+			}
 		}
 	}
 
