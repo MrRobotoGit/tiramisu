@@ -1103,9 +1103,6 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		return
 	}
 
-	// V286b: pump restarted — allow the next genuine seek to interrupt again.
-	sharedState.interruptPending.Store(false)
-
 	if h.hash == "" {
 		// Late hash resolution for handles where Open() didn't complete it.
 		if hash, fileID, err := resolveTargetFile(h.url, h.size, h.path); err == nil {
@@ -1251,6 +1248,10 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 			// Transient errors (seek interrupt, reconnect, piece timeout): retry until genuine EOF.
 			if offset < h.size {
 				time.Sleep(200 * time.Millisecond)
+				// V286b: reset after each interrupt so subsequent seeks can fire Interrupt()
+				// and ResetShield() again. Without this, interruptPending stays true for the
+				// pump's entire lifetime after the first seek.
+				sharedState.interruptPending.Store(false)
 				continue
 			}
 			return // genuine EOF
