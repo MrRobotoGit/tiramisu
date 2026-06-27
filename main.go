@@ -181,11 +181,12 @@ var pumpCreationMu sync.Mutex
 
 // NativePumpState tracks a shared pump across multiple handles for the same file.
 type NativePumpState struct {
-	cancel    context.CancelFunc
-	reader    *native.NativeReader
-	path      string
-	refCount  int32
-	playerOff int64 // last known player position, saved on handle release
+	cancel           context.CancelFunc
+	reader           *native.NativeReader
+	path             string
+	refCount         int32
+	playerOff        int64      // last known player position, saved on handle release
+	interruptPending atomic.Bool // prevents cascade: only the first handle per seek fires Interrupt()
 }
 
 // resolveTargetFile finds the torrent hash and file index for a given URL and size.
@@ -1102,6 +1103,9 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		return
 	}
 
+	// V286b: pump restarted — allow the next genuine seek to interrupt again.
+	sharedState.interruptPending.Store(false)
+
 	if h.hash == "" {
 		// Late hash resolution for handles where Open() didn't complete it.
 		if hash, fileID, err := resolveTargetFile(h.url, h.size, h.path); err == nil {
@@ -1444,13 +1448,22 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	isTailProbe := h.state.Load() == stateTailProbe
 
 	// Interrupt pump on genuine seeks; skip for SSD tail reads (pump must stay alive).
+	// V286b: interruptPending prevents cascade — when multiple handles share a pump,
+	// only the first to detect the seek fires Interrupt(); others skip until the pump
+	// restarts and resets the flag (preventing the thrash loop seen in the logs).
 	budget := int64(gc().ReadAheadBudget)
 	if h.nativeReader != nil && !isTailProbe && shouldInterruptForSeek(prevOff, off, budget) {
-		h.nativeReader.Interrupt()
-		torrstor.ResetShield()
-		h.state.Store(stateStreaming)
-		logger.Printf("[V286] Interrupt pump for seek+shield reset: %dMB → %dMB (%s→%s)",
-			prevOff/(1024*1024), off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
+		var ps *NativePumpState
+		if val, ok := activePumps.Load(h.path); ok {
+			ps = val.(*NativePumpState)
+		}
+		if ps == nil || !ps.interruptPending.Swap(true) {
+			h.nativeReader.Interrupt()
+			torrstor.ResetShield()
+			h.state.Store(stateStreaming)
+			logger.Printf("[V286b] Interrupt pump for seek+shield reset: %dMB → %dMB (%s→%s)",
+				prevOff/(1024*1024), off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
+		}
 	}
 
 	// Serve warmup zone from SSD (up to 80MB with boundary chunk); stateWarmup gate skips SSD on resume/seek.
@@ -2906,22 +2919,23 @@ func main() {
 	source, mount := flag.Arg(0), flag.Arg(1)
 
 	cfg := config.LoadConfig()
-	globalConfig.Store(&cfg)
-	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
-	telemetry.SendHeartbeat(*gc(), AppVersion)
-	logger.Printf("[DEBUG] BlockListURL loaded: '%s'", gc().BlockListURL)
 
 	if dbPath != "" {
 		// If dbPath is a directory, use it as RootPath; if a file, use its parent.
 		if fi, err := os.Stat(dbPath); err == nil && fi.IsDir() {
-			gc().RootPath = dbPath
+			cfg.RootPath = dbPath
 		} else {
-			gc().RootPath = filepath.Dir(dbPath)
+			cfg.RootPath = filepath.Dir(dbPath)
 		}
 	} else {
 		// Default to /home/pi if no flag provided (for backward compat)
-		gc().RootPath = "/home/pi"
+		cfg.RootPath = "/home/pi"
 	}
+
+	globalConfig.Store(&cfg)
+	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
+	telemetry.SendHeartbeat(*gc(), AppVersion)
+	logger.Printf("[DEBUG] BlockListURL loaded: '%s'", gc().BlockListURL)
 
 	// CLI args take precedence; fall back to config.json values if omitted
 	if source == "" {
