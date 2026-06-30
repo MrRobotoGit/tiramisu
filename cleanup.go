@@ -188,8 +188,10 @@ func (cm *CleanupManager) runCleanup() {
 			})
 		}
 
-		// Secondary: virtual paths for active torrents (served by FUSE, not on disk)
-		torrents := torr.ListTorrent()
+		// Secondary: virtual paths for active torrents (served by FUSE, not on disk).
+		// ListActiveTorrent() returns only in-memory torrents — no BoltDB deserialization.
+		// ListTorrent() would unmarshal all ~3000+ DB entries every cleanup cycle → OOM.
+		torrents := torr.ListActiveTorrent()
 		for _, t := range torrents {
 			if t == nil {
 				continue
