@@ -939,12 +939,29 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		}
 	}
 
-	// Only allow unconfirmed (background scan) streams to take a slot if we have at least 20 free.
+	// StrategicReserve: limit background scan slots.
+	// If any confirmed playback is active (IsHealthy), tighten the limit to 5 slots
+	// so the scan cannot consume memory that the active stream needs.
+	// Without active playback, allow up to MasterConcurrencyLimit-5 (default 20).
 	canTakeSlot := true
-	if !isHealthy && len(masterDataSemaphore) >= (gc().MasterConcurrencyLimit-5) {
-		canTakeSlot = false
-		logger.Printf("[StrategicReserve] Denying pump slot to background scan (Saturation: %d/%d): %s",
-			len(masterDataSemaphore), gc().MasterConcurrencyLimit, filepath.Base(h.path))
+	if !isHealthy {
+		scanLimit := gc().MasterConcurrencyLimit - 5
+		anyHealthyPlayback := false
+		playbackRegistry.Range(func(_, v interface{}) bool {
+			if ps, ok := v.(*PlaybackState); ok && ps.IsHealthy {
+				anyHealthyPlayback = true
+				return false
+			}
+			return true
+		})
+		if anyHealthyPlayback {
+			scanLimit = 5
+		}
+		if len(masterDataSemaphore) >= scanLimit {
+			canTakeSlot = false
+			logger.Printf("[StrategicReserve] Denying pump slot to background scan (Saturation: %d/%d, healthyPlayback=%v): %s",
+				len(masterDataSemaphore), gc().MasterConcurrencyLimit, anyHealthyPlayback, filepath.Base(h.path))
+		}
 	}
 
 	if !canTakeSlot {
