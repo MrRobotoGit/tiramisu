@@ -89,7 +89,7 @@ const (
 	tv51Bonus          = 25
 	tvITABonus         = 40
 	tvFullpackBonus    = 500
-	tvMinSeeders4K     = 10
+	tvMinSeeders4K     = 5
 	tvMinSeeders       = 5
 	tvMinEpisodeSize   = 1073741824  // 1GB
 	tvMaxEpisodeSize   = 32212254720 // 30GB
