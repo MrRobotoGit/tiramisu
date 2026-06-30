@@ -93,13 +93,19 @@ func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
 
 			select {
 			case <-t.Torrent.GotInfo():
-				// Metadata ready
-				log.Printf("[NativeBridge] Metadata received for %s", hash)
+				// Metadata ready — fall through to log below
 			case <-timer.C:
 				log.Printf("[NativeBridge] Metadata timeout for %s", hash)
 				return fmt.Errorf("torrent metadata timeout (45s): %s", hash)
 			}
 		}
+		pieceLenKB := 0
+		if t.Torrent != nil {
+			if info := t.Torrent.Info(); info != nil {
+				pieceLenKB = int(info.PieceLength) / 1024
+			}
+		}
+		log.Printf("[NativeBridge] Metadata ready for %s (piece=%dKB)", hash, pieceLenKB)
 		// V255: Save metadata to DB immediately so next Wake() skips GotInfo() wait.
 		// Note: ForceSaveTorrentToDB at torrent expiry captures the full peer swarm
 		// safely (no streaming active). The previous 90s delayed goroutine was
@@ -173,7 +179,11 @@ type NativeReader struct {
 	lastActivity     time.Time
 	interrupted      atomic.Bool // V286: set by Interrupt(), cleared by next startStream
 	pipeReaderAtomic atomic.Pointer[io.PipeReader]
+	pieceLen         atomic.Int64
 }
+
+func (r *NativeReader) SetPieceLen(n int64) { r.pieceLen.Store(n) }
+func (r *NativeReader) PieceLen() int64      { return r.pieceLen.Load() }
 
 // ErrInterrupted is returned by ReadAt when the pipe was closed by Interrupt().
 var ErrInterrupted = fmt.Errorf("interrupted by seek")

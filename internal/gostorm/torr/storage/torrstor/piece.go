@@ -34,13 +34,14 @@ func IsResponsive() bool {
 	return settings.GetResponsiveMode() && !shieldActive.Load()
 }
 
-// ResetShield resets the Adaptive Shield to its base state.
-// Called on media.stop to start fresh for the next viewing.
+// ResetShield deactivates the Adaptive Shield on media.stop.
+// strictCycleCount is intentionally preserved so that Plex-internal stop/play
+// events (seeks, buffer probes) do not reset the escalation history. The cycle
+// resets naturally only when a full clean streak is achieved.
 func ResetShield() {
 	shieldActive.Store(false)
 	isWatchdogRunning.Store(false)
 	staticCorruptionCount.Store(0)
-	strictCycleCount.Store(0)
 }
 
 type Piece struct {

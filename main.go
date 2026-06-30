@@ -15,6 +15,7 @@ import (
 	server "gostream/internal/gostorm"
 	"gostream/internal/gostorm/native"
 	"gostream/internal/gostorm/settings"
+	"gostream/internal/gostorm/torr"
 	torrstor "gostream/internal/gostorm/torr/storage/torrstor"
 	tsutils "gostream/internal/gostorm/utils"
 	"gostream/internal/gostorm/web"
@@ -1024,6 +1025,11 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		h.hasSlot = true
 		h.isPrimaryHandle = true // pump creator is always primary
 		h.nativeReader = nativeBridge.NewStreamReader(finalHash, fileIdx, h.size)
+		if tr := torr.PeekTorrent(finalHash); tr != nil && tr.Torrent != nil {
+			if info := tr.Torrent.Info(); info != nil && info.PieceLength > 0 {
+				h.nativeReader.SetPieceLen(int64(info.PieceLength))
+			}
+		}
 
 		// Register in activePumps BEFORE releasing lock, but BEFORE doing I/O
 		pumpCtx, pumpCancel := context.WithCancel(context.Background())
@@ -1164,9 +1170,15 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		logger.Printf("[V239] Native Pump Goroutine Ended: %s", filepath.Base(h.path))
 	}()
 
-	chunkSize := int64(gc().ReadAheadBase)
-	if chunkSize == 0 {
-		chunkSize = 8 * 1024 * 1024
+	defaultChunk := int64(gc().ReadAheadBase)
+	if defaultChunk == 0 {
+		defaultChunk = 8 * 1024 * 1024
+	}
+	chunkSize := defaultChunk
+	if pl := pumpReader.PieceLen(); pl > 0 {
+		if n := defaultChunk / pl; n > 0 {
+			chunkSize = n * pl
+		}
 	}
 
 	// Track bytes pumped in this session for the Grace Period Boost
@@ -1179,6 +1191,13 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		case <-ctx.Done():
 			return
 		default:
+		}
+
+		// Re-align chunkSize to piece boundary once pieceLen is known (may be 0 initially).
+		if pl := pumpReader.PieceLen(); pl > 0 {
+			if n := defaultChunk / pl; n > 0 {
+				chunkSize = n * pl
+			}
 		}
 
 		// Release idle slot: confirmed playback gets 2h, background scans get 45s.
