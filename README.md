@@ -279,7 +279,7 @@ All sync logic runs natively inside the Go binary — no Python, no external scr
 | **Watchlist** | Scheduler / manual | Plex cloud watchlist → IMDB → Prowlarr/Torrentio → GoStorm |
 
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
-**Minimum seeders**: 20 (main sync), 10 (watchlist sync, for older films)
+**Minimum seeders**: 15 (main sync), 10 (watchlist sync, for older films)
 
 All sync state (episode registry, negative caches, scheduler state) is persisted in `STATE/gostream.db` (SQLite). The built-in scheduler replaces system cron and is configurable from the Control Panel.
 
@@ -552,7 +552,7 @@ curl -X POST http://127.0.0.1:8090/settings \
   -d '{
     "action": "set",
     "sets": {
-      "CacheSize": 67108864,
+      "CacheSize": 100663296,
       "ReaderReadAHead": 95,
       "PreloadCache": 0,
       "ConnectionsLimit": 25,
@@ -565,7 +565,7 @@ curl -X POST http://127.0.0.1:8090/settings \
 
 | Setting | Value | Rationale |
 |---------|-------|-----------| 
-| `CacheSize` | 64 MB | Lean engine strategy — feed FUSE 256 MB buffer; smaller heap = lower GC |
+| `CacheSize` | 96 MB | Lean engine strategy — feed FUSE 256 MB buffer; smaller heap = lower GC. 64 MB caused buffering in testing. |
 | `ConnectionsLimit` | 25 | Matches FUSE master semaphore; prevents Samba thread exhaustion |
 | `ResponsiveMode` | `true` | Serve unverified data; Adaptive Shield corrects corruption automatically |
 | `UseDisk` | `true` | Enable SSD warmup cache |
@@ -753,7 +753,7 @@ curl -X POST http://127.0.0.1:9080/api/scheduler/movies/run
 ```
 
 - Quality: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`
-- Min seeders: 20 · Min size: 10 GB (4K), 3 GB (1080p)
+- Min seeders: 15 · Min size: 10 GB (4K), 4 GB (1080p)
 - Skips existing films (by TMDB ID) · Upgrades lower-quality entries
 
 ### TV Sync
