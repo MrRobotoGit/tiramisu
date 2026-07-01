@@ -1,6 +1,7 @@
 package torrstor
 
 import (
+	"context"
 	"io"
 	"sync"
 	"time"
@@ -86,6 +87,32 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 	if r.file.Torrent() != nil && r.file.Torrent().Info() != nil {
 		r.readerOn()
 		n, err = r.Reader.Read(p)
+
+		r.mu.Lock()
+		r.offset += int64(n)
+		r.lastAccess = time.Now().Unix()
+		r.mu.Unlock()
+	} else {
+		log.TLogln("Torrent closed and readed")
+	}
+	return
+}
+
+// ReadContext behaves like Read but is bounded by ctx: if the underlying torrent read blocks
+// waiting on a piece that never arrives (stalled swarm, no seeders for that range), it returns
+// ctx.Err() instead of hanging until the whole torrent is closed. Mirrors Read's bookkeeping.
+func (r *Reader) ReadContext(ctx context.Context, p []byte) (n int, err error) {
+	err = io.EOF
+	r.mu.Lock()
+	if r.isClosed {
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Unlock()
+
+	if r.file.Torrent() != nil && r.file.Torrent().Info() != nil {
+		r.readerOn()
+		n, err = r.Reader.ReadContext(ctx, p)
 
 		r.mu.Lock()
 		r.offset += int64(n)

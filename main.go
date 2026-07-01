@@ -1878,7 +1878,7 @@ DATA_READY:
 			if distanceToNext < chunkSize/4 {
 				prefetchKey := fmt.Sprintf("%s:%d", h.path, nextChunkStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(prefetchKey, true); !loaded {
-					goStart, goSize, goKey, goHash, goFileID := nextChunkStart, int64(gc().ReadAheadBase), prefetchKey, h.hash, h.fileID
+					goStart, goSize, goKey, goHash, goFileID := nextChunkStart, chunkSize, prefetchKey, h.hash, h.fileID
 					safeGo(func() {
 						defer inFlightPrefetches.Delete(goKey)
 

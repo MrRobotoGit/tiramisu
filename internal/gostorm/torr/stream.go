@@ -39,6 +39,18 @@ func (w *contextResponseWriter) Write(p []byte) (n int, err error) {
 	}
 }
 
+// ctxReader binds a context to torrstor.Reader's blocking Read, so http.ServeContent's internal
+// reads are bounded by the stream timeout instead of blocking forever on a stalled swarm (Read()
+// alone calls context.Background(), which never unblocks on a piece that never arrives).
+type ctxReader struct {
+	*torrstor.Reader
+	ctx context.Context
+}
+
+func (r *ctxReader) Read(p []byte) (int, error) {
+	return r.Reader.ReadContext(r.ctx, p)
+}
+
 func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter) error {
 	// Increment active streams counter
 	streamID := atomic.AddInt32(&activeStreams, 1)
@@ -148,7 +160,7 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 		ResponseWriter: resp,
 		ctx:            ctx,
 	}
-	http.ServeContent(wrappedResp, req, file.Path(), time.Unix(t.Timestamp, 0), reader)
+	http.ServeContent(wrappedResp, req, file.Path(), time.Unix(t.Timestamp, 0), &ctxReader{Reader: reader, ctx: ctx})
 
 	if sets.BTsets.EnableDebug {
 		if clerr != nil {
