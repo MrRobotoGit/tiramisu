@@ -2385,16 +2385,22 @@ func (t *Torrent) tryCreatePieceHasher() bool {
 	if !ok {
 		return false
 	}
+	t.startHash(pi)
+	go t.pieceHasher(pi)
+	return true
+}
+
+// startHash marks a piece as actively hashing and reserves a hasher slot (storage RLock,
+// activePieceHashes/activePieceHashers counters). Caller must hold the client lock.
+func (t *Torrent) startHash(pi pieceIndex) {
 	p := t.piece(pi)
 	t.piecesQueuedForHash.Remove(bitmap.BitIndex(pi))
 	p.hashing = true
 	t.publishPieceStateChange(pi)
-	t.updatePiecePriority(pi, "Torrent.tryCreatePieceHasher")
+	t.updatePiecePriority(pi, "Torrent.startHash")
 	t.storageLock.RLock()
 	t.activePieceHashes++
 	t.cl.activePieceHashers++
-	go t.pieceHasher(pi)
-	return true
 }
 
 func (t *Torrent) getPieceToHash() (ret pieceIndex, ok bool) {
@@ -2433,7 +2439,35 @@ func (t *Torrent) dropBannedPeers() {
 	})
 }
 
-func (t *Torrent) pieceHasher(index pieceIndex) {
+// pieceHasher hashes the initial piece, then keeps consuming further queued pieces on the same
+// goroutine instead of spawning a new one per piece (backported from anacrolix/torrent upstream,
+// "Rearrange hashing so goroutines are reused" — avoids goroutine churn during large verify
+// bursts, e.g. right after adding a torrent or during a rehydration batch, and keeps the storage
+// backend "hot" between successive pieces of the same torrent). Respects the same per-torrent and
+// per-client concurrency caps as tryCreatePieceHasher. Deliberately keeps calling our own
+// getPieceToHash (with its p.marking check) rather than adopting upstream's rewritten version,
+// which dropped that check — see getPieceToHash for the race it guards against.
+func (t *Torrent) pieceHasher(initial pieceIndex) {
+	t.finishHash(initial)
+	for !t.closed.IsSet() &&
+		t.activePieceHashes < t.cl.config.PieceHashersPerTorrent &&
+		t.cl.activePieceHashers < runtime.NumCPU() {
+		pi, ok := t.getPieceToHash()
+		if !ok {
+			break
+		}
+		t.startHash(pi)
+		t.cl.unlock()
+		t.finishHash(pi)
+	}
+	t.tryCreateMorePieceHashers()
+	t.cl.unlock()
+}
+
+// finishHash hashes one piece's data and records the result. Called with the client lock
+// released (so the potentially slow hashPiece read doesn't block other torrent activity);
+// returns with the client lock held, mirroring the contract pieceHasher's loop depends on.
+func (t *Torrent) finishHash(index pieceIndex) {
 	p := t.piece(index)
 	sum, failedPeers, copyErr := t.hashPiece(index)
 	correct := sum == *p.hash
@@ -2444,7 +2478,6 @@ func (t *Torrent) pieceHasher(index pieceIndex) {
 	}
 	t.storageLock.RUnlock()
 	t.cl.lock()
-	defer t.cl.unlock()
 	if correct {
 		for peer := range failedPeers {
 			t.cl.banPeerIP(peer.AsSlice())
@@ -2457,13 +2490,12 @@ func (t *Torrent) pieceHasher(index pieceIndex) {
 	}
 	p.hashing = false
 	t.pieceHashed(index, correct, copyErr)
-	t.updatePiecePriority(index, "Torrent.pieceHasher")
+	t.updatePiecePriority(index, "Torrent.finishHash")
 	t.activePieceHashes--
 	if t.activePieceHashes == 0 {
 		t.updateComplete()
 	}
 	t.cl.activePieceHashers--
-	t.tryCreateMorePieceHashers()
 }
 
 // Return the connections that touched a piece, and clear the entries while doing it.
