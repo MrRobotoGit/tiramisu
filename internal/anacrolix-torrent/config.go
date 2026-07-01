@@ -138,6 +138,10 @@ type ClientConfig struct {
 	EstablishedConnsPerTorrent int
 	HalfOpenConnsPerTorrent    int
 	TotalHalfOpenConns         int
+	// AggressivePeerManagement enables warmup-phase PEX churn (client.go) and tail-hedging
+	// (requesting.go) for streaming cold-start latency. Off by default - only GoStorm's
+	// live settings set this; the fork itself defaults to false like any other client.
+	AggressivePeerManagement bool
 	// Maximum number of peer addresses in reserve.
 	TorrentPeersHighWater int
 	// Minumum number of peers before effort is made to obtain more peers.

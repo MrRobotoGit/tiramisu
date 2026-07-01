@@ -873,6 +873,15 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		h.pumpOnce.Do(func() {
 			h.startNativePump(finalHash, fileIdx)
 		})
+		if !headReady {
+			// Real cold start: no warmup data present yet. Signal warmupActive here, at Open(),
+			// rather than waiting for the first WriteChunk - that first-connection burst is
+			// exactly the window aggressive PEX churn (Task 3) needs to catch, and by the time
+			// WriteChunk fires once, the torrent's initial peer set has often already connected.
+			// warmup.OnWarmupStateChange (wired at startup) still owns turning this back off once
+			// the writeWorker synchronously observes real STARTING/COMPLETED transitions.
+			forceTorrentWarmupActive(finalHash, fileIdx)
+		}
 	}
 
 	activeHandles.Store(h, true)
@@ -1353,6 +1362,23 @@ func shouldInterruptForSeek(prevOff, off, budget int64) bool {
 		return false
 	}
 	return off > prevOff+budget || prevOff > off+budget
+}
+
+// forceTorrentWarmupActive marks hash/fileID as warmup-active unconditionally. Used at Open() for
+// genuine cold starts (!headReady), before any WriteChunk has happened yet (and thus before
+// DiskWarmup's writeWorker has had a chance to record the STARTING state itself), so aggressive
+// PEX churn (Task 3) and the hedge watchdog (Task 4) catch the torrent's initial peer-connection
+// burst instead of missing it. warmup.OnWarmupStateChange (wired in main() at startup) owns
+// turning this back to false once the writeWorker actually observes STARTING/COMPLETED -
+// synchronously, from inside processWrite itself, not by polling IsWarmingUp() from here (which
+// would race ahead of the async write queue - WriteChunk only enqueues and returns immediately).
+func forceTorrentWarmupActive(hash string, fileID int) {
+	if warmup.DiskWarmup == nil {
+		return
+	}
+	if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
+		tr.Torrent.SetWarmupActive(true, fileID)
+	}
 }
 
 // safeGo runs a function in a new goroutine with panic recovery.
@@ -3101,6 +3127,15 @@ func main() {
 	time.Sleep(2 * time.Second)
 
 	warmup.InitDiskWarmup(gc().DiskWarmupQuotaGB)
+	// Fires synchronously from DiskWarmup's single writeWorker goroutine at the exact moment a
+	// head warmup fetch starts/completes - avoids the race where a caller checking IsWarmingUp()
+	// right after WriteChunk() returns could read stale state, since WriteChunk only enqueues and
+	// returns immediately (see OnWarmupStateChange doc comment in internal/warmup/warmup.go).
+	warmup.OnWarmupStateChange = func(hash string, fileID int, active bool) {
+		if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
+			tr.Torrent.SetWarmupActive(active, fileID)
+		}
+	}
 	go registry.StartRegistryWatchdog(backgroundStopChan)
 	go natpmp.NatpmpLoop(backgroundStopChan, gc().NatPMP, logger)
 
@@ -3313,7 +3348,26 @@ func main() {
 
 		natPort := atomic.LoadInt64(&natpmp.CurrentNatPort)
 
-		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t}`,
+		warmupBuckets := warmup.WarmupDurationBucketCounts()
+		warmupBucketsJSON := fmt.Sprintf("[%d,%d,%d,%d,%d,%d,%d,%d]",
+			warmupBuckets[0], warmupBuckets[1], warmupBuckets[2], warmupBuckets[3],
+			warmupBuckets[4], warmupBuckets[5], warmupBuckets[6], warmupBuckets[7])
+
+		// Task 4: hedge counters live per-Torrent on the fork - sum trigger count across active
+		// torrents, report circuit breaker as open if any active torrent currently has it tripped.
+		var hedgeTriggerTotal int64
+		hedgeCircuitOpenAny := false
+		for _, tr := range torr.ListActiveTorrent() {
+			if tr.Torrent == nil {
+				continue
+			}
+			hedgeTriggerTotal += tr.Torrent.HedgeTriggerCount()
+			if tr.Torrent.HedgeCircuitOpen() {
+				hedgeCircuitOpenAny = true
+			}
+		}
+
+		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t}`,
 			AppVersion,
 			gc().ConfigPath,
 			time.Since(startTime),
@@ -3329,7 +3383,9 @@ func main() {
 			raTotal, raActive, raStale, raEntries, raBudget,
 			raPercent, raActivePercent, raStalePercent,
 			natPort,
-			updater.LatestVersion(), updater.UpdateAvailable())
+			updater.LatestVersion(), updater.UpdateAvailable(),
+			warmupBucketsJSON,
+			hedgeTriggerTotal, hedgeCircuitOpenAny)
 	})
 
 	http.HandleFunc("/webhook", handlePlexWebhook)

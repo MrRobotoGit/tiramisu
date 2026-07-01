@@ -1098,11 +1098,50 @@ func (t *Torrent) runHandshookConn(pc *PeerConn) error {
 	pc.startMessageWriter()
 	pc.sendInitialMessages()
 	pc.initUpdateRequestsTimer()
+	if cl.config.AggressivePeerManagement && t.warmupActive.Load() {
+		go t.churnIfUselessForWarmup(pc)
+	}
 	err := pc.mainReadLoop()
 	if err != nil {
 		return fmt.Errorf("main read loop: %w", err)
 	}
 	return nil
+}
+
+// churnIfUselessForWarmup gives a newly-connected peer a short window to report pieces near the
+// start of the file actually being warmed (per t.warmupFileID) via its bitfield/have messages
+// (arriving concurrently through pc.mainReadLoop). If after that window the peer has none of the
+// first few pieces of THAT FILE's own piece range (not necessarily piece 0 of the torrent - a
+// multi-file torrent's warmed file may start well past piece 0), disconnect it immediately
+// instead of holding the connection slot - treats new connections as disposable probes during the
+// warmup window only, mapping which peers are actually useful far faster than waiting for default
+// PEX gossip pacing to settle naturally. Only spawned when AggressivePeerManagement is on and the
+// torrent has an in-flight DiskWarmup fetch (t.warmupActive, set externally by the GoStorm layer
+// via Torrent.SetWarmupActive).
+func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
+	const (
+		probeWindow      = 3 * time.Second
+		probeFirstPieces = 3
+	)
+	time.Sleep(probeWindow)
+	t.cl.lock()
+	defer t.cl.unlock()
+	if pc.closed.IsSet() || !t.warmupActive.Load() {
+		return // already gone, or warmup finished while we were waiting - nothing to churn
+	}
+	begin, end, ok := t.warmupPieceRange(probeFirstPieces)
+	if !ok {
+		// Metadata not resolved yet, or file index out of range - can't compute a real piece
+		// range. Keep the connection; safe default (never drop without positive evidence).
+		return
+	}
+	for i := begin; i < end; i++ {
+		if pc.peerHasPiece(i) {
+			return // has something relevant to the warmup region, keep the connection
+		}
+	}
+	t.logger.Printf("[PEXChurn] dropping peer %v - no warmup-region pieces (file range [%d,%d)) after %v probe", pc.RemoteAddr, begin, end, probeWindow)
+	pc.drop()
 }
 
 func (p *Peer) initUpdateRequestsTimer() {

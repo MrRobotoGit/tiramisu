@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 	"unsafe"
@@ -71,6 +72,45 @@ type Torrent struct {
 	onClose         []func()
 	infoHash        metainfo.Hash
 	pieces          []Piece
+
+	// warmupActive is set externally by the GoStorm layer (which owns DiskWarmup state) to
+	// signal whether this torrent currently has an in-flight warmup fetch, gating aggressive
+	// PEX churn (see AggressivePeerManagement in ClientConfig).
+	warmupActive atomic.Bool
+	// warmupFileID identifies which file (GoStorm's per-torrent file index) is being warmed, so
+	// churnIfUselessForWarmup/checkAndFireHedges can scope themselves to that file's real piece
+	// range (via File.BeginPieceIndex/EndPieceIndex) instead of assuming the warmed file is
+	// always file index 0 starting at piece 0 - wrong for multi-file torrents (season packs,
+	// releases with nfo/sample files before the main video).
+	warmupFileID atomic.Int64
+
+	// warmupLatencySamples tracks rolling response-time samples per chunk size, used to compute
+	// a p95 threshold for tail-hedging warmup pieces (see warmupP95/recordWarmupLatency). Simple
+	// fixed-size ring buffer per size, not a full histogram library - only the small, bounded set
+	// of chunk sizes seen during warmup needs tracking.
+	warmupLatencyMu      sync.Mutex
+	warmupLatencySamples map[int64][]time.Duration
+
+	// hedgedRequests tracks which in-flight RequestIndexes have already been hedged once, so the
+	// watchdog (which ticks every 250ms) doesn't keep re-hedging the same still-pending request
+	// on every tick - "fire a duplicate, first response wins" means one hedge per request, not a
+	// repeated one. Entries are removed when the original request completes/cancels (see
+	// Peer.deleteRequest) so a request can be hedged again on a future, unrelated cold start.
+	hedgedRequests map[RequestIndex]struct{}
+
+	// hedgeTriggerCount is the total number of tail-hedge duplicate requests fired, for /metrics.
+	hedgeTriggerCount atomic.Int64
+	// hedgeCircuitOpen is true when hedging is auto-disabled because the trigger rate spiked -
+	// signals the shared VPN tunnel itself is the bottleneck, not peer variance, so hedging would
+	// only waste the pipe further. Auto-resets after a cooldown.
+	hedgeCircuitOpen atomic.Bool
+	// hedgeWindowStart/hedgeWindowCount track a rolling 60s hedge-rate window for the circuit
+	// breaker. hedgeWindowStart is a Unix nano timestamp.
+	hedgeWindowStart atomic.Int64
+	hedgeWindowCount atomic.Int64
+	// hedgeWatchdogRunning guards against spawning more than one hedgeWatchdog goroutine per
+	// warmup-active cycle - SetWarmupActive(true) is called repeatedly (once per WriteChunk).
+	hedgeWatchdogRunning atomic.Bool
 
 	// The order pieces are requested if there's no stronger reason like availability or priority.
 	pieceRequestOrder []int
@@ -896,6 +936,231 @@ func (t *Torrent) numPieces() pieceIndex {
 
 func (t *Torrent) numPiecesCompleted() (num pieceIndex) {
 	return pieceIndex(t._completedPieces.GetCardinality())
+}
+
+// SetWarmupActive is called by the GoStorm layer (which owns DiskWarmup state) to signal
+// whether this torrent currently has an in-flight warmup fetch, gating aggressive PEX churn.
+func (t *Torrent) SetWarmupActive(active bool, fileID int) {
+	t.warmupFileID.Store(int64(fileID))
+	t.warmupActive.Store(active)
+	// SetWarmupActive(true) is called repeatedly (once per WriteChunk) while warmup is in
+	// flight - only spawn one watchdog per cycle. CompareAndSwap ensures a second call while one
+	// is already running is a no-op; the running watchdog resets this to false itself on exit.
+	if active && t.hedgeWatchdogRunning.CompareAndSwap(false, true) {
+		go t.hedgeWatchdog()
+	}
+}
+
+// warmupPieceRange returns the [begin, end) piece index range for the file currently being
+// warmed (per warmupFileID), scoped to at most probeFirstPieces from the start of that file -
+// not the whole torrent. Returns ok=false if the file index is out of range or metadata isn't
+// resolved yet (caller should treat that as "don't restrict, or skip" as appropriate).
+func (t *Torrent) warmupPieceRange(maxPieces int) (begin, end pieceIndex, ok bool) {
+	if !t.haveInfo() {
+		return 0, 0, false
+	}
+	files := t.Files()
+	fileID := int(t.warmupFileID.Load())
+	if fileID < 0 || fileID >= len(files) {
+		return 0, 0, false
+	}
+	f := files[fileID]
+	begin = pieceIndex(f.BeginPieceIndex())
+	end = pieceIndex(f.EndPieceIndex())
+	if cap := begin + pieceIndex(maxPieces); cap < end {
+		end = cap
+	}
+	return begin, end, true
+}
+
+// HedgeTriggerCount returns the total number of tail-hedge duplicate requests fired for this
+// torrent, for /metrics.
+func (t *Torrent) HedgeTriggerCount() int64 {
+	return t.hedgeTriggerCount.Load()
+}
+
+// HedgeCircuitOpen reports whether this torrent's hedge circuit breaker is currently tripped
+// (auto-disabled due to an excessive hedge rate), for /metrics.
+func (t *Torrent) HedgeCircuitOpen() bool {
+	return t.hedgeCircuitOpen.Load()
+}
+
+const (
+	hedgeWatchdogInterval = 250 * time.Millisecond
+	// hedgeCircuitBreakerThreshold is a STARTING placeholder, NOT calibrated from real production
+	// data. The design explicitly calls for deriving this from Task 3's real deployed
+	// p95-per-piece-size latency data before hardcoding a number - that data wasn't available yet
+	// when this was written (2026-07-01, only a handful of fast/healthy-swarm warmup samples
+	// observed so far). MUST be revisited once real slow-swarm (p90=16s+, matching the original
+	// baseline's tail) warmup data is observed in production.
+	hedgeCircuitBreakerThreshold = 30
+	hedgeCircuitBreakerWindow    = 60 * time.Second
+	hedgeCircuitBreakerCooldown  = 5 * time.Minute
+)
+
+// hedgeWatchdog periodically scans in-flight warmup-region requests and fires a duplicate
+// request to a next-best peer for any exceeding the observed p95 for its size. Spawned once per
+// warmup-active cycle from SetWarmupActive; exits on its own once warmup ends or the torrent
+// closes, resetting hedgeWatchdogRunning so a future warmup cycle can spawn a fresh one.
+func (t *Torrent) hedgeWatchdog() {
+	defer t.hedgeWatchdogRunning.Store(false)
+	for {
+		time.Sleep(hedgeWatchdogInterval)
+		t.cl.lock()
+		if t.closed.IsSet() || !t.warmupActive.Load() {
+			t.cl.unlock()
+			return
+		}
+		if !t.cl.config.AggressivePeerManagement || t.hedgeCircuitOpen.Load() {
+			t.cl.unlock()
+			continue
+		}
+		t.checkAndFireHedges()
+		t.cl.unlock()
+	}
+}
+
+// checkAndFireHedges scans currently in-flight requests and hedges any warmup-region request
+// that has exceeded the observed p95 latency for its size. Client lock must be held.
+// hedgeWarmupPieceWindow bounds hedging to the first N pieces of the file being warmed - wider
+// than Task 3's 3-piece connection probe (which only needs a cheap "does this peer look useful"
+// signal), since hedging should cover the actual in-flight warmup fetch range. The fork doesn't
+// have direct access to warmup.FileSize (a GoStream-level constant, unreachable across the
+// module boundary), so this is a generous fixed approximation - 32 pieces safely covers a 64MB
+// warmup window for typical piece sizes (2-8MB) without requiring exact byte-range knowledge.
+const hedgeWarmupPieceWindow = 32
+
+func (t *Torrent) checkAndFireHedges() {
+	begin, end, ok := t.warmupPieceRange(hedgeWarmupPieceWindow)
+	if !ok {
+		return // metadata not resolved yet, or file index out of range
+	}
+	now := time.Now()
+	for r, rs := range t.requestState {
+		if _, alreadyHedged := t.hedgedRequests[r]; alreadyHedged {
+			continue // one hedge per request - don't re-hedge an already-hedged still-pending request
+		}
+		req := t.requestIndexToRequest(r)
+		pieceIdx := pieceIndex(req.Index)
+		if pieceIdx < begin || pieceIdx >= end {
+			continue // outside the warmed file's piece range - not a warmup-region request
+		}
+		p95, ok := t.warmupP95(int64(req.Length))
+		if !ok || now.Sub(rs.when) < p95 {
+			continue
+		}
+		t.fireHedge(r, req, rs.peer)
+	}
+}
+
+// fireHedge sends a duplicate request for req to a next-best available peer (one that isn't
+// already holding the request and reports having the piece, preferring the peer with the most
+// recent useful chunk received - the same recency signal already used for request-stealing in
+// applyRequestState, not a new ranking mechanism). The duplicate is sent as a raw wire request
+// via peerImpl._request, bypassing t.requestState bookkeeping entirely (which enforces one peer
+// per request index) - the existing "redundant chunk" handling in receiveChunk already discards
+// whichever response arrives second, so this needs no new reconciliation logic. Gated by a
+// rolling 60s hedge-rate circuit breaker: if hedges spike, that signals the shared VPN tunnel
+// itself is saturated (not peer variance), so hedging is auto-disabled for a cooldown period
+// rather than making tunnel contention worse. Client lock must be held.
+func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer) {
+	// Pick the candidate BEFORE touching the circuit breaker's rate counter - a stalled request
+	// with no alternative peer available (common in exactly the low-peer-count swarms this
+	// feature targets) must not count against the breaker, since zero duplicate bytes are ever
+	// sent. Counting failed attempts here would let a single chronically-stalled request in a
+	// 1-2-peer swarm trip the breaker in seconds on phantom "hedge" traffic that never happened.
+	pieceIdx := pieceIndex(req.Index)
+	var candidate *Peer
+	t.iterPeers(func(p *Peer) {
+		if p == currentPeer || !p.peerHasPiece(pieceIdx) {
+			return
+		}
+		if candidate == nil || p.lastUsefulChunkReceived.After(candidate.lastUsefulChunkReceived) {
+			candidate = p
+		}
+	})
+	if candidate == nil {
+		return // no alternative peer available right now - don't mark as hedged, retry next tick
+	}
+
+	nowNano := time.Now().UnixNano()
+	windowStart := t.hedgeWindowStart.Load()
+	if windowStart == 0 || time.Duration(nowNano-windowStart) > hedgeCircuitBreakerWindow {
+		t.hedgeWindowStart.Store(nowNano)
+		t.hedgeWindowCount.Store(0)
+	}
+	count := t.hedgeWindowCount.Add(1)
+	if count > hedgeCircuitBreakerThreshold {
+		t.hedgeCircuitOpen.Store(true)
+		t.logger.Printf("[TailHedge] Circuit breaker tripped: %d hedges/60s, disabling — VPN tunnel likely saturated, not peer variance", count)
+		time.AfterFunc(hedgeCircuitBreakerCooldown, func() {
+			t.hedgeCircuitOpen.Store(false)
+			t.hedgeWindowCount.Store(0)
+			t.logger.Printf("[TailHedge] Circuit breaker cooldown elapsed, re-enabling hedging")
+		})
+		return
+	}
+	if t.hedgedRequests == nil {
+		t.hedgedRequests = make(map[RequestIndex]struct{})
+	}
+	t.hedgedRequests[r] = struct{}{}
+	// Mark the request as expected on the candidate's own per-connection bookkeeping (mirrors
+	// what Peer.request does) WITHOUT touching t.requestState[r] or candidate.requestState.Requests
+	// - those still point at currentPeer, preserving the one-peer-per-request invariant elsewhere
+	// in this file. Without this, receiveChunk would reject the hedge response as "unexpected
+	// chunk" (an error) instead of gracefully treating it as redundant/discardable.
+	if candidate.validReceiveChunks == nil {
+		candidate.validReceiveChunks = make(map[RequestIndex]int)
+	}
+	candidate.validReceiveChunks[r]++
+	candidate.peerImpl._request(req)
+	t.hedgeTriggerCount.Add(1)
+	t.logger.Printf("[TailHedge] Hedging piece=%d begin=%d to %v (original request exceeded p95)", req.Index, req.Begin, candidate.RemoteAddr)
+}
+
+// maxWarmupLatencySamples caps the ring buffer per chunk size - only enough recent samples to
+// compute a meaningful p95, not an unbounded history.
+const maxWarmupLatencySamples = 50
+
+// minWarmupLatencySamplesForP95 is the minimum sample count before warmupP95 trusts its result -
+// below this, there isn't enough data to hedge confidently yet.
+const minWarmupLatencySamplesForP95 = 10
+
+// recordWarmupLatency appends a response-time sample for a warmup-region chunk of the given size,
+// dropping the oldest sample once the ring buffer for that size is full.
+func (t *Torrent) recordWarmupLatency(size int64, d time.Duration) {
+	t.warmupLatencyMu.Lock()
+	defer t.warmupLatencyMu.Unlock()
+	if t.warmupLatencySamples == nil {
+		t.warmupLatencySamples = make(map[int64][]time.Duration)
+	}
+	samples := t.warmupLatencySamples[size]
+	if len(samples) >= maxWarmupLatencySamples {
+		samples = samples[1:]
+	}
+	t.warmupLatencySamples[size] = append(samples, d)
+}
+
+// warmupP95 returns the 95th percentile response time observed for warmup-region chunks of the
+// given size. ok is false if fewer than minWarmupLatencySamplesForP95 samples have been recorded
+// yet - not enough data to hedge against confidently.
+func (t *Torrent) warmupP95(size int64) (p95 time.Duration, ok bool) {
+	t.warmupLatencyMu.Lock()
+	samples := t.warmupLatencySamples[size]
+	if len(samples) < minWarmupLatencySamplesForP95 {
+		t.warmupLatencyMu.Unlock()
+		return 0, false
+	}
+	sorted := make([]time.Duration, len(samples))
+	copy(sorted, samples)
+	t.warmupLatencyMu.Unlock()
+
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	idx := int(float64(len(sorted)) * 0.95)
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx], true
 }
 
 func (t *Torrent) close(wg *sync.WaitGroup) (err error) {

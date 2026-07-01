@@ -40,8 +40,12 @@ type BTSets struct {
 	DownloadRateLimit int // in kb, 0 - inf
 	UploadRateLimit   int // in kb, 0 - inf
 	ConnectionsLimit  int
-	PeersListenPort   int
-	BlockListURL      string
+	// AggressivePeerManagement enables warmup-phase PEX churn and tail-hedging for
+	// streaming cold-start latency. Zero-value false is already the safe default,
+	// no explicit default assignment needed (unlike ConnectionsLimit).
+	AggressivePeerManagement bool
+	PeersListenPort          int
+	BlockListURL             string
 
 	// HTTPS
 	SslPort int

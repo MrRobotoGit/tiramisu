@@ -669,6 +669,16 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 				f(PeerMessageEvent{c, msg})
 			}
 		}
+		// Tail-hedging (Task 4): capture the send timestamp before deleteRequest wipes
+		// t.requestState[req] - only while a warmup fetch is in flight for this torrent.
+		var warmupReqSentAt time.Time
+		recordWarmupLatencySample := false
+		if t.warmupActive.Load() {
+			if rs, ok := t.requestState[req]; ok {
+				warmupReqSentAt = rs.when
+				recordWarmupLatencySample = true
+			}
+		}
 		// Request has been satisfied.
 		if c.deleteRequest(req) || c.requestState.Cancelled.CheckedRemove(req) {
 			intended = true
@@ -680,6 +690,9 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 			}
 		} else {
 			chunksReceived.Add("unintended", 1)
+		}
+		if recordWarmupLatencySample {
+			t.recordWarmupLatency(int64(len(msg.Piece)), time.Since(warmupReqSentAt))
 		}
 	}
 
@@ -807,6 +820,7 @@ func (c *Peer) deleteRequest(r RequestIndex) bool {
 		panic("only one peer should have a given request at a time")
 	}
 	delete(c.t.requestState, r)
+	delete(c.t.hedgedRequests, r) // Task 4: allow this request index to be hedged again if it recurs
 	// c.t.iterPeers(func(p *Peer) {
 	// 	if p.isLowOnRequests() {
 	// 		p.updateRequests("Peer.deleteRequest")
