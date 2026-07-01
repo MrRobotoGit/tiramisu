@@ -1447,34 +1447,39 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 				warmStart := (off / warmChunk) * warmChunk
 				warmKey := fmt.Sprintf("warm:%s:%d", h.path, warmStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(warmKey, true); !loaded {
-					goOff, goKey, goHash, goFileID, goSize := warmStart, warmKey, h.hash, h.fileID, h.size
-					safeGo(func() {
-						defer inFlightPrefetches.Delete(goKey)
-						select {
-						case masterDataSemaphore <- struct{}{}:
+					// Non-blocking slot check before spawning: under a saturated semaphore (e.g.
+					// a Plex scan burst touching hundreds of files), spawning first and waiting
+					// inside the goroutine meant a goroutine was created only to sit blocked for
+					// up to 300ms doing nothing. A `default` check costs microseconds and avoids
+					// the spawn entirely when there's no room, without blocking this Read() call.
+					select {
+					case masterDataSemaphore <- struct{}{}:
+						goOff, goKey, goHash, goFileID, goSize := warmStart, warmKey, h.hash, h.fileID, h.size
+						safeGo(func() {
+							defer inFlightPrefetches.Delete(goKey)
 							defer func() { <-masterDataSemaphore }()
-						case <-time.After(300 * time.Millisecond):
-							return
-						}
-						fetchEnd := goOff + warmChunk - 1
-						if fetchEnd >= goSize {
-							fetchEnd = goSize - 1
-						}
-						if fetchEnd <= goOff {
-							return
-						}
-						bufPtr := readBufferPool.Get().(*[]byte)
-						defer readBufferPool.Put(bufPtr)
-						limit := int64(len(*bufPtr))
-						if fetchEnd-goOff+1 < limit {
-							limit = fetchEnd - goOff + 1
-						}
-						n, err := nativeBridge.FetchBlock(goHash, goFileID, goOff, (*bufPtr)[:limit])
-						if err == nil && n > 0 {
-							raCache.Put(h.path, goOff, goOff+int64(n)-1, (*bufPtr)[:n])
-							logger.Printf("[WarmLanding] Pre-fetched chunk at %dMB for new handle", goOff/(1024*1024))
-						}
-					})
+							fetchEnd := goOff + warmChunk - 1
+							if fetchEnd >= goSize {
+								fetchEnd = goSize - 1
+							}
+							if fetchEnd <= goOff {
+								return
+							}
+							bufPtr := readBufferPool.Get().(*[]byte)
+							defer readBufferPool.Put(bufPtr)
+							limit := int64(len(*bufPtr))
+							if fetchEnd-goOff+1 < limit {
+								limit = fetchEnd - goOff + 1
+							}
+							n, err := nativeBridge.FetchBlock(goHash, goFileID, goOff, (*bufPtr)[:limit])
+							if err == nil && n > 0 {
+								raCache.Put(h.path, goOff, goOff+int64(n)-1, (*bufPtr)[:n])
+								logger.Printf("[WarmLanding] Pre-fetched chunk at %dMB for new handle", goOff/(1024*1024))
+							}
+						})
+					default:
+						inFlightPrefetches.Delete(warmKey)
+					}
 				}
 			}
 		}
@@ -1529,34 +1534,36 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 				warmStart := (off / warmChunk) * warmChunk
 				warmKey := fmt.Sprintf("warm:%s:%d", h.path, warmStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(warmKey, true); !loaded {
-					goOff, goKey, goHash, goFileID, goSize := warmStart, warmKey, h.hash, h.fileID, h.size
-					safeGo(func() {
-						defer inFlightPrefetches.Delete(goKey)
-						select {
-						case masterDataSemaphore <- struct{}{}:
+					// See the matching comment on the other WarmLanding site above: non-blocking
+					// slot check before spawning avoids creating a goroutine that just blocks.
+					select {
+					case masterDataSemaphore <- struct{}{}:
+						goOff, goKey, goHash, goFileID, goSize := warmStart, warmKey, h.hash, h.fileID, h.size
+						safeGo(func() {
+							defer inFlightPrefetches.Delete(goKey)
 							defer func() { <-masterDataSemaphore }()
-						case <-time.After(300 * time.Millisecond):
-							return
-						}
-						fetchEnd := goOff + warmChunk - 1
-						if fetchEnd >= goSize {
-							fetchEnd = goSize - 1
-						}
-						if fetchEnd <= goOff {
-							return
-						}
-						bufPtr := readBufferPool.Get().(*[]byte)
-						defer readBufferPool.Put(bufPtr)
-						limit := int64(len(*bufPtr))
-						if fetchEnd-goOff+1 < limit {
-							limit = fetchEnd - goOff + 1
-						}
-						n, err := nativeBridge.FetchBlock(goHash, goFileID, goOff, (*bufPtr)[:limit])
-						if err == nil && n > 0 {
-							raCache.Put(h.path, goOff, goOff+int64(n)-1, (*bufPtr)[:n])
-							logger.Printf("[WarmLanding] Pre-fetched chunk at %dMB for seek target", goOff/(1024*1024))
-						}
-					})
+							fetchEnd := goOff + warmChunk - 1
+							if fetchEnd >= goSize {
+								fetchEnd = goSize - 1
+							}
+							if fetchEnd <= goOff {
+								return
+							}
+							bufPtr := readBufferPool.Get().(*[]byte)
+							defer readBufferPool.Put(bufPtr)
+							limit := int64(len(*bufPtr))
+							if fetchEnd-goOff+1 < limit {
+								limit = fetchEnd - goOff + 1
+							}
+							n, err := nativeBridge.FetchBlock(goHash, goFileID, goOff, (*bufPtr)[:limit])
+							if err == nil && n > 0 {
+								raCache.Put(h.path, goOff, goOff+int64(n)-1, (*bufPtr)[:n])
+								logger.Printf("[WarmLanding] Pre-fetched chunk at %dMB for seek target", goOff/(1024*1024))
+							}
+						})
+					default:
+						inFlightPrefetches.Delete(warmKey)
+					}
 				}
 			}
 		}
@@ -1629,41 +1636,42 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			prefetchKey := fmt.Sprintf("%s:%d", h.path, nextChunkStart)
 			if _, loaded := inFlightPrefetches.LoadOrStore(prefetchKey, true); !loaded {
 				goStart, goKey, goHash, goFileID := nextChunkStart, prefetchKey, h.hash, h.fileID
-				safeGo(func() {
-					defer inFlightPrefetches.Delete(goKey)
-					fetchEnd := goStart + chunkSize - 1
-					if fetchEnd >= h.size {
-						fetchEnd = h.size - 1
-					}
-					if fetchEnd <= goStart {
-						return
-					}
-
+				fetchEnd := goStart + chunkSize - 1
+				if fetchEnd >= h.size {
+					fetchEnd = h.size - 1
+				}
+				// Non-blocking slot check before spawning: avoids creating a goroutine that just
+				// blocks up to 500ms waiting on a saturated semaphore during a Plex scan burst
+				// (same reasoning as the WarmLanding sites above).
+				if fetchEnd <= goStart {
+					inFlightPrefetches.Delete(prefetchKey)
+				} else {
 					select {
 					case masterDataSemaphore <- struct{}{}:
-						defer func() { <-masterDataSemaphore }()
-					case <-time.After(500 * time.Millisecond):
-						return
+						safeGo(func() {
+							defer inFlightPrefetches.Delete(goKey)
+							defer func() { <-masterDataSemaphore }()
+
+							if goHash != "" {
+								bufPtr := readBufferPool.Get().(*[]byte)
+								defer readBufferPool.Put(bufPtr)
+
+								limit := int64(len(*bufPtr))
+								if fetchEnd-goStart+1 < limit {
+									limit = fetchEnd - goStart + 1
+								}
+
+								n, err := nativeBridge.FetchBlock(goHash, goFileID, goStart, (*bufPtr)[:limit])
+								if err == nil && n > 0 {
+									raCache.Put(h.path, goStart, goStart+int64(n)-1, (*bufPtr)[:n])
+								}
+							}
+							// HTTP Fallback REMOVED
+						})
+					default:
+						inFlightPrefetches.Delete(prefetchKey)
 					}
-
-					if goHash != "" {
-						bufPtr := readBufferPool.Get().(*[]byte)
-						defer readBufferPool.Put(bufPtr)
-
-						limit := int64(len(*bufPtr))
-						if fetchEnd-goStart+1 < limit {
-							limit = fetchEnd - goStart + 1
-						}
-
-						n, err := nativeBridge.FetchBlock(goHash, goFileID, goStart, (*bufPtr)[:limit])
-						if err == nil && n > 0 {
-							raCache.Put(h.path, goStart, goStart+int64(n)-1, (*bufPtr)[:n])
-						}
-						return
-					}
-
-					// HTTP Fallback REMOVED
-				})
+				}
 			}
 		}
 
