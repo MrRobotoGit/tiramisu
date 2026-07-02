@@ -1448,10 +1448,16 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	prevOff := atomic.LoadInt64(&h.lastOff)
 	atomic.StoreInt64(&h.lastOff, off)
 
-	// Transition WARMUP→STREAMING on resume (first read >= warmup.FileSize) or seek (jump > budget).
+	// Transition WARMUP→STREAMING on resume (first read >= warmup.FileSize), seek (jump > budget),
+	// or plain sequential progression past the warmup zone (no seek ever happens during linear
+	// playback from offset 0 - without this case, h.state stayed stuck in stateWarmup for the
+	// entire rest of playback, paying GetAvailableRange's uncached filepath.Join/Clean cost on
+	// every single read instead of the cheap steady-state path; found via CPU profiling a 4K HDR
+	// stream where this uncached path work reached ~29% of total CPU).
 	// Checked after SSD path above so initial reads within warmup zone are still served.
 	if h.state.Load() == stateWarmup {
 		isSeek := false
+		naturalProgression := false
 		if prevOff == -1 {
 			if off >= warmup.FileSize {
 				isSeek = true
@@ -1460,11 +1466,17 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			budget := int64(gc().ReadAheadBudget)
 			if off > prevOff+budget || prevOff > off+budget {
 				isSeek = true
+			} else if off >= warmup.FileSize {
+				naturalProgression = true
 			}
 		}
-		if isSeek {
+		if isSeek || naturalProgression {
 			h.state.Store(stateStreaming)
-			logger.Printf("[Warmup] Seek/Resume detected (off=%dMB): %s→%s.", off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
+			if naturalProgression {
+				logger.Printf("[Warmup] Sequential read past warmup zone (off=%dMB): %s→%s.", off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
+			} else {
+				logger.Printf("[Warmup] Seek/Resume detected (off=%dMB): %s→%s.", off/(1024*1024), stateName(stateWarmup), stateName(stateStreaming))
+			}
 
 			// WarmLanding on new handle: pre-fetch chunk at resume position while pump catches
 			// up. Fires only for new handles (prevOff==-1) since V286b covers existing handles.
