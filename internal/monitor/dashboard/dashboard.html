@@ -22,7 +22,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
 <!-- Header -->
 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
   <div class="flex items-center gap-3">
-    <h1 class="text-2xl md:text-3xl font-bold">GoStream Health Monitor</h1>
+    <h1 class="text-lg sm:text-xl md:text-2xl font-bold">GoStream Health Monitor</h1>
     <a id="updateBadge" href="https://github.com/MrRobotoGit/gostream/releases/latest" target="_blank" rel="noopener" class="hidden bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium py-1 px-2.5 rounded-full transition no-underline whitespace-nowrap"></a>
   </div>
   <div class="flex items-center gap-3">
@@ -72,6 +72,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
       <div class="flex items-center gap-4 mt-1 text-xs text-slate-500">
         <span><span class="inline-block w-2 h-2 bg-blue-500 rounded mr-1"></span>Active <span class="text-blue-400" id="fuseActivePct">0%</span></span>
         <span><span class="inline-block w-2 h-2 bg-slate-500 rounded mr-1"></span>Stale <span id="fuseStalePct">0%</span></span>
+        <span><span class="inline-block w-2 h-2 bg-blue-500 rounded mr-1"></span>Cache Hit Rate <span class="text-blue-400" id="cacheHitRatePct">0%</span></span>
       </div>
     </div>
   </div>
@@ -87,23 +88,23 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
   <div class="glass rounded-xl p-4" id="c-gostorm">
     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">GoStorm</div>
-    <div class="flex items-center gap-2"><span id="s-gostorm" class="text-2xl">&#9679;</span><span id="l-gostorm" class="text-lg font-bold">--</span></div>
+    <div class="flex items-center gap-2"><span id="s-gostorm" class="text-base sm:text-lg">&#9679;</span><span id="l-gostorm" class="text-sm sm:text-base font-bold">--</span></div>
   </div>
   <div class="glass rounded-xl p-4" id="c-fuse">
     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">FUSE</div>
-    <div class="flex items-center gap-2"><span id="s-fuse" class="text-2xl">&#9679;</span><span id="l-fuse" class="text-lg font-bold">--</span></div>
+    <div class="flex items-center gap-2"><span id="s-fuse" class="text-base sm:text-lg">&#9679;</span><span id="l-fuse" class="text-sm sm:text-base font-bold">--</span></div>
   </div>
   <div class="glass rounded-xl p-4" id="c-vpn">
     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">VPN</div>
-    <div class="flex items-center gap-2"><span id="s-vpn" class="text-2xl">&#9679;</span><span id="l-vpn" class="text-lg font-bold">--</span></div>
+    <div class="flex items-center gap-2"><span id="s-vpn" class="text-base sm:text-lg">&#9679;</span><span id="l-vpn" class="text-sm sm:text-base font-bold">--</span></div>
   </div>
   <div class="glass rounded-xl p-4" id="c-natpmp">
     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">NAT-PMP</div>
-    <div class="flex items-center gap-2"><span id="s-natpmp" class="text-2xl">&#9679;</span><span id="l-natpmp" class="text-lg font-bold">--</span></div>
+    <div class="flex items-center gap-2"><span id="s-natpmp" class="text-base sm:text-lg">&#9679;</span><span id="l-natpmp" class="text-sm sm:text-base font-bold">--</span></div>
   </div>
   <div class="glass rounded-xl p-4" id="c-plex">
     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Plex</div>
-    <div class="flex items-center gap-2"><span id="s-plex" class="text-2xl">&#9679;</span><span id="l-plex" class="text-lg font-bold">--</span></div>
+    <div class="flex items-center gap-2"><span id="s-plex" class="text-base sm:text-lg">&#9679;</span><span id="l-plex" class="text-sm sm:text-base font-bold">--</span></div>
   </div>
   <div class="glass rounded-xl p-4">
     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">System</div>
@@ -240,6 +241,7 @@ async function load(){
     document.getElementById('fuseActivePct').textContent=h.fuse_active_pct.toFixed(1)+'%';
     document.getElementById('fuseStalePct').textContent=h.fuse_stale_pct.toFixed(1)+'%';
     document.getElementById('fuseBudget').textContent=h.fuse_budget_mb.toFixed(0)+' MB budget';
+    document.getElementById('cacheHitRatePct').textContent=h.cache_hit_rate_pct.toFixed(1)+'%';
 
     svcKeys.forEach(k=>svc(k,h[k]));
 

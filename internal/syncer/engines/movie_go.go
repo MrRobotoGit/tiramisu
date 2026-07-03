@@ -101,7 +101,7 @@ const (
 	mMovieUnknownPenalty = -5
 	mMovieMinSeeders     = 15
 	mMovie4KMinGB        = 10
-	mMovie4KMaxGB        = 60
+	mMovie4KMaxGB        = 40
 	mMovie1080PMinGB     = 4
 	mMovie1080PMaxGB     = 20
 	mMovieUpgradePct     = 1.1

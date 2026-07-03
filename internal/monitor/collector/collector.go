@@ -59,6 +59,11 @@ type HealthStatus struct {
 	FUSEBudgetMB  float64 `json:"fuse_budget_mb"`
 	FUSEActiveMB  float64 `json:"fuse_active_mb"`
 	FUSEStaleMB   float64 `json:"fuse_stale_mb"`
+
+	// CacheHitRatePct is global (all active streams combined, not per-torrent) - from
+	// GoStream's /metrics/profiling, reflects how much of what the player asked for was served
+	// from the fast local read-ahead cache vs. required a direct HTTP fetch.
+	CacheHitRatePct float64 `json:"cache_hit_rate_pct"`
 }
 
 // ServiceStatus tracks a single service's health.
@@ -103,14 +108,15 @@ const (
 
 // Collector polls system services on a ticker.
 type Collector struct {
-	gostormURL string
-	metricsURL string
-	fusePath   string   // FUSE mount point (for mount status check)
-	sourcePath string   // physical_source_path (for file counting)
-	vpnIface   string
-	plexURL    string
-	plexToken  string
-	natpmpPort int
+	gostormURL   string
+	metricsURL   string
+	profilingURL string
+	fusePath     string // FUSE mount point (for mount status check)
+	sourcePath   string // physical_source_path (for file counting)
+	vpnIface     string
+	plexURL      string
+	plexToken    string
+	natpmpPort   int
 
 	logsDir string
 
@@ -137,6 +143,7 @@ func New(gostormURL, fusePath, sourcePath, vpnIface, plexURL, plexToken string, 
 	return &Collector{
 		gostormURL:   gostormURL,
 		metricsURL:   fmt.Sprintf("http://127.0.0.1:%d/metrics", metricsPort),
+		profilingURL: fmt.Sprintf("http://127.0.0.1:%d/metrics/profiling", metricsPort),
 		fusePath:     fusePath,
 		sourcePath:   sourcePath,
 		vpnIface:     vpnIface,
@@ -277,6 +284,9 @@ func (c *Collector) collect() {
 	// FUSE buffer from /metrics
 	c.fetchFUSEBuffer(&s)
 
+	// Global cache hit rate from /metrics/profiling
+	c.fetchCacheHitRate(&s)
+
 	// Torrents from GoStorm + enrich with Plex sessions and badges
 	torrents := c.fetchTorrents()
 	c.enrichTorrents(torrents)
@@ -390,6 +400,21 @@ func (c *Collector) fetchFUSEBuffer(s *HealthStatus) {
 		s.FUSEActivePct = active / budget * 100
 		s.FUSEStalePct = stale / budget * 100
 	}
+}
+
+func (c *Collector) fetchCacheHitRate(s *HealthStatus) {
+	resp, err := c.httpClient.Get(c.profilingURL)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return
+	}
+	s.CacheHitRatePct = jsonFloat(m, "cache_hit_rate_pct")
 }
 
 func jsonFloat(m map[string]interface{}, key string) float64 {
