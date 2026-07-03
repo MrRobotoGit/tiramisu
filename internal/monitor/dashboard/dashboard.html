@@ -26,7 +26,6 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
     <a id="updateBadge" href="https://github.com/MrRobotoGit/gostream/releases/latest" target="_blank" rel="noopener" class="hidden no-underline whitespace-nowrap"></a>
   </div>
   <div class="flex items-center gap-3">
-    <span class="text-xs text-slate-400">Last update: <span id="lastUpdate">--:--:--</span></span>
     <button onclick="doRestart()" class="bg-slate-700 hover:bg-red-600 text-white text-xs py-1.5 px-3 rounded transition whitespace-nowrap">Restart</button>
   </div>
 </div>
@@ -224,7 +223,6 @@ async function load(){
     const[hR,tR,sR,shR]=await Promise.all([fetch('/api/health'),fetch('/api/torrents'),fetch('/api/speed-history'),fetch('/api/shield-events')]);
     const h=await hR.json(),torrents=await tR.json(),history=await sR.json(),shieldEvts=await shR.json();
 
-    document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString();
     document.getElementById('uptime').textContent=h.uptime;
     document.getElementById('speed').textContent=h.download_mbps.toFixed(1);
     document.getElementById('totalT').textContent=h.total_torrents;
@@ -286,7 +284,7 @@ async function load(){
         <div class="text-[10px] text-slate-600">peers · seeds</div>
       </div>
     </div>`;}).join('');}
-  }catch(e){document.getElementById('lastUpdate').textContent='connection error';}
+  }catch(e){console.error('Dashboard update failed:',e);}
 
   // Scheduler
   try{
