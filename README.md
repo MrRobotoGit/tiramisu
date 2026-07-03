@@ -33,8 +33,8 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - Everything ships as a **single binary**: GoStorm engine, Tiramisu, metrics, control panel, and webhook receiver in one `tiramisu` executable.
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MrRobotoGit/tiramisu)
-[![Docker Pulls](https://img.shields.io/docker/pulls/mrrobotogit/gostream?logo=docker&label=Docker+Pulls)](https://hub.docker.com/r/mrrobotogit/gostream)
-[![Docker Image Size](https://img.shields.io/docker/image-size/mrrobotogit/gostream/latest?logo=docker&label=Image+Size)](https://hub.docker.com/r/mrrobotogit/gostream)
+[![Docker Pulls](https://img.shields.io/docker/pulls/mrrobotogit/tiramisu?logo=docker&label=Docker+Pulls)](https://hub.docker.com/r/mrrobotogit/tiramisu)
+[![Docker Image Size](https://img.shields.io/docker/image-size/mrrobotogit/tiramisu/latest?logo=docker&label=Image+Size)](https://hub.docker.com/r/mrrobotogit/tiramisu)
 
 ---
 ## Control Panel
@@ -859,15 +859,15 @@ Pre-built images for `linux/amd64` and `linux/arm64` are published automatically
 
 | Registry | Image |
 |----------|-------|
-| **Docker Hub** | `mrrobotogit/gostream:latest` |
-| **GHCR** | `ghcr.io/mrrobotogit/gostream:latest` |
+| **Docker Hub** | `mrrobotogit/tiramisu:latest` |
+| **GHCR** | `ghcr.io/mrrobotogit/tiramisu:latest` |
 
 **Pull:**
 
 ```bash
-docker pull mrrobotogit/gostream:latest
+docker pull mrrobotogit/tiramisu:latest
 # or
-docker pull ghcr.io/mrrobotogit/gostream:latest
+docker pull ghcr.io/mrrobotogit/tiramisu:latest
 ```
 
 **Run:**
@@ -883,7 +883,7 @@ docker run -d \
   -v /mnt/tiramisu-mkv-virtual:/mnt/tiramisu-mkv-virtual \
   -p 8090:8090 \
   -p 9080:9080 \
-  mrrobotogit/gostream:latest
+  mrrobotogit/tiramisu:latest
 ```
 
 Or use `--privileged` as a simpler alternative to the individual capabilities (e.g. on a Raspberry Pi where the container is fully trusted).

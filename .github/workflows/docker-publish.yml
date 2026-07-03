@@ -1,5 +1,5 @@
 # ==============================================================================
-# GoStream Docker Publishing Pipeline
+# Tiramisu Docker Publishing Pipeline
 # Automatically publishes Docker images to registries on releases and main branch
 # ==============================================================================
 
@@ -20,7 +20,7 @@ env:
   # Registry settings
   REGISTRY_DOCKERHUB: docker.io
   REGISTRY_GHCR: ghcr.io
-  IMAGE_NAME: gostream
+  IMAGE_NAME: tiramisu
   
 jobs:
   publish:
@@ -89,7 +89,7 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
-          repository: mrrobotogit/gostream
+          repository: mrrobotogit/tiramisu
           readme-filepath: ./README.md
           short-description: "Advanced BitTorrent-FUSE for real streaming to your private Plex/Jellyfin library. No Debrid."
 
@@ -100,5 +100,5 @@ jobs:
           echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Published to:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Docker Hub:** \`docker pull mrrobotogit/gostream:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **GitHub Container Registry:** \`docker pull ghcr.io/${{ github.repository_owner }}/gostream:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Hub:** \`docker pull mrrobotogit/tiramisu:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **GitHub Container Registry:** \`docker pull ghcr.io/${{ github.repository_owner }}/tiramisu:latest\`" >> $GITHUB_STEP_SUMMARY
