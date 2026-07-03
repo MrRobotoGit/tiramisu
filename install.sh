@@ -520,7 +520,7 @@ clone_repo() {
     fi
 
     # Clone from GitHub
-    local repo_url="https://github.com/MrRobotoGit/gostream.git"
+    local repo_url="https://github.com/MrRobotoGit/tiramisu.git"
     local tmp_clone="/tmp/tiramisu-clone-$$"
 
     print_info "Cloning source from GitHub..."
@@ -557,7 +557,7 @@ deploy_files() {
         print_ok "config.json.example present in ${INSTALL_DIR}/"
     else
         print_info "config.json.example not found — downloading from GitHub..."
-        local raw_url="https://raw.githubusercontent.com/MrRobotoGit/gostream/refs/heads/main/config.json.example"
+        local raw_url="https://raw.githubusercontent.com/MrRobotoGit/tiramisu/refs/heads/main/config.json.example"
         if curl -sfL -o "${INSTALL_DIR}/config.json.example" "$raw_url"; then
             print_ok "config.json.example downloaded from GitHub"
         else
@@ -813,7 +813,7 @@ compile_binary() {
 
     if [ -z "$app_version" ] && command -v curl >/dev/null 2>&1; then
         app_version=$(curl -fsSL --max-time 5 \
-            "https://api.github.com/repos/MrRobotoGit/gostream/releases/latest" \
+            "https://api.github.com/repos/MrRobotoGit/tiramisu/releases/latest" \
             2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
     fi
 

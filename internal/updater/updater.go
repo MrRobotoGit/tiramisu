@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	repo          = "MrRobotoGit/gostream"
+	repo          = "MrRobotoGit/tiramisu"
 	checkInitial  = 60 * time.Second
 	checkInterval = 12 * time.Hour
 )
