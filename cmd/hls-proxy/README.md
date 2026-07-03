@@ -1,7 +1,7 @@
 # hls-proxy
 
-Sidecar service for `gostream` HLS fallback. Resolves m3u8 stream URLs from
-`vidsrc.me` and proxies HLS as byte-range seekable HTTP, so gostream's
+Sidecar service for `tiramisu` HLS fallback. Resolves m3u8 stream URLs from
+`vidsrc.me` and proxies HLS as byte-range seekable HTTP, so tiramisu's
 `raCache` can serve the stream when a torrent has zero seeders.
 
 **100% HTTP-only.** No Chromium, no Xvfb, no JavaScript execution.
@@ -46,7 +46,7 @@ orchidpixelgardens.com, wanderlynest.com). Each is HEAD-validated for
 ```bash
 cd cmd/hls-proxy
 GOOS=linux GOARCH=arm64 go build -o hls-proxy .
-scp hls-proxy pi@192.168.1.2:/home/pi/GoStream/hls-proxy
+scp hls-proxy pi@192.168.1.2:/home/pi/Tiramisu/hls-proxy
 ssh pi@192.168.1.2 'sudo systemctl restart hls-proxy'
 ```
 
@@ -74,7 +74,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now hls-proxy
 ```
 
-Logs: `/home/pi/GoStream/logs/hls-proxy.log`.
+Logs: `/home/pi/Tiramisu/logs/hls-proxy.log`.
 
 ## Test
 
@@ -97,10 +97,10 @@ od -An -tx1 -N4 /tmp/t.bin
 # → 47 40 00 30  (TS sync byte 0x47)
 ```
 
-## Integration with gostream
+## Integration with tiramisu
 
-`gostream/internal/hlsfallback/` is the client-side package. In
-`gostream/main.go`:
+`tiramisu/internal/hlsfallback/` is the client-side package. In
+`tiramisu/main.go`:
 
 1. Startup: probes `localhost:8086/health` → enables fallback if reachable
 2. `Open()` handler: if no warmup hit + IMDB id known + proxy ready, spawns
@@ -108,7 +108,7 @@ od -An -tx1 -N4 /tmp/t.bin
 3. If no peer activity after 5s → swap `NativeReader` with `HTTPRangeReader`
    that proxies range requests to `/stream/{imdbID}`
 
-See `gostream/main.go:880-905`.
+See `tiramisu/main.go:880-905`.
 
 ## Known limitations
 
