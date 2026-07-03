@@ -84,6 +84,14 @@ type Torrent struct {
 	// releases with nfo/sample files before the main video).
 	warmupFileID atomic.Int64
 
+	// churnCooldown tracks IPs recently dropped by churnIfUselessForWarmup (lacked warmup-region
+	// pieces), keyed by IP (not IP:port - the same peer often reconnects from a new port), so a
+	// peer that just proved useless isn't immediately re-probed on reconnect. Not a ban (unlike
+	// AdaptiveShield's corruption-based bans) - lacking a piece is normal, legitimate behavior,
+	// just wasteful to re-probe every few seconds during an active warmup. Guarded by t.cl's lock
+	// (already held by every caller that touches this), not a separate mutex.
+	churnCooldown map[string]time.Time
+
 	// warmupLatencySamples tracks rolling response-time samples per chunk size, used to compute
 	// a p95 threshold for tail-hedging warmup pieces (see warmupP95/recordWarmupLatency). Simple
 	// fixed-size ring buffer per size, not a full histogram library - only the small, bounded set
@@ -987,12 +995,10 @@ func (t *Torrent) HedgeCircuitOpen() bool {
 
 const (
 	hedgeWatchdogInterval = 250 * time.Millisecond
-	// hedgeCircuitBreakerThreshold is a STARTING placeholder, NOT calibrated from real production
-	// data. The design explicitly calls for deriving this from Task 3's real deployed
-	// p95-per-piece-size latency data before hardcoding a number - that data wasn't available yet
-	// when this was written (2026-07-01, only a handful of fast/healthy-swarm warmup samples
-	// observed so far). MUST be revisited once real slow-swarm (p90=16s+, matching the original
-	// baseline's tail) warmup data is observed in production.
+	// hedgeCircuitBreakerThreshold: reviewed 2026-07-03 against real production data (a Plex
+	// movie scan generating warmup traffic across 12 distinct torrents) - 4 trips, on 4 different
+	// torrents, each independently reaching ~31 hedges/60s during its own warmup burst. Confirmed
+	// reasonable as-is.
 	hedgeCircuitBreakerThreshold = 30
 	hedgeCircuitBreakerWindow    = 60 * time.Second
 	hedgeCircuitBreakerCooldown  = 5 * time.Minute
@@ -1103,11 +1109,11 @@ func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer) {
 		if !t.hedgeCircuitOpen.CompareAndSwap(false, true) {
 			return
 		}
-		t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] Circuit breaker tripped: %d hedges/60s, disabling — VPN tunnel likely saturated, not peer variance", count)
+		t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Circuit breaker tripped: %d hedges/60s, disabling — VPN tunnel likely saturated, not peer variance", t.infoHash.HexString(), count)
 		time.AfterFunc(hedgeCircuitBreakerCooldown, func() {
 			t.hedgeCircuitOpen.Store(false)
 			t.hedgeWindowCount.Store(0)
-			t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] Circuit breaker cooldown elapsed, re-enabling hedging")
+			t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Circuit breaker cooldown elapsed, re-enabling hedging", t.infoHash.HexString())
 		})
 		return
 	}
@@ -1126,7 +1132,7 @@ func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer) {
 	candidate.validReceiveChunks[r]++
 	candidate.peerImpl._request(req)
 	t.hedgeTriggerCount.Add(1)
-	t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] Hedging piece=%d begin=%d to %v (original request exceeded p95)", req.Index, req.Begin, candidate.RemoteAddr)
+	t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Hedging piece=%d begin=%d to %v (original request exceeded p95)", t.infoHash.HexString(), req.Index, req.Begin, candidate.RemoteAddr)
 }
 
 // maxWarmupLatencySamples caps the ring buffer per chunk size - only enough recent samples to

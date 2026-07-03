@@ -1122,7 +1122,28 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 	const (
 		probeWindow      = 3 * time.Second
 		probeFirstPieces = 3
+		churnCooldownDur = 30 * time.Second
 	)
+	host, _, _ := net.SplitHostPort(pc.RemoteAddr.String())
+
+	t.cl.lock()
+	now := time.Now()
+	if until, ok := t.churnCooldown[host]; ok {
+		if now.Before(until) {
+			// Already proved useless for this warmup recently - drop immediately without wasting
+			// another 3s probe window; lacking a piece isn't a ban-worthy offense, just not worth
+			// re-checking every few seconds while the peer likely still doesn't have it.
+			t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] hash=%s dropping peer %v - still in %v cooldown from a prior churn", t.infoHash.HexString(), pc.RemoteAddr, churnCooldownDur)
+			pc.drop()
+			t.cl.unlock()
+			return
+		}
+		// Expired - opportunistic cleanup so churnCooldown doesn't grow unbounded over a
+		// long-lived torrent's many warmup cycles (seeks each set warmupActive true again).
+		delete(t.churnCooldown, host)
+	}
+	t.cl.unlock()
+
 	time.Sleep(probeWindow)
 	t.cl.lock()
 	defer t.cl.unlock()
@@ -1140,7 +1161,13 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 			return // has something relevant to the warmup region, keep the connection
 		}
 	}
-	t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] dropping peer %v - no warmup-region pieces (file range [%d,%d)) after %v probe", pc.RemoteAddr, begin, end, probeWindow)
+	t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] hash=%s dropping peer %v - no warmup-region pieces (file range [%d,%d)) after %v probe", t.infoHash.HexString(), pc.RemoteAddr, begin, end, probeWindow)
+	if host != "" {
+		if t.churnCooldown == nil {
+			t.churnCooldown = make(map[string]time.Time)
+		}
+		t.churnCooldown[host] = time.Now().Add(churnCooldownDur)
+	}
 	pc.drop()
 }
 
