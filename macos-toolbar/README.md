@@ -1,10 +1,10 @@
-# GoStream macOS Toolbar Monitor
+# Tiramisu macOS Toolbar Monitor
 
-A native macOS menu bar application to monitor and manage your GoStream instance directly from your toolbar.
+A native macOS menu bar application to monitor and manage your Tiramisu instance directly from your toolbar.
 
 ## Features
 
-- **Quick Access Dashboard**: Left-click the menu bar icon to open a sleek popover showing your GoStream dashboard.
+- **Quick Access Dashboard**: Left-click the menu bar icon to open a sleek popover showing your Tiramisu dashboard.
 - **Configurable Endpoint**: Right-click (or Ctrl-click) the icon and select **Settings** to configure your server's base URL (e.g., `http://192.168.1.2:9080`).
 - **Dynamic Status Icons**:
   - 🎬 **Normal**: Server is reachable and idle.
@@ -23,7 +23,7 @@ This is a **Universal Binary** packaged as a native macOS App Bundle, running at
 
 ## Installation
 
-1. The application is located in `GoStream.app`.
-2. You can move `GoStream.app` to your `/Applications` folder for easy access.
+1. The application is located in `Tiramisu.app`.
+2. You can move `Tiramisu.app` to your `/Applications` folder for easy access.
 3. Launch the application.
 4. Configure your server URL via **Settings** (Right-click on the toolbar icon).
