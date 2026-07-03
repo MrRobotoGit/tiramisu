@@ -62,8 +62,9 @@ type HealthStatus struct {
 
 	// CacheHitRatePct is global (all active streams combined, not per-torrent) - from
 	// GoStream's /metrics/profiling, reflects how much of what the player asked for was served
-	// from the fast local read-ahead cache vs. required a direct HTTP fetch.
-	CacheHitRatePct float64 `json:"cache_hit_rate_pct"`
+	// from the fast local read-ahead cache vs. required a direct HTTP fetch. nil (JSON null)
+	// when no torrent is active, rather than showing a stale cumulative value.
+	CacheHitRatePct *float64 `json:"cache_hit_rate_pct"`
 }
 
 // ServiceStatus tracks a single service's health.
@@ -284,9 +285,6 @@ func (c *Collector) collect() {
 	// FUSE buffer from /metrics
 	c.fetchFUSEBuffer(&s)
 
-	// Global cache hit rate from /metrics/profiling
-	c.fetchCacheHitRate(&s)
-
 	// Torrents from GoStorm + enrich with Plex sessions and badges
 	torrents := c.fetchTorrents()
 	c.enrichTorrents(torrents)
@@ -302,6 +300,12 @@ func (c *Collector) collect() {
 	}
 	s.TotalTorrents = len(torrents)
 	s.ActiveCount = activeCount
+
+	// Global cache hit rate from /metrics/profiling - only meaningful while something is
+	// actively streaming, otherwise it's a stale cumulative value from the last session.
+	if activeCount > 0 {
+		c.fetchCacheHitRate(&s)
+	}
 	s.TotalPeers = totalPeers
 	s.TotalSeeders = totalSeeders
 	s.DownloadMbps = totalSpeedMB * 8
@@ -414,7 +418,8 @@ func (c *Collector) fetchCacheHitRate(s *HealthStatus) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return
 	}
-	s.CacheHitRatePct = jsonFloat(m, "cache_hit_rate_pct")
+	rate := jsonFloat(m, "cache_hit_rate_pct")
+	s.CacheHitRatePct = &rate
 }
 
 func jsonFloat(m map[string]interface{}, key string) float64 {

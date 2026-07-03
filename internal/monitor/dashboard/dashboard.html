@@ -241,7 +241,7 @@ async function load(){
     document.getElementById('fuseActivePct').textContent=h.fuse_active_pct.toFixed(1)+'%';
     document.getElementById('fuseStalePct').textContent=h.fuse_stale_pct.toFixed(1)+'%';
     document.getElementById('fuseBudget').textContent=h.fuse_budget_mb.toFixed(0)+' MB budget';
-    document.getElementById('cacheHitRatePct').textContent=h.cache_hit_rate_pct.toFixed(1)+'%';
+    document.getElementById('cacheHitRatePct').textContent=(h.cache_hit_rate_pct==null)?'—':h.cache_hit_rate_pct.toFixed(1)+'%';
 
     svcKeys.forEach(k=>svc(k,h[k]));
 
