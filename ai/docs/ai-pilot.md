@@ -1,10 +1,10 @@
-# AI GoStream Pilot Overview [Experimental]
+# AI Tiramisu Pilot Overview [Experimental]
 
 > ### Author's Note – Why This Is Interesting
 >
 > This project explores a non-traditional application of AI: using a Large Language Model (LLM) as a real-time policy engine to dynamically optimize BitTorrent runtime parameters during media streaming.
 >
-> Traditional torrent clients rely on static configuration or deterministic heuristics to manage peer connections, timeouts, and bandwidth behavior. In contrast, GoStream's AI Pilot periodically analyzes live system metrics (CPU load, buffer state, peer count, throughput, contextual usage scenario) and adapts operational parameters in real time.
+> Traditional torrent clients rely on static configuration or deterministic heuristics to manage peer connections, timeouts, and bandwidth behavior. In contrast, Tiramisu's AI Pilot periodically analyzes live system metrics (CPU load, buffer state, peer count, throughput, contextual usage scenario) and adapts operational parameters in real time.
 >
 > What makes this approach interesting is not the use of AI for content generation, but the use of a lightweight LLM as a decision layer inside a constrained edge environment (e.g., Raspberry Pi), controlling a distributed P2P network workload under streaming conditions (including 4K media). The model operates with a reduced context window and low resource footprint, demonstrating that adaptive AI-driven control loops can function on minimal hardware without cloud dependency.
 >
@@ -16,7 +16,7 @@
 
 ---
 
-**AI GoStream Pilot** is an **optional** autonomous optimization engine designed for GoStream. It leverages a LLM — either a tiny quantized model running **locally** on the Raspberry Pi or a **cloud provider** (e.g., OpenRouter) — to dynamically tune BitTorrent parameters with two goals:
+**AI Tiramisu Pilot** is an **optional** autonomous optimization engine designed for Tiramisu. It leverages a LLM — either a tiny quantized model running **locally** on the Raspberry Pi or a **cloud provider** (e.g., OpenRouter) — to dynamically tune BitTorrent parameters with two goals:
 
 1. **4K Stabilization**: Protects the system from CPU spikes and thermal stress by scaling down resources when performance is optimal.
 2. **Discovery Boost**: Actively improves connectivity for low-peer torrents by experimenting with higher connection limits and tracker re-announces to find faster seeders.
@@ -25,8 +25,8 @@
 
 The system is entirely decoupled from the streaming pipeline:
 
-- **Auto-Detection**: GoStream activates the AI Pilot only if `ai_url` is set in `config.json`.
-- **Auto-Disable**: If the server is unreachable (`connection refused`), the AI Pilot disables itself after the first failed attempt and logs a single message. Subsequent cycles are silent. Re-enable by restarting GoStream.
+- **Auto-Detection**: Tiramisu activates the AI Pilot only if `ai_url` is set in `config.json`.
+- **Auto-Disable**: If the server is unreachable (`connection refused`), the AI Pilot disables itself after the first failed attempt and logs a single message. Subsequent cycles are silent. Re-enable by restarting Tiramisu.
 - **Silent Fallback**: Non-connection errors (timeouts, malformed responses) log a `Communication Delay` and maintain current settings without affecting playback.
 - **Zero Impact**: The streaming pipeline never waits for AI responses.
 
@@ -58,7 +58,7 @@ type AIProvider struct {
 
 1. **AI Server** *(local mode only)*: A background service (`ai-server.service`) running `llama.cpp`. Hosts the quantized model, provides a local REST API on port `8085`. Configured with a 512-token context window and `Nice=15`.
 
-2. **AI Tuner**: A background goroutine within GoStream that samples system metrics every **5 seconds** and invokes the LLM on an adaptive schedule:
+2. **AI Tuner**: A background goroutine within Tiramisu that samples system metrics every **5 seconds** and invokes the LLM on an adaptive schedule:
    - **Normal mode**: every **180 seconds** (36 samples × 5s)
    - **Crisis mode**: every **60 seconds** (12 samples × 5s) — activated when the 3-minute average speed drops below **2.0 MB/s**
 
@@ -144,7 +144,7 @@ Each 5-second sample:
 
 ### Discovery Boost
 
-When the swarm is weak (`ConnectedSeeders < 2` AND `speed < fileSize_GB × 15% MB/s`), GoStream automatically triggers a tracker **re-announce** (at most once every 120 seconds) to refresh the peer list.
+When the swarm is weak (`ConnectedSeeders < 2` AND `speed < fileSize_GB × 15% MB/s`), Tiramisu automatically triggers a tracker **re-announce** (at most once every 120 seconds) to refresh the peer list.
 
 ```text
 [AI-Pilot] DiscoveryBoost: weak swarm (seeds=1 speed=0.3MB/s threshold=2.1MB/s) → tracker re-announce triggered
@@ -209,12 +209,12 @@ Cloud responses may wrap JSON in markdown fences (` ```json ... ``` `). `fetchCl
 
 1. **Deploy AI Directory**:
    ```bash
-   rsync -avz GoStream/ai/ pi@192.168.1.2:/home/pi/GoStream/ai/
+   rsync -avz Tiramisu/ai/ pi@192.168.1.2:/home/pi/Tiramisu/ai/
    ```
 
 2. **Run Setup Script**:
    ```bash
-   ssh pi@192.168.1.2 "cd /home/pi/GoStream/ai && chmod +x setup_pi.sh && ./setup_pi.sh"
+   ssh pi@192.168.1.2 "cd /home/pi/Tiramisu/ai && chmod +x setup_pi.sh && ./setup_pi.sh"
    ```
 
 3. **Service Management**:
@@ -241,9 +241,9 @@ No local AI server required. Just add to `config.json`:
 }
 ```
 
-Or via environment variable: `AI_API_KEY=sk-or-... sudo systemctl restart gostream`
+Or via environment variable: `AI_API_KEY=sk-or-... sudo systemctl restart tiramisu`
 
-> **Free-tier considerations**: Cloud free tiers have rate limits (typically 20–200 req/day). At the default 180s cycle, GoStream makes ~480 requests/day during continuous streaming. Consider using a paid tier or limiting streaming hours, or increasing the cycle interval.
+> **Free-tier considerations**: Cloud free tiers have rate limits (typically 20–200 req/day). At the default 180s cycle, Tiramisu makes ~480 requests/day during continuous streaming. Consider using a paid tier or limiting streaming hours, or increasing the cycle interval.
 
 ---
 
@@ -263,10 +263,10 @@ Or via environment variable: `AI_API_KEY=sk-or-... sudo systemctl restart gostre
 
 | File | Purpose |
 |------|---------|
-| `GoStream/ai/ai_tuner.go` | Core tuning logic, provider dispatch, cycle management |
-| `GoStream/ai/ai-server.service` | systemd unit for local llama.cpp server |
-| `GoStream/ai/models/Qwen_Qwen3-0.6B-Q4_K_M.gguf` | Quantized model (local mode) |
-| `GoStream/config.go` | `ai_url`, `ai_provider`, `ai_model`, `ai_api_key` fields |
+| `Tiramisu/ai/ai_tuner.go` | Core tuning logic, provider dispatch, cycle management |
+| `Tiramisu/ai/ai-server.service` | systemd unit for local llama.cpp server |
+| `Tiramisu/ai/models/Qwen_Qwen3-0.6B-Q4_K_M.gguf` | Quantized model (local mode) |
+| `Tiramisu/config.go` | `ai_url`, `ai_provider`, `ai_model`, `ai_api_key` fields |
 | `:9080/metrics` | Exposes `ai_current_limit` |
 
 ---
@@ -317,7 +317,7 @@ Or via environment variable: `AI_API_KEY=sk-or-... sudo systemctl restart gostre
 
 ### 7. Auto-Disable
 ```text
-2026/03/09 20:37:03 [AI-Pilot] LLM not reachable (http://127.0.0.1:8085) — auto-disabled. Restart gostream to re-enable.
+2026/03/09 20:37:03 [AI-Pilot] LLM not reachable (http://127.0.0.1:8085) — auto-disabled. Restart tiramisu to re-enable.
 ```
 
 ### 8. Stability Confirmation (Pulse)

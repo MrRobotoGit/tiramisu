@@ -1,10 +1,10 @@
 #!/bin/bash
-# Script di Setup IA per GoStream (Raspberry Pi 4)
+# Script di Setup IA per Tiramisu (Raspberry Pi 4)
 # Configura llama.cpp e scarica Qwen3-0.6B-Instruct Q4_K_M
 
 set -e
 
-AI_DIR="/home/pi/GoStream/ai"
+AI_DIR="/home/pi/Tiramisu/ai"
 MODELS_DIR="$AI_DIR/models"
 LLAMA_CPP_DIR="$AI_DIR/llama.cpp"
 MODEL_URL="https://huggingface.co/Qwen/Qwen3-0.6B-Q4_K_M-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf"

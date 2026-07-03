@@ -25,7 +25,7 @@ venv/
 .LSOverride
 
 # Compiled binary
-gostream
+tiramisu
 
 .gemini/
 gha-creds-*.json

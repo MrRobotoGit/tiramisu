@@ -10,7 +10,7 @@ import (
 
 	torrenttypes "github.com/anacrolix/torrent/types"
 
-	"gostream/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/settings"
 )
 
 func TestMain(m *testing.M) {
