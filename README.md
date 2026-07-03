@@ -1,9 +1,7 @@
+<h1 align="center">Tiramisu</h1>
+
 <p align="center">
-  <strong><big>Tiramisu</big></strong>
-</p>
-  <p align="center">
-    <strong>The most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex/Jellyfin library. Forget Real-Debrid.</strong>
-  </p>
+  <strong>The most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex/Jellyfin library. Forget Real-Debrid.</strong>
 </p>
 
 ---
