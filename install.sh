@@ -317,6 +317,18 @@ show_banner() {
 # [0a] Auto-install system dependencies via apt
 # ==============================================================================
 install_system_deps() {
+    # Enable user_allow_other in /etc/fuse.conf (required for FUSE allow_other mount option).
+    # Runs unconditionally, independent of whether any apt packages need installing —
+    # a system that already has fuse3 installed (e.g. Raspberry Pi OS, or a re-run of
+    # this installer) would otherwise silently skip this and fail the FUSE mount later.
+    if [ -f /etc/fuse.conf ]; then
+        if ! grep -q "^user_allow_other" /etc/fuse.conf; then
+            sudo sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf
+            grep -q "^user_allow_other" /etc/fuse.conf || echo "user_allow_other" | sudo tee -a /etc/fuse.conf >/dev/null
+            print_ok "FUSE: user_allow_other enabled in /etc/fuse.conf"
+        fi
+    fi
+
     # Only run on Debian/Ubuntu-based systems
     if ! command -v apt-get >/dev/null 2>&1; then
         print_warn "apt-get not found — skipping automatic dependency installation."
@@ -357,15 +369,6 @@ install_system_deps() {
 
     echo ""
     print_ok "System dependencies installed."
-
-    # Enable user_allow_other in /etc/fuse.conf (required for FUSE allow_other mount option)
-    if [ -f /etc/fuse.conf ]; then
-        if ! grep -q "^user_allow_other" /etc/fuse.conf; then
-            sudo sed -i 's/^#\s*user_allow_other/user_allow_other/' /etc/fuse.conf
-            grep -q "^user_allow_other" /etc/fuse.conf || echo "user_allow_other" | sudo tee -a /etc/fuse.conf >/dev/null
-            print_ok "FUSE: user_allow_other enabled in /etc/fuse.conf"
-        fi
-    fi
 }
 
 # ==============================================================================
