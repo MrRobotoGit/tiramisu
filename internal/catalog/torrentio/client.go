@@ -13,8 +13,8 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"gostream/internal/catalog"
-	"gostream/internal/prowlarr"
+	"tiramisu/internal/catalog"
+	"tiramisu/internal/prowlarr"
 )
 
 // Client is a Torrentio API client with rate limiting.

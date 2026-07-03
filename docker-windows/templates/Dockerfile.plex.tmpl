@@ -1,4 +1,4 @@
-# Template Dockerfile: Plex (LinuxServer) + GoStream.
+# Template Dockerfile: Plex (LinuxServer) + Tiramisu.
 # Build context must contain a ./src folder with this repo's contents.
 
 FROM golang:1.24-bookworm AS build
@@ -23,7 +23,7 @@ COPY ./src/. ./
 ARG APP_VERSION=dev
 
 RUN CGO_ENABLED=1 GOOS=linux \
-    go build -pgo=auto -ldflags "-X main.AppVersion=${APP_VERSION}" -o /out/gostream .
+    go build -pgo=auto -ldflags "-X main.AppVersion=${APP_VERSION}" -o /out/tiramisu .
 
 
 FROM lscr.io/linuxserver/plex:latest
@@ -38,7 +38,7 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=build /out/gostream /usr/local/bin/gostream
+COPY --from=build /out/tiramisu /usr/local/bin/tiramisu
 
 # Windows bind mounts can drop execute bits, so bake the custom hook scripts in.
 COPY ./custom-services /custom-services.d

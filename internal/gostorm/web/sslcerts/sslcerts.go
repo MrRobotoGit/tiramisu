@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"gostream/internal/gostorm/log"
-	"gostream/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/log"
+	"tiramisu/internal/gostorm/settings"
 )
 
 func generateSelfSignedCert(ips []string) ([]byte, []byte, error) {

@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"gostream/internal/metadb"
-	"gostream/internal/prowlarr"
+	"tiramisu/internal/metadb"
+	"tiramisu/internal/prowlarr"
 )
 
 // TVSyncer runs the TV sync in pure Go (Fase 3).

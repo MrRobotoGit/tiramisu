@@ -1,14 +1,14 @@
 package api
 
 import (
-	"gostream/internal/gostorm/torrshash"
+	"tiramisu/internal/gostorm/torrshash"
 	"net/http"
 	"strings"
 
-	"gostream/internal/gostorm/log"
-	"gostream/internal/gostorm/torr"
-	"gostream/internal/gostorm/torr/state"
-	"gostream/internal/gostorm/web/api/utils"
+	"tiramisu/internal/gostorm/log"
+	"tiramisu/internal/gostorm/torr"
+	"tiramisu/internal/gostorm/torr/state"
+	"tiramisu/internal/gostorm/web/api/utils"
 
 	"github.com/anacrolix/torrent"
 	"github.com/gin-gonic/gin"

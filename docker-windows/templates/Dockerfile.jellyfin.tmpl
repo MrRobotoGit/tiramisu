@@ -1,4 +1,4 @@
-# Template Dockerfile: Jellyfin (LinuxServer) + GoStream + Python scripts.
+# Template Dockerfile: Jellyfin (LinuxServer) + Tiramisu + Python scripts.
 # Build context must contain a ./src folder with this repo's contents.
 
 FROM golang:1.24-bookworm AS build
@@ -23,7 +23,7 @@ COPY ./src/. ./
 ARG APP_VERSION=dev
 
 RUN CGO_ENABLED=1 GOOS=linux \
-    go build -pgo=auto -ldflags "-X main.AppVersion=${APP_VERSION}" -o /out/gostream .
+    go build -pgo=auto -ldflags "-X main.AppVersion=${APP_VERSION}" -o /out/tiramisu .
 
 
 FROM lscr.io/linuxserver/jellyfin:latest
@@ -46,7 +46,7 @@ RUN python3 -m venv /app/venv \
     && /app/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm -f /tmp/requirements.txt
 
-COPY --from=build /out/gostream /usr/local/bin/gostream
+COPY --from=build /out/tiramisu /usr/local/bin/tiramisu
 COPY ./src/scripts /app/scripts
 
 ENV PATH=/app/venv/bin:$PATH

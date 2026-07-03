@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gostream/internal/prowlarr"
+	"tiramisu/internal/prowlarr"
 )
 
 // MoviesSyncer runs the movie sync in pure Go (Fase 4).

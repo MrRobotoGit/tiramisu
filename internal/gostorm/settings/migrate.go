@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"time"
 
-	"gostream/internal/gostorm/log"
-	"gostream/internal/gostorm/web/api/utils"
+	"tiramisu/internal/gostorm/log"
+	"tiramisu/internal/gostorm/web/api/utils"
 
 	bolt "go.etcd.io/bbolt"
 )

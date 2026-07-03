@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# GoStream Installer
-# GoStream + GoStorm (Unified Engine)
+# Tiramisu Installer
+# Tiramisu + GoStorm (Unified Engine)
 # Target: auto-detected at install time
 # ==============================================================================
 set -e
@@ -143,7 +143,7 @@ step_start() {
 }
 
 # ------------------------------------------------------------------------------
-# draw_logo — full 6-line GOSTREAM ASCII logo (centered, used on splash + summary)
+# draw_logo — full 6-line TIRAMISU ASCII logo (centered, used on splash + summary)
 # ------------------------------------------------------------------------------
 draw_logo() {
     local cols; cols=$(get_cols)
@@ -152,12 +152,12 @@ draw_logo() {
     local sp; printf -v sp '%*s' "$pad" ''
 
     echo ""
-    printf "%s%s██████╗  ██████╗ ███████╗████████╗██████╗ ███████╗ █████╗ ███╗   ███╗%s\n"  "$P2" "$sp" "$PRST"
-    printf "%s%s██╔════╝ ██╔═══██╗██╔════╝╚══██╔══╝██╔══██╗██╔════╝██╔══██╗████╗ ████║%s\n" "$P3" "$sp" "$PRST"
-    printf "%s%s██║  ███╗██║   ██║███████╗   ██║   ██████╔╝█████╗  ███████║██╔████╔██║%s\n"  "$P4" "$sp" "$PRST"
-    printf "%s%s██║   ██║██║   ██║╚════██║   ██║   ██╔══██╗██╔══╝  ██╔══██║██║╚██╔╝██║%s\n" "$P4" "$sp" "$PRST"
-    printf "%s%s╚██████╔╝╚██████╔╝███████║   ██║   ██║  ██║███████╗██║  ██║██║ ╚═╝ ██║%s\n" "$P3" "$sp" "$PRST"
-    printf "%s%s ╚═════╝  ╚═════╝ ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝%s\n" "$P2" "$sp" "$PRST"
+    printf "%s%s████████╗ ██╗ ██████╗   █████╗  ███╗   ███╗ ██╗ ███████╗ ██╗   ██╗ %s\n"  "$P2" "$sp" "$PRST"
+    printf "%s%s╚══██╔══╝ ██║ ██╔══██╗ ██╔══██╗ ████╗ ████║ ██║ ██╔════╝ ██║   ██║ %s\n" "$P3" "$sp" "$PRST"
+    printf "%s%s   ██║    ██║ ██████╔╝ ███████║ ██╔████╔██║ ██║ ███████╗ ██║   ██║ %s\n"  "$P4" "$sp" "$PRST"
+    printf "%s%s   ██║    ██║ ██╔══██╗ ██╔══██║ ██║╚██╔╝██║ ██║ ╚════██║ ██║   ██║ %s\n" "$P4" "$sp" "$PRST"
+    printf "%s%s   ██║    ██║ ██║  ██║ ██║  ██║ ██║ ╚═╝ ██║ ██║ ███████║ ╚██████╔╝ %s\n" "$P3" "$sp" "$PRST"
+    printf "%s%s   ╚═╝    ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚═╝ ╚══════╝  ╚═════╝  %s\n" "$P2" "$sp" "$PRST"
     echo ""
     local payoff="✦  The Torrent Service  ✦"
     local ppad=$(( (cols - ${#payoff}) / 2 ))
@@ -172,7 +172,7 @@ draw_logo() {
 # ------------------------------------------------------------------------------
 draw_header() {
     local cols; cols=$(get_cols)
-    local brand="  G O S T R E A M  ✦  The Torrent Service · Installer"
+    local brand="  T I R A M I S U  ✦  The Torrent Service · Installer"
     local bp=$(( (cols - ${#brand}) / 2 ))
     [ "$bp" -lt 0 ] && bp=0
     printf "\n%*s%s%s%s%s\n" "$bp" "" "$P4$BOLD" "$brand" "$NC$PRST"
@@ -416,17 +416,17 @@ check_prerequisites() {
 collect_paths() {
     wizard_header "[1/3] System Paths" 1 3
 
-    # Default: GoStream subdirectory next to the installer
-    local default_install_dir="${SCRIPT_DIR}/GoStream"
+    # Default: Tiramisu subdirectory next to the installer
+    local default_install_dir="${SCRIPT_DIR}/Tiramisu"
     local default_user
     default_user=$(whoami)
     local default_group
     default_group=$(id -gn "$default_user" 2>/dev/null || echo "$default_user")
 
-    ask "GoStream install directory" "$default_install_dir" INSTALL_DIR
-    ask "Physical MKV source path   (physical_source_path)" "/mnt/gostream-mkv-real" STORAGE_PATH
-    ask "FUSE virtual mount path     (fuse_mount_path)"     "/mnt/gostream-mkv-virtual" FUSE_MOUNT
-    ask "System user that owns GoStream" "$default_user" SYSTEM_USER
+    ask "Tiramisu install directory" "$default_install_dir" INSTALL_DIR
+    ask "Physical MKV source path   (physical_source_path)" "/mnt/tiramisu-mkv-real" STORAGE_PATH
+    ask "FUSE virtual mount path     (fuse_mount_path)"     "/mnt/tiramisu-mkv-virtual" FUSE_MOUNT
+    ask "System user that owns Tiramisu" "$default_user" SYSTEM_USER
     ask "System group" "$default_group" SYSTEM_GROUP
 
     # Resolve to absolute path
@@ -500,7 +500,7 @@ clone_repo() {
 
     # Check if this is already a cloned repo (main.go exists in SCRIPT_DIR)
     if [ -f "${SCRIPT_DIR}/main.go" ]; then
-        # If INSTALL_DIR is inside SCRIPT_DIR (e.g. SCRIPT_DIR=/home/pi, INSTALL_DIR=/home/pi/GoStream),
+        # If INSTALL_DIR is inside SCRIPT_DIR (e.g. SCRIPT_DIR=/home/pi, INSTALL_DIR=/home/pi/Tiramisu),
         # don't rsync the entire parent directory — clone fresh instead
         case "${INSTALL_DIR}" in
             "${SCRIPT_DIR}"/*)
@@ -521,7 +521,7 @@ clone_repo() {
 
     # Clone from GitHub
     local repo_url="https://github.com/MrRobotoGit/gostream.git"
-    local tmp_clone="/tmp/gostream-clone-$$"
+    local tmp_clone="/tmp/tiramisu-clone-$$"
 
     print_info "Cloning source from GitHub..."
     if command -v git >/dev/null 2>&1; then
@@ -613,18 +613,18 @@ install_services() {
     local samba_restart=""
     if [ "$INSTALL_SAMBA" = "true" ]; then
         samba_restart='
-# Allow gostream to stabilize, then restart Samba so it sees the FUSE mount
+# Allow tiramisu to stabilize, then restart Samba so it sees the FUSE mount
 ExecStartPost=/bin/sleep 2
 ExecStartPost=/usr/bin/sudo /bin/systemctl restart smbd'
     else
         samba_restart='
-# Allow gostream to stabilize
+# Allow tiramisu to stabilize
 ExecStartPost=/bin/sleep 2'
     fi
 
-    sudo tee /etc/systemd/system/gostream.service > /dev/null <<SERVICE_EOF
+    sudo tee /etc/systemd/system/tiramisu.service > /dev/null <<SERVICE_EOF
 [Unit]
-Description=GoStream + GoStorm (Unified Streaming Engine)
+Description=Tiramisu + GoStorm (Unified Streaming Engine)
 After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target
 Wants=network-online.target
 StartLimitIntervalSec=0
@@ -648,16 +648,16 @@ ExecStartPre=-/usr/bin/${FUSERMOUNT_CMD} -uz ${FUSE_MOUNT}
 ExecStartPre=/bin/mkdir -p ${FUSE_MOUNT}
 
 # V1.4.6: Main binary — using --path . for true portability (STATE stays in WorkingDirectory)
-ExecStart=${INSTALL_DIR}/gostream --path .${samba_restart}
+ExecStart=${INSTALL_DIR}/tiramisu --path .${samba_restart}
 
 Restart=always
 RestartSec=10
 LimitNOFILE=65536
 LimitNPROC=4096
 
-# Centralized logging inside the GoStream directory (relative to WorkingDirectory)
-StandardOutput=append:logs/gostream.log
-StandardError=append:logs/gostream.log
+# Centralized logging inside the Tiramisu directory (relative to WorkingDirectory)
+StandardOutput=append:logs/tiramisu.log
+StandardError=append:logs/tiramisu.log
 
 # Cleanly unmount FUSE on stop
 ExecStop=/usr/bin/${FUSERMOUNT_CMD} -uz ${FUSE_MOUNT}
@@ -666,7 +666,7 @@ ExecStop=/usr/bin/${FUSERMOUNT_CMD} -uz ${FUSE_MOUNT}
 WantedBy=multi-user.target
 SERVICE_EOF
 
-    print_ok "Wrote /etc/systemd/system/gostream.service"
+    print_ok "Wrote /etc/systemd/system/tiramisu.service"
 }
 
 # ------------------------------------------------------------------------------
@@ -677,13 +677,13 @@ enable_services() {
     print_info "Reloading systemd and enabling services..."
 
     sudo systemctl daemon-reload
-    sudo systemctl enable gostream
+    sudo systemctl enable tiramisu
 
-    print_ok "Services enabled: gostream"
+    print_ok "Services enabled: tiramisu"
 }
 
 # ------------------------------------------------------------------------------
-# 5g. Sudoers entry so gostream.service can restart smbd without a password
+# 5g. Sudoers entry so tiramisu.service can restart smbd without a password
 # ------------------------------------------------------------------------------
 GO_BIN=""
 GO_ARCH=""
@@ -751,7 +751,7 @@ ensure_go() {
 }
 
 # ------------------------------------------------------------------------------
-# 5f3. Compile the GoStream binary from source
+# 5f3. Compile the Tiramisu binary from source
 # ------------------------------------------------------------------------------
 ensure_swap() {
     # Go compilation can OOM on Pi with little/no swap — ensure at least 1GB
@@ -775,7 +775,7 @@ compile_binary() {
     ensure_swap
 
     local src_dir="${INSTALL_DIR}"
-    local out_bin="${INSTALL_DIR}/gostream"
+    local out_bin="${INSTALL_DIR}/tiramisu"
 
     # Verify we have Go source files in the expected location
     if [ ! -f "${src_dir}/main.go" ]; then
@@ -855,7 +855,7 @@ compile_binary() {
     local _build_exit=0
     GOTOOLCHAIN=local GOARCH="${GO_ARCH}" CGO_ENABLED=1 GOTMPDIR="${go_tmp}" \
         "$GO_BIN" build ${pgo_flag} -p 2 ${ldflags:+-ldflags "${ldflags}"} -o "${out_bin}" . \
-        2>/tmp/gostream_build.log || _build_exit=$?
+        2>/tmp/tiramisu_build.log || _build_exit=$?
 
     # Kill spinner and clear the spinner line
     kill "$_spinner_pid" 2>/dev/null; wait "$_spinner_pid" 2>/dev/null || true
@@ -863,11 +863,11 @@ compile_binary() {
 
     if [ "$_build_exit" -ne 0 ]; then
         print_err "Build failed. Log:"
-        cat /tmp/gostream_build.log >&2
-        rm -f /tmp/gostream_build.log
+        cat /tmp/tiramisu_build.log >&2
+        rm -f /tmp/tiramisu_build.log
         exit "$_build_exit"
     fi
-    rm -f /tmp/gostream_build.log
+    rm -f /tmp/tiramisu_build.log
     rm -rf "${go_tmp}"
 
     chmod +x "${out_bin}"
@@ -885,10 +885,10 @@ verify_install() {
     local url="http://127.0.0.1:9080/metrics"
     if command -v curl >/dev/null 2>&1; then
         if curl -sf --max-time 5 "$url" >/dev/null 2>&1; then
-            print_ok "GoStream metrics endpoint is reachable at ${url}"
+            print_ok "Tiramisu metrics endpoint is reachable at ${url}"
         else
-            print_warn "GoStream is not running yet (metrics endpoint not reachable)."
-            print_warn "This is expected — start with: sudo systemctl start gostream"
+            print_warn "Tiramisu is not running yet (metrics endpoint not reachable)."
+            print_warn "This is expected — start with: sudo systemctl start tiramisu"
         fi
     else
         print_warn "curl not available — skipping endpoint verification."
@@ -910,7 +910,7 @@ verify_install() {
 }
 
 # ------------------------------------------------------------------------------
-# Sudoers entry so gostream.service can restart smbd without a password
+# Sudoers entry so tiramisu.service can restart smbd without a password
 # ------------------------------------------------------------------------------
 setup_sudoers() {
     step_start "Configure sudoers"
@@ -921,7 +921,7 @@ setup_sudoers() {
 
     print_info "Configuring sudoers for smbd restart..."
 
-    local sudoers_file="/etc/sudoers.d/gostream-smbd"
+    local sudoers_file="/etc/sudoers.d/tiramisu-smbd"
     local sudoers_line="${SYSTEM_USER} ALL=(ALL) NOPASSWD: /bin/systemctl restart smbd"
 
     # Check whether the entry already exists anywhere in sudoers
@@ -959,7 +959,7 @@ show_summary() {
 
     printf "  %sFiles written:%s\n" "$PTEAL" "$PRST"
     printf "    %s%s/config.json%s\n" "$BOLD" "$INSTALL_DIR" "$NC"
-    printf "    %s/etc/systemd/system/gostream.service%s\n" "$BOLD" "$NC"
+    printf "    %s/etc/systemd/system/tiramisu.service%s\n" "$BOLD" "$NC"
     echo ""
 
     if [ "$INSTALL_SAMBA" = "true" ]; then
@@ -974,9 +974,9 @@ show_summary() {
     print_hr "$PDIM"
     echo ""
 
-    printf "  %s 1 %s  sudo systemctl start gostream\n" "$PBOX$BOLD" "$PRST$NC"
-    printf "  %s 2 %s  sudo systemctl status gostream\n" "$PBOX$BOLD" "$PRST$NC"
-    printf "  %s 3 %s  tail -f %s/logs/gostream.log\n" "$PBOX$BOLD" "$PRST$NC" "$INSTALL_DIR"
+    printf "  %s 1 %s  sudo systemctl start tiramisu\n" "$PBOX$BOLD" "$PRST$NC"
+    printf "  %s 2 %s  sudo systemctl status tiramisu\n" "$PBOX$BOLD" "$PRST$NC"
+    printf "  %s 3 %s  tail -f %s/logs/tiramisu.log\n" "$PBOX$BOLD" "$PRST$NC" "$INSTALL_DIR"
     echo ""
 
     # Card background — dark gray (256-color only, transparent on 8-color)

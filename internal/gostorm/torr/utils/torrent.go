@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gostream/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/settings"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"

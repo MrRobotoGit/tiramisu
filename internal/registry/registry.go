@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"gostream/internal/metadb"
+	"tiramisu/internal/metadb"
 )
 
 var logger = log.New(os.Stdout, "[Registry] ", log.LstdFlags)

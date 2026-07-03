@@ -16,12 +16,12 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"gostream/internal/catalog"
-	"gostream/internal/catalog/mediaserver"
-	"gostream/internal/catalog/tmdb"
-	"gostream/internal/catalog/torrentio"
-	"gostream/internal/prowlarr"
-	"gostream/internal/syncer/quality"
+	"tiramisu/internal/catalog"
+	"tiramisu/internal/catalog/mediaserver"
+	"tiramisu/internal/catalog/tmdb"
+	"tiramisu/internal/catalog/torrentio"
+	"tiramisu/internal/prowlarr"
+	"tiramisu/internal/syncer/quality"
 )
 
 // WatchlistGoEngine is the pure Go implementation of watchlist sync.

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gostream/internal/monitor/collector"
+	"tiramisu/internal/monitor/collector"
 )
 
 //go:embed dashboard.html
@@ -74,7 +74,7 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	allowed := map[string]string{
-		"gostream":       "gostream.log",
+		"tiramisu":       "tiramisu.log",
 		"movies-sync":    "movies-sync.log",
 		"tv-sync":        "tv-sync.log",
 		"watchlist-sync": "watchlist-sync.log",
@@ -82,7 +82,7 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 
 	file := r.URL.Query().Get("file")
 	if file == "" {
-		file = "gostream"
+		file = "tiramisu"
 	}
 	logName, ok := allowed[file]
 	if !ok {
@@ -148,7 +148,7 @@ func (h *Handler) KillStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// PlexThumb proxies a Plex thumbnail through gostream.
+// PlexThumb proxies a Plex thumbnail through tiramisu.
 // This avoids exposing the Plex token in client-side HTML/JS and decouples
 // the browser from the configured plex_url (which may not be directly reachable
 // from the client network).

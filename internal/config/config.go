@@ -2,7 +2,7 @@ package config
 
 import (
 	"encoding/json"
-	"gostream/internal/prowlarr"
+	"tiramisu/internal/prowlarr"
 	"log"
 	"os"
 	"path/filepath"
@@ -197,7 +197,7 @@ type Config struct {
 
 	// --- State DB (V1.7.1) ---
 	EnableStateDB bool   `json:"enable_state_db"` // default: true
-	StateDBPath   string `json:"state_db_path"`   // default: <STATE>/gostream.db
+	StateDBPath   string `json:"state_db_path"`   // default: <STATE>/tiramisu.db
 }
 
 // Save persists the current configuration to config.json
@@ -392,10 +392,10 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("AI_API_KEY"); v != "" {
 		c.AI_API_KEY = v
 	}
-	if v := firstEnv("GOSTREAM_PLEX_URL", "PLEX_URL"); v != "" {
+	if v := firstEnv("TIRAMISU_PLEX_URL", "GOSTREAM_PLEX_URL", "PLEX_URL"); v != "" {
 		c.Plex.URL = v
 	}
-	if v := firstEnv("GOSTREAM_PLEX_TOKEN", "PLEX_TOKEN"); v != "" {
+	if v := firstEnv("TIRAMISU_PLEX_TOKEN", "GOSTREAM_PLEX_TOKEN", "PLEX_TOKEN"); v != "" {
 		c.Plex.Token = v
 	}
 	if v := os.Getenv("MKV_PROXY_LOG_LEVEL"); v != "" {

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"gostream/internal/gostorm/native"
+	"tiramisu/internal/gostorm/native"
 )
 
 // PreloadStrategy defines the preload size based on torrent download speed

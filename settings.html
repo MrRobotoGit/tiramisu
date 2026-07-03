@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GoStream Dashboard - Control Panel</title>
+    <title>Tiramisu Dashboard - Control Panel</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
@@ -524,7 +524,7 @@
 <body>
     <div class="container">
         <header>
-            <h1>GoStream <span>Control</span></h1>
+            <h1>Tiramisu <span>Control</span></h1>
             <div class="header-controls"><a href="https://github.com/sponsors/MrRobotoGit" target="_blank"
                     rel="noopener" title="Star on GitHub"><img
                         src="https://img.shields.io/static/v1?label=DONATE&message=%E2%9D%A4&logo=GitHub"
@@ -533,7 +533,7 @@
                     title="Star on GitHub"><img
                         src="https://img.shields.io/github/stars/MrRobotoGit/gostream?style=social" alt="Star on GitHub"
                         style="vertical-align:middle;"></a>
-                <button class="btn-restart" id="btn-restart" onclick="restartGoStream()">Restart</button>
+                <button class="btn-restart" id="btn-restart" onclick="restartTiramisu()">Restart</button>
                 <div class="mode-toggle">
                     <button class="active" onclick="setMode('simple')">Simple</button>
                     <button onclick="setMode('advanced')">Advanced</button>
@@ -543,10 +543,10 @@
         </header>
 
         <div class="grid">
-            <!-- ENGINE SETTINGS (GoStream config.json) -->
+            <!-- ENGINE SETTINGS (Tiramisu config.json) -->
             <div class="card">
-                <h2>⚙️ GoStream FUSE <span class="live-badge running">Running</span></h2>
-                <form id="gostream-form">
+                <h2>⚙️ Tiramisu FUSE <span class="live-badge running">Running</span></h2>
+                <form id="tiramisu-form">
                     <div class="form-section">
                         <div class="form-section-title">Core & Streaming</div>
                         <div class="form-grid">
@@ -773,7 +773,7 @@
                     </div>
 
                     <button type="submit" class="btn btn-primary">Save Config</button>
-                    <div id="gostream-status" class="status-msg"></div>
+                    <div id="tiramisu-status" class="status-msg"></div>
                 </form>
             </div>
 
@@ -1045,9 +1045,9 @@
 
     <script>
         // --- Restart ---
-        async function restartGoStream() {
+        async function restartTiramisu() {
             const btn = document.getElementById('btn-restart');
-            if (!confirm('Restart gostream? The service will be unavailable for a few seconds.')) return;
+            if (!confirm('Restart tiramisu? The service will be unavailable for a few seconds.')) return;
             btn.disabled = true;
             btn.textContent = 'Restarting…';
             try {
@@ -1199,11 +1199,11 @@
             const el = document.querySelector(`[name="${name}"]`);
             if (el) el.addEventListener('input', updateReadaheadCoupling);
         });
-        // Only run coupling after both GoStream and GoStorm have loaded real values
+        // Only run coupling after both Tiramisu and GoStorm have loaded real values
         let _couplingLoaded = 0;
         function markCouplingLoaded() { if (++_couplingLoaded >= 2) updateReadaheadCoupling(); }
 
-        // --- GoStream Logic ---
+        // --- Tiramisu Logic ---
         let originalEngine = {};
         const ENGINE_ROOT_KEYS = [
             'physical_source_path', 'fuse_mount_path',
@@ -1222,7 +1222,7 @@
             try {
                 const res = await fetch('/api/config');
                 originalEngine = await res.json();
-                const form = document.getElementById('gostream-form');
+                const form = document.getElementById('tiramisu-form');
                 ENGINE_ROOT_KEYS.forEach(k => {
                     const input = document.querySelector(`[name="${k}"]`);
                     if (input) {
@@ -1263,9 +1263,9 @@
             } catch (e) { console.error("Engine load error", e); }
         }
 
-        document.getElementById('gostream-form').onsubmit = async (e) => {
+        document.getElementById('tiramisu-form').onsubmit = async (e) => {
             e.preventDefault();
-            const status = document.getElementById('gostream-status');
+            const status = document.getElementById('tiramisu-status');
             const formData = new FormData(e.target);
             const data = { ...originalEngine };
 
@@ -1329,7 +1329,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
-            status.textContent = res.ok ? "✓ Config saved — restart gostream to apply" : "✗ Save error";
+            status.textContent = res.ok ? "✓ Config saved — restart tiramisu to apply" : "✗ Save error";
             status.className = "status-msg " + (res.ok ? "status-success" : "status-error");
             setTimeout(() => { status.className = "status-msg"; }, 5000);
         };

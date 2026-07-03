@@ -61,7 +61,7 @@ type HealthStatus struct {
 	FUSEStaleMB   float64 `json:"fuse_stale_mb"`
 
 	// CacheHitRatePct is global (all active streams combined, not per-torrent) - from
-	// GoStream's /metrics/profiling, reflects how much of what the player asked for was served
+	// Tiramisu's /metrics/profiling, reflects how much of what the player asked for was served
 	// from the fast local read-ahead cache vs. required a direct HTTP fetch. nil (JSON null)
 	// when no torrent is active, rather than showing a stale cumulative value.
 	CacheHitRatePct *float64 `json:"cache_hit_rate_pct"`
@@ -214,13 +214,13 @@ var (
 	reShieldCorr    = regexp.MustCompile(`\[AdaptiveShield\] (?:Single|Persistent) corruption`)
 )
 
-// parseShieldEvents reads the last portion of gostream.log and extracts
+// parseShieldEvents reads the last portion of tiramisu.log and extracts
 // AdaptiveShield events within the last shieldEventWindow.
 func (c *Collector) parseShieldEvents() []ShieldEvent {
 	if c.logsDir == "" {
 		return nil
 	}
-	data, err := os.ReadFile(filepath.Join(c.logsDir, "gostream.log"))
+	data, err := os.ReadFile(filepath.Join(c.logsDir, "tiramisu.log"))
 	if err != nil {
 		return nil
 	}

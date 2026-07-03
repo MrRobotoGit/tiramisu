@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"gostream/internal/gostorm/log"
+	"tiramisu/internal/gostorm/log"
 )
 
 func CheckImgUrl(link string) bool {

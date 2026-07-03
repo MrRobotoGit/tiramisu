@@ -1,4 +1,4 @@
-# Single-container stack: media server (Plex/Jellyfin) + GoStream sidecar processes.
+# Single-container stack: media server (Plex/Jellyfin) + Tiramisu sidecar processes.
 # NOTE: This file is a template. Docker Compose will interpolate ${VARS} using the .env
 # file written by the Windows BAT (no hardcoded host paths).
 
@@ -13,7 +13,7 @@ services:
     container_name: ${CONTAINER_NAME}
     restart: unless-stopped
 
-    # FUSE support (GoStream virtual filesystem)
+    # FUSE support (Tiramisu virtual filesystem)
     devices:
       - /dev/fuse:/dev/fuse
     cap_add:
@@ -27,17 +27,17 @@ services:
       - "${PLEX_HOST_PORT}:32400"
       - "${JELLYFIN_HOST_PORT}:8096"
 
-      # GoStream / GoStorm
+      # Tiramisu / GoStorm
       - "${GOSTORM_HOST_PORT}:8090"
-      - "${METRICS_HOST_PORT}:${GOSTREAM_METRICS_PORT}"
+      - "${METRICS_HOST_PORT}:${TIRAMISU_METRICS_PORT}"
 
     environment:
       - MKV_PROXY_CONFIG_PATH=/config.json
-      - GOSTREAM_ROOT_PATH=/gostream/state
-      - GOSTREAM_SOURCE_PATH=/gostream/source
-      - GOSTREAM_MOUNT_PATH=/gostream/mount
-      - GOSTREAM_STATE_DIR=/gostream/state/STATE
-      - GOSTREAM_LOG_DIR=/gostream/state/logs
+      - TIRAMISU_ROOT_PATH=/tiramisu/state
+      - TIRAMISU_SOURCE_PATH=/tiramisu/source
+      - TIRAMISU_MOUNT_PATH=/tiramisu/mount
+      - TIRAMISU_STATE_DIR=/tiramisu/state/STATE
+      - TIRAMISU_LOG_DIR=/tiramisu/state/logs
       # LinuxServer base image vars — BAT may provide overrides or defaults
       - PUID=${PUID}
       - PGID=${PGID}
@@ -46,16 +46,16 @@ services:
       - PLEX_CLAIM=${PLEX_CLAIM}
 
     volumes:
-      # GoStream source + state
-      - "${BASE_DIR}/gostream-mkv-real:/gostream/source"
-      - "${BASE_DIR}/gostream:/gostream/state"
+      # Tiramisu source + state
+      - "${BASE_DIR}/tiramisu-mkv-real:/tiramisu/source"
+      - "${BASE_DIR}/tiramisu:/tiramisu/state"
 
       # LinuxServer (Plex/Jellyfin) state
       - "${BASE_DIR}/${CONTAINER_NAME}/config:/config"
       - "${BASE_DIR}/${CONTAINER_NAME}/transcode:/transcode"
 
-      # GoStream config.json (BAT writes/patches this into the real-source tree)
-      - "${BASE_DIR}/gostream-mkv-real/config/config.json:/config.json:ro"
+      # Tiramisu config.json (BAT writes/patches this into the real-source tree)
+      - "${BASE_DIR}/tiramisu-mkv-real/config/config.json:/config.json:ro"
 
       # s6-overlay hooks (mounted read-only; deterministic custom startup)
       - "${STACK_DIR}/custom-services:/custom-services.d:ro"

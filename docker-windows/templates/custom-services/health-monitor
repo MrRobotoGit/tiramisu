@@ -1,8 +1,8 @@
 #!/usr/bin/with-contenv bash
 set -euo pipefail
 
-if [ "${GOSTREAM_HEALTH_MONITOR_ENABLED:-1}" != "1" ]; then
-  echo "GOSTREAM_HEALTH_MONITOR_ENABLED != 1; skipping health-monitor" >&2
+if [ "${TIRAMISU_HEALTH_MONITOR_ENABLED:-1}" != "1" ]; then
+  echo "TIRAMISU_HEALTH_MONITOR_ENABLED != 1; skipping health-monitor" >&2
   exit 0
 fi
 

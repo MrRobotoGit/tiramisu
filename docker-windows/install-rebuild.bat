@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-REM GoStream Windows stack generator (Dockge-friendly)
+REM Tiramisu Windows stack generator (Dockge-friendly)
 REM - Generates an auto-contained stack folder with compose.yaml, .env, Dockerfile, custom-* and src\ build context
 REM - Optionally deploys via docker compose (default)
 REM - Never deletes user data directories
@@ -37,7 +37,7 @@ set "PLEX_IMPORT_SRC="
 set "CONFIG_CREATED=0"
 set "CONFIG_CHANGED=0"
 set "CONFIG_BACKUP="
-set "GOSTREAM_METRICS_PORT="
+set "TIRAMISU_METRICS_PORT="
 
 call :main %*
 set "RC=%ERRORLEVEL%"
@@ -207,7 +207,7 @@ if /i not "%FLAVOR%"=="plex" if /i not "%FLAVOR%"=="jellyfin" (
 
 if "%USE_MYDEPLOY%"=="1" (
   set "MYDEPLOY_STACKS_ROOT=!MYDEPLOY_DEFAULT_STACKS!"
-  set "MYDEPLOY_STACK_DIR=!MYDEPLOY_STACKS_ROOT!\gostream-plex"
+  set "MYDEPLOY_STACK_DIR=!MYDEPLOY_STACKS_ROOT!\tiramisu-plex"
   call :materialize_mydeploy_stack "!EXISTING_COMPOSE_FILE!" "!MYDEPLOY_STACK_DIR!" "!REPO_ROOT!" MYDEPLOY_COMPOSE_FILE
   if errorlevel 1 exit /b !ERRORLEVEL!
 
@@ -254,9 +254,9 @@ if "%USE_EXISTING_FILES%"=="1" (
 
 REM Compute container name + stack dir
 if /i "%FLAVOR%"=="plex" (
-  set "CONTAINER_NAME=gostream-plex"
+  set "CONTAINER_NAME=tiramisu-plex"
 ) else (
-  set "CONTAINER_NAME=gostream-jellyfin"
+  set "CONTAINER_NAME=tiramisu-jellyfin"
 )
 set "STACK_DIR_WIN=%STACKS_ROOT_WIN%\%CONTAINER_NAME%"
 
@@ -271,16 +271,16 @@ call :ensure_dir "%BASE_DIR_WIN%"
 call :ensure_dir "%STACKS_ROOT_WIN%"
 call :ensure_dir "%STACK_DIR_WIN%"
 
-call :ensure_dir "%BASE_DIR_WIN%\gostream"
-call :ensure_dir "%BASE_DIR_WIN%\gostream-mkv-real\backup"
-call :ensure_dir "%BASE_DIR_WIN%\gostream-mkv-real\config"
-call :ensure_dir "%BASE_DIR_WIN%\gostream-mkv-real\movies"
-call :ensure_dir "%BASE_DIR_WIN%\gostream-mkv-real\tv"
+call :ensure_dir "%BASE_DIR_WIN%\tiramisu"
+call :ensure_dir "%BASE_DIR_WIN%\tiramisu-mkv-real\backup"
+call :ensure_dir "%BASE_DIR_WIN%\tiramisu-mkv-real\config"
+call :ensure_dir "%BASE_DIR_WIN%\tiramisu-mkv-real\movies"
+call :ensure_dir "%BASE_DIR_WIN%\tiramisu-mkv-real\tv"
 call :ensure_dir "%BASE_DIR_WIN%\%CONTAINER_NAME%\config"
 call :ensure_dir "%BASE_DIR_WIN%\%CONTAINER_NAME%\transcode"
 
 REM Ensure config.json exists
-set "CONFIG_PATH=%BASE_DIR_WIN%\gostream-mkv-real\config\config.json"
+set "CONFIG_PATH=%BASE_DIR_WIN%\tiramisu-mkv-real\config\config.json"
 if not exist "%CONFIG_PATH%" (
   copy /y "%REPO_ROOT%\config.json.example" "%CONFIG_PATH%" >nul
   if errorlevel 1 (
@@ -291,18 +291,18 @@ if not exist "%CONFIG_PATH%" (
 )
 
 REM Patch config.json + read internal metrics port
-call :patch_config "%CONFIG_PATH%" "%BASE_DIR_WIN%\gostream-mkv-real\backup" "%FLAVOR%"
+call :patch_config "%CONFIG_PATH%" "%BASE_DIR_WIN%\tiramisu-mkv-real\backup" "%FLAVOR%"
 if errorlevel 1 (
   echo ERROR: Failed to patch/read config.json at %CONFIG_PATH%
   exit /b !ERRORLEVEL!
 )
-if "%GOSTREAM_METRICS_PORT%"=="" (
+if "%TIRAMISU_METRICS_PORT%"=="" (
   echo ERROR: Failed to determine internal metrics port from config.json
   exit /b 1
 )
 
 REM Pick free host ports (Docker containers only)
-call :select_ports "%GOSTREAM_METRICS_PORT%"
+call :select_ports "%TIRAMISU_METRICS_PORT%"
 if errorlevel 1 (
   echo ERROR: Failed selecting host ports from Docker container bindings.
   exit /b !ERRORLEVEL!
@@ -334,7 +334,7 @@ if /i "%FLAVOR%"=="plex" (
     set "PLEX_IMPORT=0"
   )
   if "%PLEX_IMPORT%"=="1" (
-    call :do_plex_import "%PLEX_IMPORT_SRC%" "%BASE_DIR_WIN%\gostream-plex\config\Library\Application Support\Plex Media Server"
+    call :do_plex_import "%PLEX_IMPORT_SRC%" "%BASE_DIR_WIN%\tiramisu-plex\config\Library\Application Support\Plex Media Server"
     if errorlevel 1 exit /b !ERRORLEVEL!
   )
 )
@@ -369,8 +369,8 @@ echo Ports (host -> container):
 echo   PLEX_HOST_PORT     : %PLEX_HOST_PORT% ^> 32400
 echo   JELLYFIN_HOST_PORT : %JELLYFIN_HOST_PORT% ^> 8096
 echo   GOSTORM_HOST_PORT  : %GOSTORM_HOST_PORT% ^> 8090
-echo   METRICS_HOST_PORT  : %METRICS_HOST_PORT% ^> %GOSTREAM_METRICS_PORT%
-echo   Internal metrics   : %GOSTREAM_METRICS_PORT%
+echo   METRICS_HOST_PORT  : %METRICS_HOST_PORT% ^> %TIRAMISU_METRICS_PORT%
+echo   Internal metrics   : %TIRAMISU_METRICS_PORT%
 echo.
 echo config.json:
 if "%CONFIG_CREATED%"=="1" (echo   - created from config.json.example) else (echo   - existed)
@@ -522,9 +522,9 @@ if "%_srcans%"=="1" (
 if "%_srcans%"=="2" (
   set "USE_EXISTING_FILES=1"
   if /i "%FLAVOR%"=="plex" (
-    set "_defaultName=gostream-plex"
+    set "_defaultName=tiramisu-plex"
   ) else (
-    set "_defaultName=gostream-jellyfin"
+    set "_defaultName=tiramisu-jellyfin"
   )
   set "_defaultCompose=%STACKS_ROOT_WIN%\%_defaultName%\compose.yaml"
   set "_defaultDockerfile=%STACKS_ROOT_WIN%\%_defaultName%\Dockerfile"
@@ -604,10 +604,10 @@ set "__CFG=%_cfg%"
 set "__BAK=%_backupDir%"
 set "__FLAVOR=%_flavor%"
 
-for /f "usebackq tokens=1* delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $cfg=$env:__CFG; $backupDir=$env:__BAK; $flavor=$env:__FLAVOR; if(-not (Test-Path -LiteralPath $cfg)) { throw 'config.json missing' }; $raw=Get-Content -Raw -LiteralPath $cfg; $obj=$raw | ConvertFrom-Json; $changed=$false; if($null -eq $obj.physical_source_path -or $obj.physical_source_path -ne '/gostream/source'){ $obj.physical_source_path='/gostream/source'; $changed=$true }; if($null -eq $obj.fuse_mount_path -or $obj.fuse_mount_path -ne '/gostream/mount'){ $obj.fuse_mount_path='/gostream/mount'; $changed=$true }; if($null -eq $obj.metrics_port -or [int]$obj.metrics_port -eq 8096){ $obj.metrics_port=9080; $changed=$true }; $bak=''; if($changed -and $flavor -eq 'jellyfin'){ New-Item -ItemType Directory -Force -Path $backupDir | Out-Null; $ts=Get-Date -Format 'yyyyMMdd-HHmmss'; $bak=Join-Path $backupDir ('config.json.'+$ts+'.bak'); Copy-Item -LiteralPath $cfg -Destination $bak -Force }; if($changed){ ($obj | ConvertTo-Json -Depth 64) | Set-Content -LiteralPath $cfg -Encoding UTF8 }; Write-Output ('CONFIG_CHANGED=' + ($(if($changed){'1'}else{'0'}))); Write-Output ('CONFIG_BACKUP=' + $bak); Write-Output ('GOSTREAM_METRICS_PORT=' + ([int]$obj.metrics_port)) }"`) do (
+for /f "usebackq tokens=1* delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $cfg=$env:__CFG; $backupDir=$env:__BAK; $flavor=$env:__FLAVOR; if(-not (Test-Path -LiteralPath $cfg)) { throw 'config.json missing' }; $raw=Get-Content -Raw -LiteralPath $cfg; $obj=$raw | ConvertFrom-Json; $changed=$false; if($null -eq $obj.physical_source_path -or $obj.physical_source_path -ne '/tiramisu/source'){ $obj.physical_source_path='/tiramisu/source'; $changed=$true }; if($null -eq $obj.fuse_mount_path -or $obj.fuse_mount_path -ne '/tiramisu/mount'){ $obj.fuse_mount_path='/tiramisu/mount'; $changed=$true }; if($null -eq $obj.metrics_port -or [int]$obj.metrics_port -eq 8096){ $obj.metrics_port=9080; $changed=$true }; $bak=''; if($changed -and $flavor -eq 'jellyfin'){ New-Item -ItemType Directory -Force -Path $backupDir | Out-Null; $ts=Get-Date -Format 'yyyyMMdd-HHmmss'; $bak=Join-Path $backupDir ('config.json.'+$ts+'.bak'); Copy-Item -LiteralPath $cfg -Destination $bak -Force }; if($changed){ ($obj | ConvertTo-Json -Depth 64) | Set-Content -LiteralPath $cfg -Encoding UTF8 }; Write-Output ('CONFIG_CHANGED=' + ($(if($changed){'1'}else{'0'}))); Write-Output ('CONFIG_BACKUP=' + $bak); Write-Output ('TIRAMISU_METRICS_PORT=' + ([int]$obj.metrics_port)) }"`) do (
   if /i "%%A"=="CONFIG_CHANGED" set "CONFIG_CHANGED=%%B"
   if /i "%%A"=="CONFIG_BACKUP" set "CONFIG_BACKUP=%%B"
-  if /i "%%A"=="GOSTREAM_METRICS_PORT" set "GOSTREAM_METRICS_PORT=%%B"
+  if /i "%%A"=="TIRAMISU_METRICS_PORT" set "TIRAMISU_METRICS_PORT=%%B"
 )
 
 set "__CFG="
@@ -782,7 +782,7 @@ echo [stack] Writing .env
   echo GOSTORM_HOST_PORT=%GOSTORM_HOST_PORT%
   echo METRICS_HOST_PORT=%METRICS_HOST_PORT%
   echo.
-  echo GOSTREAM_METRICS_PORT=%GOSTREAM_METRICS_PORT%
+  echo TIRAMISU_METRICS_PORT=%TIRAMISU_METRICS_PORT%
   echo.
   echo PUID=%PUID%
   echo PGID=%PGID%
@@ -816,7 +816,7 @@ for /f "delims=" %%I in ('dir /a /b "%_dest%" 2^>nul') do (
 
 if "%_hasFiles%"=="1" (
   for /f "usebackq delims=" %%T in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format yyyyMMdd-HHmmss"`) do set "_ts=%%T"
-  set "_backupBase=%BASE_DIR_WIN%\gostream-plex\config-backup\Plex Media Server.%_ts%"
+  set "_backupBase=%BASE_DIR_WIN%\tiramisu-plex\config-backup\Plex Media Server.%_ts%"
   call :ensure_dir "%_backupBase%"
   echo Backing up existing destination to:
   echo   %_backupBase%

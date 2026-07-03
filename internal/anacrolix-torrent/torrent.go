@@ -1031,7 +1031,7 @@ func (t *Torrent) hedgeWatchdog() {
 // hedgeWarmupPieceWindow bounds hedging to the first N pieces of the file being warmed - wider
 // than Task 3's 3-piece connection probe (which only needs a cheap "does this peer look useful"
 // signal), since hedging should cover the actual in-flight warmup fetch range. The fork doesn't
-// have direct access to warmup.FileSize (a GoStream-level constant, unreachable across the
+// have direct access to warmup.FileSize (a Tiramisu-level constant, unreachable across the
 // module boundary), so this is a generous fixed approximation - 32 pieces safely covers a 64MB
 // warmup window for typical piece sizes (2-8MB) without requiring exact byte-range knowledge.
 const hedgeWarmupPieceWindow = 32

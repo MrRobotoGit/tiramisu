@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gostream/internal/gostorm/settings"
-	"gostream/internal/gostorm/torr"
-	"gostream/internal/gostorm/torr/state"
+	"tiramisu/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/torr"
+	"tiramisu/internal/gostorm/torr/state"
 )
 
 var aiDisabled atomic.Bool
@@ -443,7 +443,7 @@ func runTuningCycle(provider AIProvider) {
 	if err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			if !aiDisabled.Swap(true) {
-				log.Printf("[AI-Pilot] LLM not reachable (%s) — auto-disabled. Restart gostream to re-enable.", provider.URL)
+				log.Printf("[AI-Pilot] LLM not reachable (%s) — auto-disabled. Restart tiramisu to re-enable.", provider.URL)
 			}
 			return
 		}
@@ -605,7 +605,7 @@ func fetchCloudJSON[T any](provider AIProvider, prompt string) (*T, error) {
 	req.Header.Set("Authorization", "Bearer "+provider.APIKey)
 	// OpenRouter headers
 	req.Header.Set("HTTP-Referer", "https://gostream.workers.dev")
-	req.Header.Set("X-Title", "GoStream AI Tuner")
+	req.Header.Set("X-Title", "Tiramisu AI Tuner")
 
 	resp, err := cloudAIClient.Do(req)
 	if err != nil {

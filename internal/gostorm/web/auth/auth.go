@@ -10,8 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"gostream/internal/gostorm/log"
-	"gostream/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/log"
+	"tiramisu/internal/gostorm/settings"
 )
 
 func SetupAuth(engine *gin.Engine) {

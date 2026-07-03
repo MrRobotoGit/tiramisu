@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"gostream/internal/prowlarr"
+	"tiramisu/internal/prowlarr"
 )
 
 // WatchlistSyncer runs the watchlist sync in pure Go (Fase 2).

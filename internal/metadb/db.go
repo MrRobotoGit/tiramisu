@@ -14,7 +14,7 @@ type Logger interface {
 	Printf(format string, v ...interface{})
 }
 
-// DB wraps a SQLite database connection for gostream state persistence.
+// DB wraps a SQLite database connection for tiramisu state persistence.
 type DB struct {
 	db     *sql.DB
 	path   string

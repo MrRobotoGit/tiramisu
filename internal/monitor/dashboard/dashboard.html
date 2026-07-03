@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GoStream Health Monitor</title>
+<title>Tiramisu Health Monitor</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
@@ -22,7 +22,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
 <!-- Header -->
 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
   <div class="flex items-center gap-3">
-    <h1 class="text-lg sm:text-xl md:text-2xl font-bold">GoStream Health Monitor</h1>
+    <h1 class="text-lg sm:text-xl md:text-2xl font-bold">Tiramisu Health Monitor</h1>
     <a id="updateBadge" href="https://github.com/MrRobotoGit/gostream/releases/latest" target="_blank" rel="noopener" class="hidden no-underline whitespace-nowrap"></a>
   </div>
   <div class="flex items-center gap-3">
@@ -129,7 +129,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
     <div class="flex items-center justify-between mb-3">
       <span class="text-xs text-slate-400 uppercase tracking-wider">Logs</span>
       <select id="logFile" onchange="loadLogs()" class="bg-slate-700 text-xs text-slate-300 rounded px-2 py-1 border border-slate-600">
-        <option value="gostream">gostream</option>
+        <option value="tiramisu">tiramisu</option>
         <option value="movies-sync">movies-sync</option>
         <option value="tv-sync">tv-sync</option>
         <option value="watchlist-sync">watchlist-sync</option>
@@ -144,7 +144,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
 <!-- Footer -->
 <div class="flex items-center justify-between text-xs text-slate-600 mt-4">
   <span>Uptime: <span id="uptime">--</span></span>
-  <span>GoStream Unified Engine</span>
+  <span>Tiramisu Unified Engine</span>
 </div>
 
 </div>
@@ -354,7 +354,7 @@ async function killStream(hash){
 }
 
 function doRestart(){
-  if(!confirm('Restart GoStream? Active streams will be interrupted.'))return;
+  if(!confirm('Restart Tiramisu? Active streams will be interrupted.'))return;
   fetch('/api/restart',{method:'POST'}).then(()=>{
     document.body.innerHTML='<div class="flex items-center justify-center h-screen text-2xl text-slate-400">Restarting... please wait</div>';
     setTimeout(()=>location.reload(),8000);

@@ -9,33 +9,33 @@ import (
 	"flag"
 	"fmt"
 	"github.com/cespare/xxhash/v2"
-	"gostream/internal/ai"
-	"gostream/internal/cache"
-	"gostream/internal/config"
-	server "gostream/internal/gostorm"
-	"gostream/internal/gostorm/native"
-	"gostream/internal/gostorm/settings"
-	"gostream/internal/gostorm/torr"
-	torrstor "gostream/internal/gostorm/torr/storage/torrstor"
-	tsutils "gostream/internal/gostorm/utils"
-	"gostream/internal/gostorm/web"
-	"gostream/internal/lockmgr"
-	"gostream/internal/metadb"
-	"gostream/internal/natpmp"
-	"gostream/internal/monitor/collector"
-	"gostream/internal/monitor/dashboard"
-	"gostream/internal/opentracker"
-	"gostream/internal/preload"
-	"gostream/internal/prowlarr"
-	"gostream/internal/ratelimit"
-	"gostream/internal/registry"
-	"gostream/internal/telemetry"
-	syncercache "gostream/internal/syncer/cache"
-	"gostream/internal/syncer/engines"
-	"gostream/internal/syncer/scheduler"
-	"gostream/internal/updater"
-	"gostream/internal/vfs"
-	"gostream/internal/warmup"
+	"tiramisu/internal/ai"
+	"tiramisu/internal/cache"
+	"tiramisu/internal/config"
+	server "tiramisu/internal/gostorm"
+	"tiramisu/internal/gostorm/native"
+	"tiramisu/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/torr"
+	torrstor "tiramisu/internal/gostorm/torr/storage/torrstor"
+	tsutils "tiramisu/internal/gostorm/utils"
+	"tiramisu/internal/gostorm/web"
+	"tiramisu/internal/lockmgr"
+	"tiramisu/internal/metadb"
+	"tiramisu/internal/natpmp"
+	"tiramisu/internal/monitor/collector"
+	"tiramisu/internal/monitor/dashboard"
+	"tiramisu/internal/opentracker"
+	"tiramisu/internal/preload"
+	"tiramisu/internal/prowlarr"
+	"tiramisu/internal/ratelimit"
+	"tiramisu/internal/registry"
+	"tiramisu/internal/telemetry"
+	syncercache "tiramisu/internal/syncer/cache"
+	"tiramisu/internal/syncer/engines"
+	"tiramisu/internal/syncer/scheduler"
+	"tiramisu/internal/updater"
+	"tiramisu/internal/vfs"
+	"tiramisu/internal/warmup"
 	"io"
 	"log"
 	"net"
@@ -222,7 +222,7 @@ func resolveTargetFile(url string, targetSize int64, physicalPath string) (strin
 				// Strip full hash
 				cleanPhys = strings.ReplaceAll(cleanPhys, "_"+strings.ToLower(hashStr), "")
 				cleanPhys = strings.ReplaceAll(cleanPhys, "."+strings.ToLower(hashStr), "")
-				// Strip short hash (first 8 chars) - common in GoStream naming
+				// Strip short hash (first 8 chars) - common in Tiramisu naming
 				shortHash := strings.ToLower(hashStr[:8])
 				cleanPhys = strings.ReplaceAll(cleanPhys, "_"+shortHash, "")
 				cleanPhys = strings.ReplaceAll(cleanPhys, "."+shortHash, "")
@@ -3122,7 +3122,7 @@ func main() {
 		mount = gc().FuseMountPath
 	}
 	if source == "" || mount == "" {
-		fmt.Println("Usage: gostream [--path /path/to/db] <source_path> <mount_path>")
+		fmt.Println("Usage: tiramisu [--path /path/to/db] <source_path> <mount_path>")
 		fmt.Println("  Or set physical_source_path and fuse_mount_path in config.json")
 		os.Exit(1)
 	}
@@ -3262,7 +3262,7 @@ func main() {
 	if gc().EnableStateDB {
 		dbPath := gc().StateDBPath
 		if dbPath == "" {
-			dbPath = filepath.Join(GetStateDir(), "gostream.db")
+			dbPath = filepath.Join(GetStateDir(), "tiramisu.db")
 		}
 		var err error
 		stateDB, err = metadb.New(dbPath, logger)
@@ -3699,7 +3699,7 @@ func main() {
 			ExplicitDataCacheControl: true,            // PREVENTS kernel freezes during invalidation
 			SyncRead:                 false,           // ENABLED ASYNC READS for 4K performance
 			// NFS Export: Stable filesystem identification
-			FsName: "gostream",
+			FsName: "tiramisu",
 		},
 		UID: gc().UID, // Default file ownership: pi user (1000)
 		GID: gc().GID, // Default file ownership: pi group (1000)

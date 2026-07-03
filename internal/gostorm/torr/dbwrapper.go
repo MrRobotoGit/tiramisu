@@ -3,9 +3,9 @@ package torr
 import (
 	"encoding/json"
 
-	"gostream/internal/gostorm/settings"
-	"gostream/internal/gostorm/torr/state"
-	"gostream/internal/gostorm/torr/utils"
+	"tiramisu/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/torr/state"
+	"tiramisu/internal/gostorm/torr/utils"
 
 	"github.com/anacrolix/torrent/metainfo"
 )

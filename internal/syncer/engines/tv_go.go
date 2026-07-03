@@ -17,11 +17,11 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"gostream/internal/catalog"
-	"gostream/internal/catalog/tmdb"
-	"gostream/internal/catalog/torrentio"
-	"gostream/internal/metadb"
-	"gostream/internal/prowlarr"
+	"tiramisu/internal/catalog"
+	"tiramisu/internal/catalog/tmdb"
+	"tiramisu/internal/catalog/torrentio"
+	"tiramisu/internal/metadb"
+	"tiramisu/internal/prowlarr"
 )
 
 // TVGoEngine is the pure Go implementation of TV sync.
