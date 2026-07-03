@@ -23,7 +23,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
   <div class="flex items-center gap-3">
     <h1 class="text-lg sm:text-xl md:text-2xl font-bold">GoStream Health Monitor</h1>
-    <a id="updateBadge" href="https://github.com/MrRobotoGit/gostream/releases/latest" target="_blank" rel="noopener" class="hidden bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium py-1 px-2.5 rounded-full transition no-underline whitespace-nowrap"></a>
+    <a id="updateBadge" href="https://github.com/MrRobotoGit/gostream/releases/latest" target="_blank" rel="noopener" class="hidden no-underline whitespace-nowrap"></a>
   </div>
   <div class="flex items-center gap-3">
     <span class="text-xs text-slate-400">Last update: <span id="lastUpdate">--:--:--</span></span>
@@ -370,8 +370,17 @@ async function checkUpdate(){
     if(d.update_available&&d.latest_version){
       const b=document.getElementById('updateBadge');
       const isDev=!d.version||d.version==='dev';
-      b.textContent=isDev?'Stable: '+d.latest_version:'Update '+d.latest_version;
-      b.title=isDev?'Dev build — latest stable: '+d.latest_version:'Current: '+d.version+' → '+d.latest_version;
+      if(isDev){
+        // Dev build: can't confirm the running code actually matches the latest tag, so show
+        // plain text (not the amber "update available" badge, which would be a false alarm).
+        b.className='hidden no-underline whitespace-nowrap text-xs text-slate-500';
+        b.textContent='Stable: '+d.latest_version;
+        b.title='Dev build — latest stable: '+d.latest_version;
+      }else{
+        b.className='hidden bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-medium py-0.5 px-2 rounded-full transition no-underline whitespace-nowrap';
+        b.textContent='Update '+d.latest_version;
+        b.title='Current: '+d.version+' → '+d.latest_version;
+      }
       b.classList.remove('hidden');
     }
   }catch(_){}
