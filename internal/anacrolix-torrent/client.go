@@ -1122,7 +1122,7 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 	const (
 		probeWindow      = 3 * time.Second
 		probeFirstPieces = 3
-		churnCooldownDur = 30 * time.Second
+		churnCooldownDur = 10 * time.Second
 	)
 	host, _, _ := net.SplitHostPort(pc.RemoteAddr.String())
 
