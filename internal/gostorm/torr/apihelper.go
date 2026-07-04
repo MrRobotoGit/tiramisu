@@ -327,6 +327,11 @@ func ListTorrent() []*Torrent {
 	return ret
 }
 
+// V304BannedCount returns the number of peer IPs banned since process start.
+func V304BannedCount() int {
+	return torrent.V304BannedCount()
+}
+
 func ListActiveTorrent() []*Torrent {
 	btsMu.RLock()
 	localBts := bts

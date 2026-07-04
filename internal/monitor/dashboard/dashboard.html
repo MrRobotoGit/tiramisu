@@ -46,6 +46,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
       <span class="flex items-center gap-1.5 text-[10px] text-slate-500">
         <span style="width:16px;height:7px;border-radius:3px;background:rgba(234,179,8,0.50);display:inline-block;flex-shrink:0"></span>Strict Mode
       </span>
+      <span class="text-[10px] text-slate-500">Banned Peers: <span id="v304BannedPeers">0</span></span>
     </div>
   </div>
   <div class="glass rounded-xl p-4">
@@ -240,6 +241,7 @@ async function load(){
     document.getElementById('fuseStalePct').textContent=h.fuse_stale_pct.toFixed(1)+'%';
     document.getElementById('fuseBudget').textContent=h.fuse_budget_mb.toFixed(0)+' MB budget';
     document.getElementById('cacheHitRatePct').textContent=(h.cache_hit_rate_pct==null)?'—':h.cache_hit_rate_pct.toFixed(1)+'%';
+    document.getElementById('v304BannedPeers').textContent=h.v304_banned_peers ?? 0;
 
     svcKeys.forEach(k=>svc(k,h[k]));
 

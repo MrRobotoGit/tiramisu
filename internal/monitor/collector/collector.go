@@ -65,6 +65,10 @@ type HealthStatus struct {
 	// from the fast local read-ahead cache vs. required a direct HTTP fetch. nil (JSON null)
 	// when no torrent is active, rather than showing a stale cumulative value.
 	CacheHitRatePct *float64 `json:"cache_hit_rate_pct"`
+
+	// V304BannedPeers is a process-lifetime count of peer IPs banned for sending
+	// corrupt pieces (V304 session ban). Never resets until the service restarts.
+	V304BannedPeers int `json:"v304_banned_peers"`
 }
 
 // ServiceStatus tracks a single service's health.
@@ -396,6 +400,8 @@ func (c *Collector) fetchFUSEBuffer(s *HealthStatus) {
 	active, _ := m["read_ahead_active_bytes"].(float64)
 	stale := jsonFloat(m, "read_ahead_stale_bytes")
 	budget := jsonFloat(m, "read_ahead_budget")
+
+	s.V304BannedPeers = int(jsonFloat(m, "v304_banned_peers"))
 
 	if budget > 0 {
 		s.FUSEBudgetMB = budget / 1024 / 1024

@@ -7,3 +7,13 @@ import "sync"
 // Populated when a peer accumulates >= badPeerThreshold corrupt pieces.
 // Persists for the entire process lifetime — no way to reconnect after eviction.
 var v304BannedIPs sync.Map
+
+// V304BannedCount returns the number of IPs banned since process start.
+func V304BannedCount() int {
+	n := 0
+	v304BannedIPs.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
+	return n
+}
