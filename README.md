@@ -257,9 +257,9 @@ Two read modes, automatically managed:
 | Mode | Behavior | When |
 |------|----------|------|
 | **Responsive** *(default)* | Data served before SHA1 verification, instant start | Normal operation |
-| **Strict** | Only SHA1-verified pieces served | Automatically activated for 60 s on corruption detection |
+| **Strict** | Only SHA1-verified pieces served | Automatically activated on corruption detection |
 
-When a corrupt piece is detected (`MarkNotComplete()`), the Adaptive Shield switches to Strict Mode for 60 seconds and then automatically restores Responsive. The mode transition uses an atomic boolean, so there is no mutex contention on the hot read path.
+When a corrupt piece is detected (`MarkNotComplete()`), the Adaptive Shield switches to Strict Mode until a clean streak is confirmed, then automatically restores Responsive. The required clean streak escalates each time Strict re-triggers within the same playback session: 30 s the first time, 60 s the second, 90 s the third, 120 s from the fourth on. This escalation resets only on a genuine stop (`media.stop`), not on Plex-internal seeks or buffering probes, so a swarm that keeps sending bad pieces gets progressively more scrutiny instead of resetting to the same short timer every time. The mode transition uses an atomic boolean, so there is no mutex contention on the hot read path.
 
 ### 5. Seek-Master Architecture
 
