@@ -7,6 +7,8 @@
    ╚═╝    ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚═╝ ╚══════╝  ╚═════╝
 ```
 
+<h1 align="center" style="font-size:1rem; font-weight:600; border:none; margin:0;">Tiramisu</h1>
+
 **The most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex/Jellyfin library. Forget Real-Debrid.**
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MrRobotoGit/tiramisu)
@@ -71,6 +73,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - [Build from Source](#build-from-source)
 - [Docker](#docker)
 - [API Reference](#api-quick-reference)
+- [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
 - [Donate](#support)
 - [License](#license)
@@ -956,6 +959,34 @@ curl -s http://127.0.0.1:9080/metrics | jq
 curl -s http://127.0.0.1:9080/metrics | \
   jq '{version, uptime, read_ahead_active_bytes, config_source}'
 ```
+
+---
+
+## FAQ
+
+**What is Tiramisu?**
+Tiramisu is a self-hosted BitTorrent engine with a built-in FUSE virtual filesystem. It presents torrents as normal, seekable `.mkv` files to Plex or Jellyfin, and streams the bytes live from the swarm as they are read, with no download step and no temp files.
+
+**How is this different from Real-Debrid or other debrid services?**
+Debrid services are third-party paid subscriptions that cache torrents on someone else's servers and hand you an HTTP link. Tiramisu runs entirely on hardware you own, no subscription, no third-party server, no monthly fee. You get the same "instant playback" experience, but the BitTorrent swarm itself is the source, not a rented cache.
+
+**Does Tiramisu store or download the files?**
+No persistent copy of the media is kept. Byte ranges pass through RAM (and an optional bounded SSD cache limited to the first/last few MB of each file, purely to speed up the first seconds of playback) and are never written to disk as complete files. There is no storage quota to plan around because there is nothing to store.
+
+**Do I need to seed or keep uploading?**
+Tiramisu participates in the swarm like any BitTorrent client while a file is open, but retention drops automatically once playback stops, and no long-term seeding is required or expected.
+
+**What hardware do I need?**
+A Raspberry Pi 4 (4 GB RAM) is the tested minimum baseline, and it comfortably handles 4K HDR streaming. Any `linux/amd64` or `linux/arm64` machine works: NAS, VPS, mini-PC, or any always-on Linux box.
+
+**Does it work with Sonarr, Radarr, or other *Arr tools?**
+Not directly. Tiramisu has its own built-in sync engine that talks to TMDB, Prowlarr, and Torrentio to discover and add titles automatically, so it does not need the *Arr suite to function. There is currently no compatibility layer for those tools specifically.
+
+**Is this legal?**
+Tiramisu is a general-purpose BitTorrent engine and streaming filesystem. It does not host, index, or distribute any copyrighted content itself; what you do with it is your responsibility, same as with any BitTorrent client.
+
+**Is my data private?**
+Everything runs on your own hardware. No account, no third-party API key is required for the core engine to work (TMDB, Prowlarr, and Plex/Jellyfin integrations are optional and use your own credentials).
 
 ---
 
