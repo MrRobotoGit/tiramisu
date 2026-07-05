@@ -26,6 +26,8 @@ The result: **4K HDR Dolby Vision**, fully seekable, starting in 0.1 seconds, ev
 
 This is not a torrent client with a media server bolted on. The FUSE filesystem *is* the product, custom-built from scratch around the constraints of torrent streaming: non-sequential byte-range requests, multi-gigabyte files that must be seekable at any position, and a Plex/Jellyfin scanner that probes every file in a library of hundreds of titles on startup.
 
+![Tiramisu: click play on a torrent, streaming starts in about a second](docs/screenshots/tiramisu-demo.gif)
+
 ### What's included
 
 - **Custom FUSE virtual filesystem**: every `.mkv` is a live torrent presented to the media server as a real file. No temp files, no persistent downloads, torrent data never touches the disk.
