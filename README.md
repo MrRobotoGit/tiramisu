@@ -7,7 +7,7 @@
    ╚═╝    ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚═╝ ╚══════╝  ╚═════╝
 ```
 
-<h1 align="center" style="font-size:1rem; font-weight:600; border:none; margin:0;">Tiramisu</h1>
+<h1 align="center"><sub><sub>Tiramisu</sub></sub></h1>
 
 **The most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex/Jellyfin library. Forget Real-Debrid.**
 
