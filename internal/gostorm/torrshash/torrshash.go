@@ -51,12 +51,3 @@ func (h *TorrsHash) Trackers() []string {
 	}
 	return list
 }
-
-func (h *TorrsHash) String() string {
-	str := "Hash: " + h.Hash
-
-	for _, f := range h.Fields {
-		str += " " + f.Tag.String() + ": " + f.Value
-	}
-	return str
-}

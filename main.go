@@ -2327,29 +2327,6 @@ func (c *ReadAheadCache) MaxCachedOffset(p string) int64 {
 	return maxEnd
 
 }
-// InvalidatePath clears all read-ahead chunks for a path.
-// Called after a pump jump (seek → discontinuous offset) so that
-// MaxCachedOffset does not return a stale-high value that would
-// cause startNativePump to skip content the player still needs.
-func (c *ReadAheadCache) InvalidatePath(p string) {
-	s := c.getShard(p)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	prefix := p + ":"
-	for key := range s.buffers {
-		if strings.HasPrefix(key, prefix) {
-			delete(s.buffers, key)
-		}
-	}
-	newOrder := make([]string, 0, len(s.order))
-	for _, k := range s.order {
-		if !strings.HasPrefix(k, prefix) {
-			newOrder = append(newOrder, k)
-		}
-	}
-	s.order = newOrder
-}
-
 // chunkKey returns a compound key using the per-path adaptive chunk size.
 func (c *ReadAheadCache) chunkKey(path string, offset int64) string {
 	return fmt.Sprintf("%s:%d", path, offset/c.ChunkSize(path))

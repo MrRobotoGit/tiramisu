@@ -2,7 +2,6 @@ package infohash
 
 import (
 	"crypto/sha1"
-	"crypto/sha256"
 	"encoding"
 	"encoding/hex"
 	"fmt"
@@ -80,9 +79,3 @@ func HashBytes(b []byte) (ret T) {
 	return
 }
 
-func HashBytesV2(b []byte) (ret T) {
-	hasher := sha256.New()
-	hasher.Write(b)
-	copy(ret[:], hasher.Sum(nil))
-	return
-}

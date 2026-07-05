@@ -54,10 +54,4 @@ func Scan(haystack LengthIter, needle Extent, callback Callback) bool {
 	return true
 }
 
-func LocaterFromLengthIter(li LengthIter) Locater {
-	return func(e Extent, c Callback) bool {
-		return Scan(li, e, c)
-	}
-}
-
 type Locater func(Extent, Callback) bool

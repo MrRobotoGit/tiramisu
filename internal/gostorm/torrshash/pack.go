@@ -16,10 +16,6 @@ func Pack(hash *TorrsHash) (string, error) {
 	return Encode62(data), nil
 }
 
-func PackBytes(hash *TorrsHash) ([]byte, error) {
-	return pack(hash)
-}
-
 func Unpack(token string) (*TorrsHash, error) {
 	data := Decode62(strings.TrimSpace(token))
 	return UnpackBytes(data)

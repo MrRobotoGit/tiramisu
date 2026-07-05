@@ -322,25 +322,6 @@ func (cm *CleanupManager) runCleanup() {
 
 // --- Deleted Hashes Management ---
 
-func (cm *CleanupManager) AddDeletedHash(hash string) {
-	cm.deletedMu.Lock()
-	cm.deletedHashes[hash] = time.Now()
-	cm.deletedMu.Unlock()
-}
-
-func (cm *CleanupManager) RemoveDeletedHash(hash string) {
-	cm.deletedMu.Lock()
-	delete(cm.deletedHashes, hash)
-	cm.deletedMu.Unlock()
-}
-
-func (cm *CleanupManager) IsDeleted(hash string) bool {
-	cm.deletedMu.RLock()
-	_, exists := cm.deletedHashes[hash]
-	cm.deletedMu.RUnlock()
-	return exists
-}
-
 // --- File Offset Management ---
 
 // UpdateOffset records the last read position for a file
@@ -352,16 +333,6 @@ func (cm *CleanupManager) UpdateOffset(path string, offset int64, length int) {
 		timestamp: time.Now(),
 	}
 	cm.offsetsMu.Unlock()
-}
-
-func (cm *CleanupManager) GetOffset(path string) (int64, int, bool) {
-	cm.offsetsMu.RLock()
-	entry, exists := cm.fileOffsets[path]
-	cm.offsetsMu.RUnlock()
-	if !exists {
-		return 0, 0, false
-	}
-	return entry.offset, entry.length, true
 }
 
 // --- File Activity Management ---
@@ -378,31 +349,6 @@ func (cm *CleanupManager) GetLastActivity(path string) (time.Time, bool) {
 	t, exists := cm.fileActivities[path]
 	cm.activitiesMu.RUnlock()
 	return t, exists
-}
-
-func (cm *CleanupManager) GetIdleDuration(path string) time.Duration {
-	cm.activitiesMu.RLock()
-	last, exists := cm.fileActivities[path]
-	cm.activitiesMu.RUnlock()
-	if !exists {
-		return 0
-	}
-	return time.Since(last)
-}
-
-// Clear removes all data (for testing)
-func (cm *CleanupManager) Clear() {
-	cm.deletedMu.Lock()
-	cm.deletedHashes = make(map[string]time.Time)
-	cm.deletedMu.Unlock()
-
-	cm.offsetsMu.Lock()
-	cm.fileOffsets = make(map[string]*offsetEntry)
-	cm.offsetsMu.Unlock()
-
-	cm.activitiesMu.Lock()
-	cm.fileActivities = make(map[string]time.Time)
-	cm.activitiesMu.Unlock()
 }
 
 // Statistics

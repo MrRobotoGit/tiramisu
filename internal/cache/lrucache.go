@@ -47,22 +47,12 @@ func (c *LRUCache) Put(key string, value *vfs.Metadata, size int64) {
 	c.getShard(key).Put(key, value, size)
 }
 
-func (c *LRUCache) Delete(key string) {
-	c.getShard(key).Delete(key)
-}
-
 func (c *LRUCache) Len() int {
 	total := 0
 	for _, s := range c.shards {
 		total += s.Len()
 	}
 	return total
-}
-
-func (c *LRUCache) Clear() {
-	for _, s := range c.shards {
-		s.Clear()
-	}
 }
 
 func (c *LRUCache) CleanupExpired() int {
@@ -246,22 +236,6 @@ func (c *simpleLRUCache) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.order.Len()
-}
-
-func (c *simpleLRUCache) Delete(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if elem, exists := c.items[key]; exists {
-		c.removeElement(elem)
-	}
-}
-
-func (c *simpleLRUCache) Clear() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.items = make(map[string]*list.Element)
-	c.order.Init()
-	c.currentSize = 0
 }
 
 // cacheEntry represents a single cache entry with metadata and TTL

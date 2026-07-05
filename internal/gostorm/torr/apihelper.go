@@ -2,7 +2,6 @@ package torr
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -32,27 +31,6 @@ func InitApiHelper(bt *BTServer) {
 	btsMu.Lock()
 	defer btsMu.Unlock()
 	bts = bt
-}
-
-func LoadTorrent(tor *Torrent) *Torrent {
-	if tor.TorrentSpec == nil {
-		return nil
-	}
-	btsMu.RLock()
-	localBts := bts
-	btsMu.RUnlock()
-
-	tr, err := NewTorrent(tor.TorrentSpec, localBts)
-	if err != nil {
-		return nil
-	}
-	if !tr.WaitInfo() {
-		return nil
-	}
-	tr.Title = tor.Title
-	tr.Poster = tor.Poster
-	tr.Data = tor.Data
-	return tr
 }
 
 func AddTorrent(spec *torrent.TorrentSpec, title, poster string, data string, category string) (*Torrent, error) {
@@ -440,12 +418,6 @@ func Shutdown() {
 	sets.CloseDB()
 	log.TLogln("Received shutdown. Quit")
 	os.Exit(0)
-}
-
-func WriteStatus(w io.Writer) {
-	btsMu.RLock()
-	defer btsMu.RUnlock()
-	bts.client.WriteStatus(w)
 }
 
 func Preload(torr *Torrent, index int) {

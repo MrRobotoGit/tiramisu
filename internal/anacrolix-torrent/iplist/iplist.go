@@ -183,3 +183,4 @@ func NewFromReader(f io.Reader) (ret *IPList, err error) {
 	ret = New(ranges)
 	return
 }
+

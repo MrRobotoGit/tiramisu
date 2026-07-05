@@ -206,43 +206,6 @@ func parseStream(raw json.RawMessage) (Stream, error) {
 	return stream, nil
 }
 
-// FetchWithProwlarr fetches streams from Prowlarr first, falling back to Torrentio.
-func FetchWithProwlarr(ctx context.Context, prowlarrClient *prowlarr.Client, torrentioClient *Client, imdbID, contentType, title string) ([]prowlarr.Stream, error) {
-	// Primary: Prowlarr
-	if prowlarrClient != nil {
-		streams := prowlarrClient.FetchTorrents(imdbID, contentType, title)
-		if len(streams) > 0 {
-			return streams, nil
-		}
-	}
-
-	// Fallback: Torrentio
-	var streams []prowlarr.Stream
-	var torrentioStreams []Stream
-	var err error
-
-	if contentType == "movie" {
-		torrentioStreams, err = torrentioClient.FetchMovieStreams(ctx, imdbID)
-	} else {
-		// For TV, we need season/episode — return empty since caller must provide them
-		return nil, fmt.Errorf("TV fallback requires season/episode info")
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	for _, s := range torrentioStreams {
-		streams = append(streams, prowlarr.Stream{
-			Name:     s.Name,
-			Title:    s.Title,
-			InfoHash: s.InfoHash,
-		})
-	}
-
-	return streams, nil
-}
-
 // ToProwlarrStream converts a parsed Torrentio Stream to prowlarr.Stream format.
 func (s Stream) ToProwlarrStream() prowlarr.Stream {
 	return prowlarr.Stream{

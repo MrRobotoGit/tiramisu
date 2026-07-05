@@ -23,23 +23,6 @@ const (
 	TagSize            // binary
 )
 
-func (tag Tag) String() string {
-	switch tag {
-	case TagTitle:
-		return "Title"
-	case TagPoster:
-		return "Poster"
-	case TagTracker:
-		return "Tracker"
-	case TagCategory:
-		return "Category"
-	case TagSize:
-		return "Size"
-	default:
-		return "Unknown"
-	}
-}
-
 func NewField(tag Tag, value string) *Field {
 	return &Field{Tag: tag, Value: value}
 }

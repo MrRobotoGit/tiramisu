@@ -5,12 +5,7 @@ package iplist
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
-	"net"
-	"os"
-
-	"github.com/edsrzf/mmap-go"
 )
 
 // The packed format is an 8 byte integer of the number of ranges. Then 20
@@ -67,79 +62,4 @@ func (ipl *IPList) WritePacked(w io.Writer) (err error) {
 	return
 }
 
-func NewFromPacked(b []byte) PackedIPList {
-	ret := PackedIPList(b)
-	minLen := packedRangesOffset + ret.len()*packedRangeLen
-	if len(b) < minLen {
-		panic(fmt.Sprintf("packed len %d < %d", len(b), minLen))
-	}
-	return ret
-}
-
 type PackedIPList []byte
-
-var _ Ranger = PackedIPList{}
-
-func (pil PackedIPList) len() int {
-	return int(binary.LittleEndian.Uint64(pil[:8]))
-}
-
-func (pil PackedIPList) NumRanges() int {
-	return pil.len()
-}
-
-func (pil PackedIPList) getFirst(i int) net.IP {
-	off := packedRangesOffset + packedRangeLen*i
-	return net.IP(pil[off : off+16])
-}
-
-func (pil PackedIPList) getRange(i int) (ret Range) {
-	rOff := packedRangesOffset + packedRangeLen*i
-	last := pil[rOff+16 : rOff+32]
-	descOff := int(binary.LittleEndian.Uint64(pil[rOff+32:]))
-	descLen := int(binary.LittleEndian.Uint32(pil[rOff+40:]))
-	descOff += packedRangesOffset + packedRangeLen*pil.len()
-	ret = Range{
-		pil.getFirst(i),
-		net.IP(last),
-		string(pil[descOff : descOff+descLen]),
-	}
-	return
-}
-
-func (pil PackedIPList) Lookup(ip net.IP) (r Range, ok bool) {
-	ip16 := ip.To16()
-	if ip16 == nil {
-		panic(ip)
-	}
-	return lookup(pil.getFirst, pil.getRange, pil.len(), ip16)
-}
-
-type closerFunc func() error
-
-func (me closerFunc) Close() error {
-	return me()
-}
-
-func MMapPackedFile(filename string) (
-	ret interface {
-		Ranger
-		io.Closer
-	},
-	err error,
-) {
-	f, err := os.Open(filename)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	mm, err := mmap.Map(f, mmap.RDONLY, 0)
-	if err != nil {
-		return
-	}
-	ret = struct {
-		Ranger
-		io.Closer
-	}{NewFromPacked(mm), closerFunc(mm.Unmap)}
-	return
-}

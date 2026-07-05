@@ -348,20 +348,6 @@ func (t *Torrent) pieceCompleteUncached(piece pieceIndex) storage.Completion {
 	return t.pieces[piece].Storage().Completion()
 }
 
-// There's a connection to that address already.
-func (t *Torrent) addrActive(addr string) bool {
-	if _, ok := t.halfOpen[addr]; ok {
-		return true
-	}
-	for c := range t.conns {
-		ra := c.RemoteAddr
-		if ra.String() == addr {
-			return true
-		}
-	}
-	return false
-}
-
 func (t *Torrent) appendUnclosedConns(ret []*PeerConn) []*PeerConn {
 	return t.appendConns(ret, func(conn *PeerConn) bool {
 		return !conn.closed.IsSet()
@@ -1326,13 +1312,6 @@ func (t *Torrent) chunksPerRegularPiece() chunkIndexType {
 	return t._chunksPerRegularPiece
 }
 
-func (t *Torrent) numChunks() RequestIndex {
-	if t.numPieces() == 0 {
-		return 0
-	}
-	return RequestIndex(t.numPieces()-1)*t.chunksPerRegularPiece() + t.pieceNumChunks(t.numPieces()-1)
-}
-
 func (t *Torrent) pendAllChunkSpecs(pieceIndex pieceIndex) {
 	t.dirtyChunks.RemoveRange(
 		uint64(t.pieceRequestIndexOffset(pieceIndex)),
@@ -1614,13 +1593,6 @@ func (t *Torrent) publishPieceStateChange(piece pieceIndex) {
 			})
 		}
 	})
-}
-
-func (t *Torrent) pieceNumPendingChunks(piece pieceIndex) pp.Integer {
-	if t.pieceComplete(piece) {
-		return 0
-	}
-	return pp.Integer(t.pieceNumChunks(piece) - t.pieces[piece].numDirtyChunks())
 }
 
 func (t *Torrent) pieceAllDirty(piece pieceIndex) bool {
@@ -2853,13 +2825,6 @@ func (t *Torrent) clearPieceTouchers(pi pieceIndex) {
 	}
 }
 
-func (t *Torrent) peersAsSlice() (ret []*Peer) {
-	t.iterPeers(func(p *Peer) {
-		ret = append(ret, p)
-	})
-	return
-}
-
 func (t *Torrent) queuePieceCheck(pieceIndex pieceIndex) {
 	piece := t.piece(pieceIndex)
 	if piece.queuedForHash() {
@@ -3075,13 +3040,6 @@ func (t *Torrent) callbacks() *Callbacks {
 }
 
 type AddWebSeedsOpt func(*webseed.Client)
-
-// Sets the WebSeed trailing path escaper for a webseed.Client.
-func WebSeedPathEscaper(custom webseed.PathEscaper) AddWebSeedsOpt {
-	return func(c *webseed.Client) {
-		c.PathEscaper = custom
-	}
-}
 
 func (t *Torrent) AddWebSeeds(urls []string, opts ...AddWebSeedsOpt) {
 	t.cl.lock()
@@ -3440,13 +3398,6 @@ func (t *Torrent) trySendHolepunchRendezvous(addrPort netip.AddrPort) error {
 		return errors.New("no eligible relays")
 	}
 	return nil
-}
-
-func (t *Torrent) numHalfOpenAttempts() (num int) {
-	for _, attempts := range t.halfOpen {
-		num += len(attempts)
-	}
-	return
 }
 
 func (t *Torrent) getDialTimeoutUnlocked() time.Duration {

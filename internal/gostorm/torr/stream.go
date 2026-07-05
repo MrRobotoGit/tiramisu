@@ -171,8 +171,3 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 	}
 	return nil
 }
-
-// GetActiveStreams returns number of currently active streams
-func GetActiveStreams() int32 {
-	return atomic.LoadInt32(&activeStreams)
-}

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"syscall"
 )
@@ -57,32 +56,4 @@ func ToErrno(err error) syscall.Errno {
 
 	// 5. Default fallback
 	return syscall.EIO
-}
-
-// MapHTTPStatusToErrno maps HTTP status codes to POSIX error codes
-func MapHTTPStatusToErrno(statusCode int) syscall.Errno {
-	switch statusCode {
-	case http.StatusOK, http.StatusPartialContent, http.StatusNoContent:
-		return 0
-	case http.StatusNotFound:
-		return syscall.ENOENT
-	case http.StatusForbidden, http.StatusUnauthorized:
-		return syscall.EACCES
-	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
-		return syscall.ETIMEDOUT
-	case http.StatusTooManyRequests:
-		return syscall.EBUSY
-	case http.StatusRequestedRangeNotSatisfiable:
-		return syscall.EINVAL
-	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
-		return syscall.EIO
-	default:
-		if statusCode >= 400 && statusCode < 500 {
-			return syscall.EINVAL
-		}
-		if statusCode >= 500 {
-			return syscall.EIO
-		}
-		return 0
-	}
 }

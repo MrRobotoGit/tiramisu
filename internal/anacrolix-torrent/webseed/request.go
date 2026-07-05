@@ -12,15 +12,6 @@ import (
 
 type PathEscaper func(pathComps []string) string
 
-// Escapes path name components suitable for appending to a webseed URL. This works for converting
-// S3 object keys to URLs too.
-//
-// Contrary to the name, this actually does a QueryEscape, rather than a PathEscape. This works
-// better with most S3 providers.
-func EscapePath(pathComps []string) string {
-	return defaultPathEscaper(pathComps)
-}
-
 func defaultPathEscaper(pathComps []string) string {
 	var ret []string
 	for _, comp := range pathComps {

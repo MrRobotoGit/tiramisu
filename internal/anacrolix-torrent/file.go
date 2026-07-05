@@ -156,12 +156,6 @@ func (f *File) Download() {
 	f.SetPriority(PiecePriorityNormal)
 }
 
-func byteRegionExclusivePieces(off, size, pieceSize int64) (begin, end int) {
-	begin = int((off + pieceSize - 1) / pieceSize)
-	end = int((off + size) / pieceSize)
-	return
-}
-
 // Deprecated: Use File.SetPriority.
 func (f *File) Cancel() {
 	f.SetPriority(PiecePriorityNone)

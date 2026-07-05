@@ -73,11 +73,6 @@ func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (bool, error) {
 	return true, nil
 }
 
-// RemoveTorrentByHash allows direct removal by hash (exposed for testing/manual use)
-func (tr *TorrentRemover) RemoveTorrentByHash(hash string) error {
-	return tr.removeTorrent(hash)
-}
-
 // extractHashFromFile reads the virtual mkv to get the hash.
 // Supports both JSON (new) and line-based (legacy) formats.
 func (tr *TorrentRemover) extractHashFromFile(path string) string {

@@ -139,24 +139,6 @@ func (c *NativeClient) CleanupHashes() int {
 	return removed
 }
 
-// Probe checks if a torrent is active
-func (c *NativeClient) Probe(hash string) bool {
-	_, ok := c.activeHashes.Load(hash)
-	return ok
-}
-
-// GetTorrent returns statistics for a specific torrent by hash
-func (c *NativeClient) GetTorrent(hash string) (*TorrentStats, error) {
-	t := torr.PeekTorrent(hash)
-	if t == nil {
-		return nil, fmt.Errorf("torrent not found: %s", hash)
-	}
-
-	// V162: Use lightweight StatHighFreq to avoid lock contention
-	st := t.StatHighFreq()
-	return convertStatusToStats(st), nil
-}
-
 // NewStreamReader creates a new stateful hybrid reader for a torrent file.
 func (c *NativeClient) NewStreamReader(hash string, fileID int, totalSize int64) *NativeReader {
 	return &NativeReader{
@@ -421,17 +403,6 @@ func (c *NativeClient) RemoveTorrent(hash string) error {
 		warmup.DiskWarmup.RemoveHash(hash)
 	}
 	return nil
-}
-
-// Preload triggers a direct preload request
-func (c *NativeClient) Preload(hash string, index int, preloadSize int64) {
-	t := torr.GetTorrent(hash)
-	if t != nil && t.Torrent != nil {
-		// Public API preload - defaulting to background context or reasonable timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		t.Preload(ctx, index, preloadSize)
-	}
 }
 
 // PipeResponseWriter bridges GoStorm's HTTP responses to our Go pipe.

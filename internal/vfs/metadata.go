@@ -154,18 +154,3 @@ func parseLineFormat(content string, info os.FileInfo, path string) (*FileMetada
 		ImdbID: imdbID,
 	}, nil
 }
-
-// WriteMetadataToFile writes metadata to a virtual .mkv file in JSON format.
-func WriteMetadataToFile(path, url string, size int64, imdbID string) error {
-	j := MkvJSON{
-		URL:    url,
-		Size:   size,
-		Magnet: "",
-		Imdb:   imdbID,
-	}
-	data, err := json.Marshal(j)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
-}

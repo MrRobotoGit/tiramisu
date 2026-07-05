@@ -84,16 +84,6 @@ func (mt mimeType) IsImage() bool {
 	return strings.HasPrefix(string(mt), "image/")
 }
 
-// IsSub returns true for subtitles MIME-types
-func (mt mimeType) IsSub() bool {
-	return strings.HasPrefix(string(mt), "text/srt") || strings.HasPrefix(string(mt), "text/smi") || strings.HasPrefix(string(mt), "text/ssa")
-}
-
-// Returns the group "type", the part before the '/'.
-func (mt mimeType) Type() string {
-	return strings.SplitN(string(mt), "/", 2)[0]
-}
-
 // Returns the string representation of this MIME-type
 func (mt mimeType) String() string {
 	return string(mt)

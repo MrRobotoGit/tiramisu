@@ -266,13 +266,6 @@ func (cn *PeerConn) choke(msg messageWriter) (more bool) {
 	return
 }
 
-func (cn *PeerConn) deleteAllPeerRequests() {
-	for _, state := range cn.peerRequests {
-		state.allocReservation.Drop()
-	}
-	cn.peerRequests = nil
-}
-
 func (cn *PeerConn) unchoke(msg func(pp.Message) bool) bool {
 	if !cn.choking {
 		return true

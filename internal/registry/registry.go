@@ -2,7 +2,6 @@ package registry
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -239,10 +238,6 @@ func saveRegistryLocked(path string, registry map[string]EpisodeEntry) error {
 	}
 	_, err = f.Write(data)
 	return err
-}
-
-func readFileSafe(path string) ([]byte, error) {
-	return ioutil.ReadFile(path)
 }
 
 func unmarshalJSON(data []byte, target interface{}) error {

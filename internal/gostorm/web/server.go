@@ -85,16 +85,6 @@ func Start() {
 	}()
 }
 
-func Wait() error {
-	return <-waitChan
-}
-
-func Stop() {
-	// Unmount FUSE filesystem if mounted
-	BTS.Disconnect()
-	waitChan <- nil
-}
-
 func echo(c *gin.Context) {
 	c.String(200, "%v", version.Version)
 }

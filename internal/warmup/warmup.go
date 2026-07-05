@@ -28,9 +28,6 @@ const (
 
 var diskQuotaGB int64
 
-// SetQuotaGB sets the disk warmup quota in gigabytes.
-func SetQuotaGB(gb int64) { diskQuotaGB = gb }
-
 // DiskWarmup is the global instance, nil when disabled.
 var DiskWarmup *DiskWarmupCache
 
@@ -354,12 +351,6 @@ func (d *DiskWarmupCache) tailPath(hash string, fileID int) string {
 	return filepath.Join(d.dir, hash+"-"+strconv.Itoa(fileID)+tailSuffix)
 }
 
-// IsWarmingUp reports whether a warmup fetch is currently in flight for this file.
-func (d *DiskWarmupCache) IsWarmingUp(hash string, fileID int) bool {
-	_, ok := d.warmupStarts.Load(d.filePath(hash, fileID))
-	return ok
-}
-
 func (d *DiskWarmupCache) GetAvailableRange(hash string, fileID int) int64 {
 	path := d.filePath(hash, fileID)
 	if _, ok := d.missing.Load(path); ok {
@@ -526,29 +517,6 @@ func (d *DiskWarmupCache) ReadTail(hash string, fileID int, buf []byte, absolute
 
 	n, err := ch.f.ReadAt(buf, relOffset)
 	return n, err
-}
-
-func (d *DiskWarmupCache) GetTailRange(hash string, fileID int) int64 {
-	path := d.tailPath(hash, fileID)
-	if _, ok := d.missing.Load(path); ok {
-		return 0
-	}
-
-	if val, ok := d.sizeCache.Load(path); ok {
-		entry := val.(sizeEntry)
-		if time.Since(entry.updatedAt) < 10*time.Second {
-			return entry.size
-		}
-	}
-
-	fi, err := os.Stat(path)
-	if err != nil {
-		d.missing.Store(path, time.Now())
-		return 0
-	}
-
-	d.sizeCache.Store(path, sizeEntry{size: fi.Size(), updatedAt: time.Now()})
-	return fi.Size()
 }
 
 func (d *DiskWarmupCache) RemoveHash(hash string) {

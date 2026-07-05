@@ -124,16 +124,3 @@ func removeAllFiles(path string) {
 	}
 	os.Remove(path)
 }
-
-func WaitServer() string {
-	err := web.Wait()
-	if err != nil {
-		return err.Error()
-	}
-	return ""
-}
-
-func Stop() {
-	web.Stop()
-	settings.CloseDB()
-}

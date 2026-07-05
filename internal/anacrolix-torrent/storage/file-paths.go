@@ -25,10 +25,6 @@ func defaultPathMaker(baseDir string, info *metainfo.Info, infoHash metainfo.Has
 	return baseDir
 }
 
-func infoHashPathMaker(baseDir string, info *metainfo.Info, infoHash metainfo.Hash) string {
-	return filepath.Join(baseDir, infoHash.HexString())
-}
-
 func isSubFilepath(base, sub string) bool {
 	rel, err := filepath.Rel(base, sub)
 	if err != nil {

@@ -62,11 +62,6 @@ type UnmarshalFieldError struct {
 	Field reflect.StructField
 }
 
-func (e *UnmarshalFieldError) Error() string {
-	return "bencode: key \"" + e.Key + "\" led to an unexported field \"" +
-		e.Field.Name + "\" in type: " + e.Type.String()
-}
-
 // Malformed bencode input, unmarshaler failed to parse it.
 type SyntaxError struct {
 	Offset int64 // location of the error

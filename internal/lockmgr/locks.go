@@ -58,42 +58,6 @@ func (lm *LockManager) Lock(path string) func() {
 	}
 }
 
-// TryLock attempts to acquire a lock for the given path without blocking.
-// Returns an unlock function and true if successful, or nil and false if already locked.
-func (lm *LockManager) TryLock(path string) (func(), bool) {
-	lm.mu.Lock()
-	entry, exists := lm.locks[path]
-	if !exists {
-		entry = &lockEntry{}
-		lm.locks[path] = entry
-	}
-	entry.refCount++
-	lm.mu.Unlock()
-
-	if entry.mu.TryLock() {
-		return func() {
-			entry.mu.Unlock()
-
-			lm.mu.Lock()
-			entry.refCount--
-			if entry.refCount <= 0 {
-				delete(lm.locks, path)
-			}
-			lm.mu.Unlock()
-		}, true
-	}
-
-	// Failed to acquire lock, decrement refCount immediately
-	lm.mu.Lock()
-	entry.refCount--
-	if entry.refCount <= 0 {
-		delete(lm.locks, path)
-	}
-	lm.mu.Unlock()
-
-	return nil, false
-}
-
 // Stop is a no-op
 func (lm *LockManager) Stop() {
 	// No-op

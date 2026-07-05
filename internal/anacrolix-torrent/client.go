@@ -640,23 +640,6 @@ func (cl *Client) dopplegangerAddr(addr string) bool {
 	return ok
 }
 
-// Returns a connection over UTP or TCP, whichever is first to connect.
-func (cl *Client) dialFirst(ctx context.Context, addr string) (res DialResult) {
-	return DialFirst(ctx, addr, cl.dialers)
-}
-
-// Returns a connection over UTP or TCP, whichever is first to connect.
-func DialFirst(ctx context.Context, addr string, dialers []Dialer) (res DialResult) {
-	pool := dialPool{
-		addr: addr,
-	}
-	defer pool.startDrainer()
-	for _, _s := range dialers {
-		pool.add(ctx, _s)
-	}
-	return pool.getFirst()
-}
-
 func dialFromSocket(ctx context.Context, s Dialer, addr string) net.Conn {
 	c, err := s.Dial(ctx, addr)
 	if err != nil {
@@ -685,13 +668,6 @@ func (cl *Client) noLongerHalfOpen(t *Torrent, addr string, attemptKey outgoingC
 	for _, t := range cl.torrents {
 		t.openNewConns()
 	}
-}
-
-func (cl *Client) countHalfOpenFromTorrents() (count int) {
-	for _, t := range cl.torrents {
-		count += t.numHalfOpenAttempts()
-	}
-	return
 }
 
 // Performs initiator handshakes and returns a connection. Returns nil *PeerConn if no connection
@@ -1729,14 +1705,6 @@ func firstNotNil(ips ...net.IP) net.IP {
 		}
 	}
 	return nil
-}
-
-func (cl *Client) eachListener(f func(Listener) bool) {
-	for _, s := range cl.listeners {
-		if !f(s) {
-			break
-		}
-	}
 }
 
 func (cl *Client) findListener(f func(Listener) bool) (ret Listener) {

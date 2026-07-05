@@ -13,7 +13,6 @@ import (
 	"github.com/anacrolix/chansync"
 	. "github.com/anacrolix/generics"
 	"github.com/anacrolix/log"
-	"github.com/anacrolix/missinggo/iter"
 	"github.com/anacrolix/missinggo/v2/bitmap"
 	"github.com/anacrolix/multiless"
 
@@ -168,10 +167,6 @@ func (cn *Peer) expectingChunks() bool {
 		return !haveAllowedFastRequests
 	})
 	return haveAllowedFastRequests
-}
-
-func (cn *Peer) remoteChokingPiece(piece pieceIndex) bool {
-	return cn.peerChoking && !cn.peerAllowedFast.Contains(piece)
 }
 
 func (cn *Peer) cumInterest() time.Duration {
@@ -462,14 +457,6 @@ func (cn *Peer) shouldRequest(r RequestIndex) error {
 	return nil
 }
 
-func (cn *Peer) mustRequest(r RequestIndex) bool {
-	more, err := cn.request(r)
-	if err != nil {
-		panic(err)
-	}
-	return more
-}
-
 func (cn *Peer) request(r RequestIndex) (more bool, err error) {
 	if err := cn.shouldRequest(r); err != nil {
 		panic(err)
@@ -520,29 +507,6 @@ func (cn *Peer) updateRequests(reason string) {
 	}
 	cn.needRequestUpdate = reason
 	cn.handleUpdateRequests()
-}
-
-// Emits the indices in the Bitmaps bms in order, never repeating any index.
-// skip is mutated during execution, and its initial values will never be
-// emitted.
-func iterBitmapsDistinct(skip *bitmap.Bitmap, bms ...bitmap.Bitmap) iter.Func {
-	return func(cb iter.Callback) {
-		for _, bm := range bms {
-			if !iter.All(
-				func(_i interface{}) bool {
-					i := _i.(int)
-					if skip.Contains(bitmap.BitIndex(i)) {
-						return true
-					}
-					skip.Add(bitmap.BitIndex(i))
-					return cb(i)
-				},
-				bm.Iter,
-			) {
-				return
-			}
-		}
-	}
 }
 
 // After handshake, we know what Torrent and Client stats to include for a

@@ -2,7 +2,6 @@ package quality
 
 import (
 	"regexp"
-	"strings"
 )
 
 // Weights defines scoring weights for movie selection.
@@ -60,23 +59,6 @@ func DefaultMovieProfile() Profile {
 	}
 }
 
-// DefaultTVProfile returns the default scoring profile for TV.
-func DefaultTVProfile() Profile {
-	p := DefaultMovieProfile()
-	p.FullpackBonus = 300
-	return p
-}
-
-// ProfileFromConfig builds a Profile from config weights.
-func ProfileFromConfig(w Weights) Profile {
-	return Profile{Weights: w}
-}
-
-// ProfileFromTVConfig builds a TV Profile from config weights.
-func ProfileFromTVConfig(w Weights, fullpackBonus int) Profile {
-	return Profile{Weights: w, FullpackBonus: fullpackBonus}
-}
-
 // Score calculates a quality score for a title based on its metadata and seeders.
 func Score(title string, seeders int, profile Profile) int {
 	w := profile.Weights
@@ -116,19 +98,4 @@ func Score(title string, seeders int, profile Profile) int {
 	}
 
 	return score
-}
-
-// IsFullpack detects if a title is a complete season pack.
-func IsFullpack(title string) bool {
-	t := strings.ToLower(title)
-	if strings.Contains(t, "complete") || strings.Contains(t, "full season") {
-		return true
-	}
-	if reFullpackS.MatchString(title) {
-		return true
-	}
-	if reFullpackSeason.MatchString(title) {
-		return true
-	}
-	return false
 }

@@ -113,20 +113,6 @@ func (d *Decoder) Decode(msg *Message) (err error) {
 	return
 }
 
-func readByte(r io.Reader) (b byte, err error) {
-	var arr [1]byte
-	n, err := r.Read(arr[:])
-	b = arr[0]
-	if n == 1 {
-		err = nil
-		return
-	}
-	if err == nil {
-		panic(err)
-	}
-	return
-}
-
 func unmarshalBitfield(b []byte) (bf []bool) {
 	for _, c := range b {
 		for i := 7; i >= 0; i-- {
