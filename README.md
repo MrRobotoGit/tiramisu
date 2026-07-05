@@ -7,7 +7,7 @@
    ╚═╝    ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚═╝ ╚══════╝  ╚═════╝
 ```
 
-<h1><sub><sub><strong>Tiramisu</strong>: The most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex/Jellyfin library. Forget Real-Debrid.</sub></sub></h1>
+<h1><sub><sub><strong>Tiramisu</strong> is the most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex/Jellyfin library. Forget Real-Debrid.</sub></sub></h1>
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MrRobotoGit/tiramisu)
 [![Docker Pulls](https://img.shields.io/docker/pulls/mrrobotogit/tiramisu?logo=docker&label=Docker+Pulls)](https://hub.docker.com/r/mrrobotogit/tiramisu)
