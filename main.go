@@ -1315,6 +1315,16 @@ func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, p
 		}
 	}
 
+	// Playback pressure: the pump's lead over the player has worn thin (opposite end of the same
+	// diff/budget signal used to throttle above). Extends tail-hedging into steady-state playback
+	// via the same mechanism already used for warmup - see SetPlaybackPressure. Called on every
+	// chunk like SetWarmupActive already is; both just store atomics, cheap either way.
+	if h.hash != "" {
+		if tr := torr.PeekTorrent(h.hash); tr != nil && tr.Torrent != nil {
+			tr.Torrent.SetPlaybackPressure(diff < budget*20/100, offset)
+		}
+	}
+
 	if data := raCache.Get(h.path, offset, offset); data != nil {
 		if warmup.DiskWarmup != nil && h.hash != "" && offset <= warmup.FileSize {
 			warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, data, offset)

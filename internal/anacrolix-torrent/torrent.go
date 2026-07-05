@@ -84,6 +84,16 @@ type Torrent struct {
 	// releases with nfo/sample files before the main video).
 	warmupFileID atomic.Int64
 
+	// playbackPressureActive is set externally by the GoStream/Tiramisu pump loop when its lead
+	// over the player's read offset has worn thin (see nativePumpChunk's diff/budget check) -
+	// the same "buffer running low" signal already used to throttle the pump, reused here to
+	// extend tail-hedging beyond the initial warmup window into steady-state playback.
+	// playbackPressureOffset is the pump's current byte offset at the moment pressure was
+	// signaled, used to anchor the hedge piece window at the position actually being fetched
+	// right now instead of the file start. -1 means "no offset set" (pressure not active).
+	playbackPressureActive atomic.Bool
+	playbackPressureOffset atomic.Int64
+
 	// churnCooldown tracks IPs recently dropped by churnIfUselessForWarmup (lacked warmup-region
 	// pieces), keyed by IP (not IP:port - the same peer often reconnects from a new port), so a
 	// peer that just proved useless isn't immediately re-probed on reconnect. Not a ban (unlike
@@ -981,6 +991,50 @@ func (t *Torrent) warmupPieceRange(maxPieces int) (begin, end pieceIndex, ok boo
 	return begin, end, true
 }
 
+// SetPlaybackPressure is called by the GoStream/Tiramisu pump loop when its lead over the
+// player's read offset has worn thin (see nativePumpChunk), to extend tail-hedging into
+// steady-state playback instead of only the initial warmup window. offset is the pump's current
+// byte position when active is true; ignored when active is false.
+func (t *Torrent) SetPlaybackPressure(active bool, offset int64) {
+	if active {
+		t.playbackPressureOffset.Store(offset)
+	} else {
+		t.playbackPressureOffset.Store(-1)
+	}
+	t.playbackPressureActive.Store(active)
+	// Shares hedgeWatchdogRunning with SetWarmupActive: whichever of the two signals first, only
+	// one watchdog goroutine runs at a time, and it keeps going as long as either is active (see
+	// hedgeWatchdog's exit condition).
+	if active && t.hedgeWatchdogRunning.CompareAndSwap(false, true) {
+		go t.hedgeWatchdog()
+	}
+}
+
+// playbackPressureRange returns the [begin, end) piece range anchored at the pump's current
+// offset (set via SetPlaybackPressure), bounded to hedgeWarmupPieceWindow pieces - the same
+// window size used for warmup, since both cover "the next chunk of data the player needs soon".
+// Unlike warmupPieceRange, which is anchored at the start of the warmed file, this follows the
+// pump as it advances through the file during normal playback.
+func (t *Torrent) playbackPressureRange() (begin, end pieceIndex, ok bool) {
+	if !t.haveInfo() {
+		return 0, 0, false
+	}
+	offset := t.playbackPressureOffset.Load()
+	if offset < 0 || t.info.PieceLength <= 0 {
+		return 0, 0, false
+	}
+	numPieces := t.numPieces()
+	begin = pieceIndex(offset / t.info.PieceLength)
+	if begin >= numPieces {
+		return 0, 0, false
+	}
+	end = begin + hedgeWarmupPieceWindow
+	if end > numPieces {
+		end = numPieces
+	}
+	return begin, end, true
+}
+
 // HedgeTriggerCount returns the total number of tail-hedge duplicate requests fired for this
 // torrent, for /metrics.
 func (t *Torrent) HedgeTriggerCount() int64 {
@@ -1004,16 +1058,17 @@ const (
 	hedgeCircuitBreakerCooldown  = 5 * time.Minute
 )
 
-// hedgeWatchdog periodically scans in-flight warmup-region requests and fires a duplicate
-// request to a next-best peer for any exceeding the observed p95 for its size. Spawned once per
-// warmup-active cycle from SetWarmupActive; exits on its own once warmup ends or the torrent
-// closes, resetting hedgeWatchdogRunning so a future warmup cycle can spawn a fresh one.
+// hedgeWatchdog periodically scans in-flight requests within whichever region is currently
+// active (warmup, or playback pressure - see SetWarmupActive/SetPlaybackPressure) and fires a
+// duplicate request to a next-best peer for any exceeding the observed p95 for its size. Spawned
+// once from either signal; exits on its own once both end or the torrent closes, resetting
+// hedgeWatchdogRunning so a future cycle can spawn a fresh one.
 func (t *Torrent) hedgeWatchdog() {
 	defer t.hedgeWatchdogRunning.Store(false)
 	for {
 		time.Sleep(hedgeWatchdogInterval)
 		t.cl.lock()
-		if t.closed.IsSet() || !t.warmupActive.Load() {
+		if t.closed.IsSet() || (!t.warmupActive.Load() && !t.playbackPressureActive.Load()) {
 			t.cl.unlock()
 			return
 		}
@@ -1037,9 +1092,18 @@ func (t *Torrent) hedgeWatchdog() {
 const hedgeWarmupPieceWindow = 32
 
 func (t *Torrent) checkAndFireHedges() {
-	begin, end, ok := t.warmupPieceRange(hedgeWarmupPieceWindow)
+	// Warmup takes priority when both are active (rare, only at the warmup/playback boundary):
+	// its range is already anchored where the initial fetch is actually happening, and the two
+	// regions usually overlap early in the file anyway.
+	var begin, end pieceIndex
+	var ok bool
+	if t.warmupActive.Load() {
+		begin, end, ok = t.warmupPieceRange(hedgeWarmupPieceWindow)
+	} else {
+		begin, end, ok = t.playbackPressureRange()
+	}
 	if !ok {
-		return // metadata not resolved yet, or file index out of range
+		return // metadata not resolved yet, file index out of range, or no pressure offset set
 	}
 	now := time.Now()
 	for r, rs := range t.requestState {
