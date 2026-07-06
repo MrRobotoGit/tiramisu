@@ -2298,14 +2298,27 @@ func (c *ReadAheadCache) getShard(path string) *raShard {
 	return c.shards[xxhash.Sum64String(path)&c.shardMask]
 }
 
+// allocChunk allocates a chunk buffer with capacity rounded up to base so recycle() can pool
+// it regardless of the file's adaptive chunk size. Sizes above base (shouldn't happen for
+// pump chunks) fall back to an exact, unpoolable allocation.
+func allocChunk(size, base int64) []byte {
+	if size < base {
+		return make([]byte, size, base)
+	}
+	return make([]byte, size)
+}
+
 func (c *ReadAheadCache) recycle(b []byte) {
 	chunkSize := int(16 * 1024 * 1024)
 	if gc().ReadAheadBase > 0 {
 		chunkSize = int(gc().ReadAheadBase)
 	}
-	if len(b) == chunkSize {
+	// Match on cap, not len: adaptive chunks (see SetPieceLen) have len < base for torrents
+	// whose piece length doesn't divide base evenly (~25% of the library uses non-power-of-two
+	// piece lengths), but Put always allocates them with cap == base so they stay poolable.
+	if cap(b) == chunkSize {
 		select {
-		case c.pool <- b:
+		case c.pool <- b[:chunkSize]:
 		default:
 			// Pool full, let GC handle it
 		}
@@ -2429,16 +2442,26 @@ func (c *ReadAheadCache) Put(p string, start, end int64, d []byte) {
 
 	dataSize := int64(len(d))
 
+	// Pooled buffers all have cap == ReadAheadBase; adaptive chunk sizes are always <= base
+	// (guaranteed by SetPieceLen), so a pooled buffer resliced to dataSize serves any chunk.
+	// Fresh allocations get cap rounded up to base too, so recycle() can pool them later —
+	// previously a size mismatch both discarded the pooled buffer and allocated an
+	// unpoolable one, permanently draining the pool on non-power-of-two-piece torrents.
+	poolCap := int64(gc().ReadAheadBase)
+	if poolCap == 0 {
+		poolCap = 16 * 1024 * 1024
+	}
 	var dataCopy []byte
 	select {
 	case buf := <-c.pool:
-		if int64(len(buf)) == dataSize {
-			dataCopy = buf
+		if int64(cap(buf)) >= dataSize {
+			dataCopy = buf[:dataSize]
 		} else {
-			dataCopy = make([]byte, dataSize)
+			// Buffer predates a smaller base config; too small now, let GC take it.
+			dataCopy = allocChunk(dataSize, poolCap)
 		}
 	default:
-		dataCopy = make([]byte, dataSize)
+		dataCopy = allocChunk(dataSize, poolCap)
 	}
 	copy(dataCopy, d)
 
