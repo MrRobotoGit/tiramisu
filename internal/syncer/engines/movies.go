@@ -26,6 +26,9 @@ type MoviesSyncerConfig struct {
 	StateDir     string
 	LogsDir      string
 	ProwlarrCfg  prowlarr.ConfigProwlarr
+	// InvalidatePath, when set, is called after removing a stub file so the FUSE
+	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
+	InvalidatePath func(string)
 }
 
 // NewMoviesSyncer creates a new Go-based movie syncer.
@@ -47,16 +50,17 @@ func NewMoviesSyncer(cfg MoviesSyncerConfig) *MoviesSyncer {
 	}
 
 	engineCfg := MovieEngineConfig{
-		GoStormURL:   cfg.GoStormURL,
-		TMDBAPIKey:   cfg.TMDBAPIKey,
-		TorrentioURL: cfg.TorrentioURL,
-		PlexURL:      cfg.PlexURL,
-		PlexToken:    cfg.PlexToken,
-		PlexLib:      cfg.PlexLib,
-		MoviesDir:    moviesDir,
-		StateDir:     stateDir,
-		LogsDir:      logsDir,
-		ProwlarrCfg:  cfg.ProwlarrCfg,
+		GoStormURL:     cfg.GoStormURL,
+		TMDBAPIKey:     cfg.TMDBAPIKey,
+		TorrentioURL:   cfg.TorrentioURL,
+		PlexURL:        cfg.PlexURL,
+		PlexToken:      cfg.PlexToken,
+		PlexLib:        cfg.PlexLib,
+		MoviesDir:      moviesDir,
+		StateDir:       stateDir,
+		LogsDir:        logsDir,
+		ProwlarrCfg:    cfg.ProwlarrCfg,
+		InvalidatePath: cfg.InvalidatePath,
 	}
 
 	return &MoviesSyncer{

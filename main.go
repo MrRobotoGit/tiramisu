@@ -676,20 +676,10 @@ func (d *VirtualDirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 	return 0
 }
 
-// Unlink handles file deletion and triggers torrent auto-remove (FASE 4.2)
-func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno {
-	logger.Printf("=== UNLINK === dir=%s file=%s", d.physicalPath, name)
-
-	// Only handle .mkv files
-	if !strings.HasSuffix(name, ".mkv") {
-		logger.Printf("UNLINK: not an mkv file, skipping auto-remove")
-		return syscall.EPERM // Not permitted for non-mkv files
-	}
-
-	fullPath := filepath.Join(d.physicalPath, name)
-
-	// Force-close active pump and handles before removing torrent.
-	// Without this, smbd D-states on a file with an active blocking read.
+// forceCloseVirtualFile terminates the active pump and closes all open handles for a
+// virtual .mkv path. Without this, smbd D-states on a file with an active blocking read.
+// Shared by the FUSE Unlink handler and invalidateSyncRemovedPath.
+func forceCloseVirtualFile(fullPath string) {
 	// V-OpenTracker: attendi che i Read() in volo completino prima di cancellare
 	// la pump, per evitare nil-deref su nativeReader durante cancel concorrente.
 	if globalOpenTracker.IsPathOpen(fullPath) {
@@ -706,7 +696,7 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 			ps.cancel()
 		}
 		activePumps.Delete(fullPath)
-		logger.Printf("UNLINK: force-terminated active pump for %s", name)
+		logger.Printf("UNLINK: force-terminated active pump for %s", filepath.Base(fullPath))
 	}
 	// Close all handles referencing this file
 	activeHandles.Range(func(key, value interface{}) bool {
@@ -716,10 +706,40 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 				h.nativeReader.Close()
 			}
 			activeHandles.Delete(h)
-			logger.Printf("UNLINK: force-closed handle for %s", name)
+			logger.Printf("UNLINK: force-closed handle for %s", filepath.Base(fullPath))
 		}
 		return true
 	})
+}
+
+// invalidateSyncRemovedPath drops FUSE-layer state for a stub removed out-of-band by the
+// sync engines: their os.Remove on the physical path bypasses the Unlink handler, so
+// without this the virtual file keeps being listed and served for hours (dircache), and
+// a Plex scan in that window registers the replaced file as a ghost duplicate version
+// that later fails to play once the cache finally expires.
+func invalidateSyncRemovedPath(path string) {
+	if strings.HasSuffix(path, ".mkv") {
+		forceCloseVirtualFile(path)
+		registry.RemoveFromRegistry(path)
+	}
+	globalDirCache.Delete(filepath.Dir(path))
+	// Covers removed directories too (empty season/show dir cleanup).
+	globalDirCache.Delete(path)
+}
+
+// Unlink handles file deletion and triggers torrent auto-remove (FASE 4.2)
+func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	logger.Printf("=== UNLINK === dir=%s file=%s", d.physicalPath, name)
+
+	// Only handle .mkv files
+	if !strings.HasSuffix(name, ".mkv") {
+		logger.Printf("UNLINK: not an mkv file, skipping auto-remove")
+		return syscall.EPERM // Not permitted for non-mkv files
+	}
+
+	fullPath := filepath.Join(d.physicalPath, name)
+
+	forceCloseVirtualFile(fullPath)
 
 	// Extract hash and remove torrent from GoStorm
 	success, err := globalTorrentRemover.RemoveTorrentFromFile(fullPath)
@@ -3533,29 +3553,31 @@ func main() {
 
 		syncers := map[string]scheduler.Syncer{
 			"movies": engines.NewMoviesSyncer(engines.MoviesSyncerConfig{
-				GoStormURL:   gc().GoStormBaseURL,
-				TMDBAPIKey:   gc().TMDBAPIKey,
-				TorrentioURL: gc().TorrentioURL,
-				PlexURL:      gc().Plex.URL,
-				PlexToken:    gc().Plex.Token,
-				PlexLib:      gc().Plex.LibraryID,
-				MoviesDir:    filepath.Join(gc().PhysicalSourcePath, "movies"),
-				StateDir:     GetStateDir(),
-				LogsDir:      logsDir,
-				ProwlarrCfg:  gc().Prowlarr,
+				GoStormURL:     gc().GoStormBaseURL,
+				TMDBAPIKey:     gc().TMDBAPIKey,
+				TorrentioURL:   gc().TorrentioURL,
+				PlexURL:        gc().Plex.URL,
+				PlexToken:      gc().Plex.Token,
+				PlexLib:        gc().Plex.LibraryID,
+				MoviesDir:      filepath.Join(gc().PhysicalSourcePath, "movies"),
+				StateDir:       GetStateDir(),
+				LogsDir:        logsDir,
+				ProwlarrCfg:    gc().Prowlarr,
+				InvalidatePath: invalidateSyncRemovedPath,
 			}),
 			"tv": engines.NewTVSyncer(engines.TVSyncerConfig{
-				GoStormURL:   gc().GoStormBaseURL,
-				TMDBAPIKey:   gc().TMDBAPIKey,
-				TorrentioURL: gc().TorrentioURL,
-				PlexURL:      gc().Plex.URL,
-				PlexToken:    gc().Plex.Token,
-				PlexTVLib:    gc().Plex.TVLibraryID,
-				TVDir:        filepath.Join(gc().PhysicalSourcePath, "tv"),
-				StateDir:     GetStateDir(),
-				LogsDir:      logsDir,
-				ProwlarrCfg:  gc().Prowlarr,
-				DB:           stateDB,
+				GoStormURL:     gc().GoStormBaseURL,
+				TMDBAPIKey:     gc().TMDBAPIKey,
+				TorrentioURL:   gc().TorrentioURL,
+				PlexURL:        gc().Plex.URL,
+				PlexToken:      gc().Plex.Token,
+				PlexTVLib:      gc().Plex.TVLibraryID,
+				TVDir:          filepath.Join(gc().PhysicalSourcePath, "tv"),
+				StateDir:       GetStateDir(),
+				LogsDir:        logsDir,
+				ProwlarrCfg:    gc().Prowlarr,
+				DB:             stateDB,
+				InvalidatePath: invalidateSyncRemovedPath,
 			}),
 			"watchlist": engines.NewWatchlistSyncer(engines.WatchlistSyncerConfig{
 				GoStormURL:      gc().GoStormBaseURL,

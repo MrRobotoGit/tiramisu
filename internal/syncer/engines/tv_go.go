@@ -47,6 +47,8 @@ type TVGoEngine struct {
 
 	blacklist     BlacklistData
 	blacklistFile string
+
+	invalidatePath func(string)
 }
 
 // TVEpisodeEntry is a single entry in the TV episode registry.
@@ -78,6 +80,9 @@ type TVEngineConfig struct {
 	StateDir     string
 	LogsDir      string
 	ProwlarrCfg  prowlarr.ConfigProwlarr
+	// InvalidatePath, when set, is called after removing a stub file/dir so the FUSE
+	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
+	InvalidatePath func(string)
 }
 
 // TV thresholds
@@ -162,12 +167,24 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 		db:               db,
 		processedThisRun: make(map[string]bool),
 		blacklistFile:    blFile,
+		invalidatePath:   cfg.InvalidatePath,
 	}
 
 	e.registry = e.loadRegistry()
 	e.blacklist = e.loadBlacklist()
 
 	return e
+}
+
+// removeStub deletes a stub file/dir and invalidates the FUSE layer's cached state for
+// it. A plain os.Remove on the physical path bypasses the mount's Unlink handler, so the
+// virtual file would keep being listed and served until cache expiry — long enough for a
+// Plex scan to register the replaced file as a ghost duplicate version.
+func (e *TVGoEngine) removeStub(path string) {
+	os.Remove(path)
+	if e.invalidatePath != nil {
+		e.invalidatePath(path)
+	}
 }
 
 func (e *TVGoEngine) loadBlacklist() BlacklistData {
@@ -263,7 +280,9 @@ func (e *TVGoEngine) Run(ctx context.Context) error {
 		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 		client := catalog.NewClient(10 * time.Second)
 		resp, err := catalog.Do(context.Background(), client, req)
-		if err == nil {
+		if err != nil {
+			e.logger.Printf("Warning: Plex library refresh failed: %v", err)
+		} else {
 			resp.Body.Close()
 		}
 	}
@@ -1057,7 +1076,7 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, strea
 
 		if e.createMKV(epPath, streamURL, vf.Length, magnet) {
 			if existing, ok := e.registry[key]; ok && existing.FilePath != "" && existing.FilePath != epPath {
-				os.Remove(existing.FilePath)
+				e.removeStub(existing.FilePath)
 				e.stats.Upgrades++
 			}
 			e.registerEpisode(key, stream.QualityScore, hash, epPath, "fullpack")
@@ -1136,7 +1155,7 @@ func (e *TVGoEngine) processSingle(ctx context.Context, showName string, stream 
 
 	if e.createMKV(epPath, streamURL, bestFile.Length, magnet) {
 		if existing, ok := e.registry[key]; ok && existing.FilePath != "" && existing.FilePath != epPath {
-			os.Remove(existing.FilePath)
+			e.removeStub(existing.FilePath)
 			e.stats.Upgrades++
 		}
 		e.registerEpisode(key, stream.QualityScore, hash, epPath, "single")
@@ -1215,7 +1234,7 @@ func (e *TVGoEngine) cleanupOrphanedFiles() {
 			return nil
 		}
 		if !regPaths[path] {
-			os.Remove(path)
+			e.removeStub(path)
 		}
 		return nil
 	})
@@ -1231,7 +1250,7 @@ func (e *TVGoEngine) cleanupOrphanedFiles() {
 	for i := len(dirs) - 1; i >= 0; i-- {
 		entries, _ := os.ReadDir(dirs[i])
 		if len(entries) == 0 {
-			os.Remove(dirs[i])
+			e.removeStub(dirs[i])
 		}
 	}
 }

@@ -51,6 +51,8 @@ type MovieGoEngine struct {
 
 	blacklist     BlacklistData
 	blacklistFile string
+
+	invalidatePath func(string)
 }
 
 // CacheEntry is a generic cache entry with timestamp.
@@ -85,6 +87,9 @@ type MovieEngineConfig struct {
 	StateDir     string
 	LogsDir      string
 	ProwlarrCfg  prowlarr.ConfigProwlarr
+	// InvalidatePath, when set, is called after removing a stub file so the FUSE
+	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
+	InvalidatePath func(string)
 }
 
 // Movie thresholds
@@ -168,6 +173,7 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 		addFailCFile:   filepath.Join(cfg.StateDir, "movie_add_fail_cache.json"),
 		imdbCFile:      filepath.Join(cfg.StateDir, "movie_imdb_cache.json"),
 		blacklistFile:  filepath.Join(cfg.StateDir, "blacklist.json"),
+		invalidatePath: cfg.InvalidatePath,
 	}
 
 	e.noMKVCache = e.loadCache(e.noMKVCFile)
@@ -180,6 +186,17 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 	e.pruneExpiredCaches()
 
 	return e
+}
+
+// removeStub deletes a stub file and invalidates the FUSE layer's cached state for it.
+// A plain os.Remove on the physical path bypasses the mount's Unlink handler, so the
+// virtual file would keep being listed and served until cache expiry — long enough for
+// a Plex scan to register the replaced file as a ghost duplicate version.
+func (e *MovieGoEngine) removeStub(path string) {
+	os.Remove(path)
+	if e.invalidatePath != nil {
+		e.invalidatePath(path)
+	}
 }
 
 func (e *MovieGoEngine) Name() string { return "movies" }
@@ -220,7 +237,9 @@ func (e *MovieGoEngine) Run(ctx context.Context) error {
 		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 		client := catalog.NewClient(10 * time.Second)
 		resp, err := catalog.Do(context.Background(), client, req)
-		if err == nil {
+		if err != nil {
+			e.logger.Printf("[MovieSync] Warning: Plex library refresh failed: %v", err)
+		} else {
 			resp.Body.Close()
 		}
 	}
@@ -440,7 +459,7 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		// Remove existing if upgrading
 		if existingPath != "" {
 			e.logger.Printf("[MovieSync] Upgrade: removing %s", filepath.Base(existingPath))
-			os.Remove(existingPath)
+			e.removeStub(existingPath)
 		}
 
 		filename := e.buildMovieFilename(title, movie.ReleaseDate, c)
@@ -868,7 +887,7 @@ func (e *MovieGoEngine) cleanupOrphanedFiles(ctx context.Context) {
 			return nil
 		}
 		if !activeHashes[m[1]] {
-			os.Remove(path)
+			e.removeStub(path)
 		}
 		return nil
 	})
