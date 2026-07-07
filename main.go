@@ -11,6 +11,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"tiramisu/internal/ai"
 	"tiramisu/internal/cache"
+	"tiramisu/internal/catalog"
 	"tiramisu/internal/config"
 	server "tiramisu/internal/gostorm"
 	"tiramisu/internal/gostorm/native"
@@ -38,7 +39,6 @@ import (
 	"tiramisu/internal/warmup"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -64,8 +64,6 @@ import (
 // Constants removed to ensure single source of truth
 
 var logger = log.New(os.Stdout, "[GoProxy] ", log.LstdFlags)
-
-var httpClient *http.Client
 
 // masterDataSemaphore limits concurrent data operations (Native, HTTP, Prefetch).
 var masterDataSemaphore chan struct{}
@@ -3200,33 +3198,7 @@ func main() {
 	}
 	logger.Printf("ReadBufferPool initialized with size: %d bytes (matches ReadAheadBase)", poolSize)
 
-	httpClient = &http.Client{
-		Transport: &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   gc().HTTPConnectTimeout,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-
-			MaxIdleConns:        gc().MaxIdleConns,
-			MaxIdleConnsPerHost: gc().MaxIdleConnsPerHost,
-			MaxConnsPerHost:     gc().MaxConnsPerHost,
-
-			ResponseHeaderTimeout: gc().HTTPReadTimeout,
-			IdleConnTimeout:       90 * time.Second, // Close idle connections after 90s
-			TLSHandshakeTimeout:   10 * time.Second, // TLS handshake timeout (even for localhost)
-			ExpectContinueTimeout: 1 * time.Second,  // Expect: 100-continue timeout
-
-			// HTTP protocol settings - match Python defaults
-			DisableKeepAlives:  false, // Enable HTTP keepalive (Python default)
-			DisableCompression: false, // Enable gzip compression (Python default)
-			ForceAttemptHTTP2:  false, // Use HTTP/1.1 only (Python urllib3 default)
-
-			WriteBufferSize: gc().WriteBufferSize,
-			ReadBufferSize:  gc().ReadBufferSize,
-		},
-	}
-	logger.Printf("HTTP client initialized: ConnectTimeout=%v, ReadTimeout=%v, MaxIdleConns=%d, MaxIdleConnsPerHost=%d, MaxConnsPerHost=%d (V81-optimized)",
-		gc().HTTPConnectTimeout, gc().HTTPReadTimeout, gc().MaxIdleConns, gc().MaxIdleConnsPerHost, gc().MaxConnsPerHost)
+	catalog.SetRetryDefaults(gc().MaxRetryAttempts, time.Duration(gc().RetryDelayMS)*time.Millisecond)
 
 	nativeBridge = native.NewNativeClient()
 

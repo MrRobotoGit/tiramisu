@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"tiramisu/internal/catalog"
 )
 
 // Client queries the Prowlarr API and returns results in Stremio/Torrentio format.
@@ -150,7 +152,8 @@ func (c *Client) queryCtx(ctx context.Context, params map[string]string) []Prowl
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	// catalog.Do adds retry (network errors/5xx) with exponential backoff, bounded by ctx's deadline.
+	resp, err := catalog.Do(ctx, c.httpClient, req)
 	if err != nil {
 		log.Printf("[Prowlarr] Error fetching from API: %v", err)
 		return nil
@@ -269,7 +272,11 @@ func (c *Client) resolveHashFromDownloadURL(downloadURL string) string {
 		},
 	}
 
-	resp, err := noRedirectClient.Do(req)
+	// catalog.Do adds retry here too (deliberate - consistency across both Prowlarr call sites
+	// was chosen over fail-fast, even though this runs on the concurrent search hot path and a
+	// flaky Prowlarr under load can now add up to ~3s backoff per item before this 8s-deadline
+	// function gives up, versus the previous single-shot behavior).
+	resp, err := catalog.Do(ctx, noRedirectClient, req)
 	if err != nil {
 		return ""
 	}

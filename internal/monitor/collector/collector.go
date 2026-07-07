@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"tiramisu/internal/catalog"
 )
 
 const speedHistorySize = 60
@@ -264,6 +267,13 @@ func (c *Collector) PlexToken() string { return c.plexToken }
 // GostormURL returns the GoStorm API base URL.
 func (c *Collector) GostormURL() string { return c.gostormURL }
 
+// Known limit: each fetch below has its own 3s timeout, but collect() itself has no shared
+// cycle-wide deadline - if multiple endpoints degrade at once (e.g. a VPN/network blip affecting
+// GoStorm+Plex+metrics simultaneously), one collect() call can still take up to ~20s in the worst
+// case (down from ~45-90s pre-timeout-fix, but not a hard per-cycle ceiling). Fully bounding this
+// would need either a shared context.WithTimeout wrapping the whole cycle, or running the
+// independent fetches concurrently - out of scope for now, revisit if staleness becomes a problem
+// in practice.
 func (c *Collector) collect() {
 	s := HealthStatus{
 		Timestamp:  time.Now(),
@@ -329,8 +339,15 @@ func (c *Collector) collect() {
 }
 
 func (c *Collector) fetchTorrents() []TorrentInfo {
-	resp, err := c.httpClient.Post(c.gostormURL+"/torrents", "application/json",
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.gostormURL+"/torrents",
 		strings.NewReader(`{"action":"active"}`))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := catalog.Do(ctx, c.httpClient, req)
 	if err != nil {
 		return nil
 	}
@@ -385,7 +402,13 @@ func (c *Collector) fetchTorrents() []TorrentInfo {
 }
 
 func (c *Collector) fetchFUSEBuffer(s *HealthStatus) {
-	resp, err := c.httpClient.Get(c.metricsURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.metricsURL, nil)
+	if err != nil {
+		return
+	}
+	resp, err := catalog.Do(ctx, c.httpClient, req)
 	if err != nil {
 		return
 	}
@@ -413,7 +436,13 @@ func (c *Collector) fetchFUSEBuffer(s *HealthStatus) {
 }
 
 func (c *Collector) fetchCacheHitRate(s *HealthStatus) {
-	resp, err := c.httpClient.Get(c.profilingURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.profilingURL, nil)
+	if err != nil {
+		return
+	}
+	resp, err := catalog.Do(ctx, c.httpClient, req)
 	if err != nil {
 		return
 	}
@@ -776,7 +805,13 @@ func (c *Collector) fetchPlexSessions() map[string]plexSession {
 	}
 
 	url := fmt.Sprintf("%s/status/sessions?X-Plex-Token=%s", c.plexURL, c.plexToken)
-	resp, err := c.httpClient.Get(url)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return result
+	}
+	resp, err := catalog.Do(ctx, c.httpClient, req)
 	if err != nil {
 		return result
 	}
