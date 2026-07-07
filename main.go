@@ -3563,6 +3563,7 @@ func main() {
 				StateDir:       GetStateDir(),
 				LogsDir:        logsDir,
 				ProwlarrCfg:    gc().Prowlarr,
+				Language:       gc().Language,
 				InvalidatePath: invalidateSyncRemovedPath,
 			}),
 			"tv": engines.NewTVSyncer(engines.TVSyncerConfig{
@@ -3576,6 +3577,7 @@ func main() {
 				StateDir:       GetStateDir(),
 				LogsDir:        logsDir,
 				ProwlarrCfg:    gc().Prowlarr,
+				Language:       gc().Language,
 				DB:             stateDB,
 				InvalidatePath: invalidateSyncRemovedPath,
 			}),

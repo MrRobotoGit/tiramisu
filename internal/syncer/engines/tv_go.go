@@ -20,6 +20,7 @@ import (
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
+	"tiramisu/internal/config"
 	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
@@ -49,6 +50,9 @@ type TVGoEngine struct {
 	blacklistFile string
 
 	invalidatePath func(string)
+
+	reITA      *regexp.Regexp
+	reExclLang *regexp.Regexp
 }
 
 // TVEpisodeEntry is a single entry in the TV episode registry.
@@ -83,6 +87,7 @@ type TVEngineConfig struct {
 	// InvalidatePath, when set, is called after removing a stub file/dir so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
+	Language       config.LanguageConfig
 }
 
 // TV thresholds
@@ -105,34 +110,32 @@ const (
 )
 
 var (
-	reTV4K        = regexp.MustCompile(`(?i)2160p|4k|uhd`)
-	reTV1080p     = regexp.MustCompile(`(?i)1080p`)
-	reTVHDR       = regexp.MustCompile(`(?i)\bhdr\b|hdr10\+?|\bdv\b|dovi|dolby.?vision`)
-	reTVAtmos     = regexp.MustCompile(`(?i)atmos`)
-	reTV51        = regexp.MustCompile(`(?i)5\.1|dd5|ddp5|dts|truehd`)
-	reTVITA       = regexp.MustCompile(`(?i)ita|🇮🇹|multi|dual`)
-	reTVExclLang  = regexp.MustCompile(`🇪🇸|🇫🇷|🇩🇪|🇷🇺|🇨🇳|🇯🇵|🇰🇷|🇹🇭|🇵🇹|🇧🇷|🇺🇦|🇵🇱|🇳🇱|🇹🇷|🇸🇦|🇮🇳|🇨🇿|🇭🇺|🇷🇴`)
-	reTVSeeders   = regexp.MustCompile(`👤\s*(\d+)`)
+	reTV4K           = regexp.MustCompile(`(?i)2160p|4k|uhd`)
+	reTV1080p        = regexp.MustCompile(`(?i)1080p`)
+	reTVHDR          = regexp.MustCompile(`(?i)\bhdr\b|hdr10\+?|\bdv\b|dovi|dolby.?vision`)
+	reTVAtmos        = regexp.MustCompile(`(?i)atmos`)
+	reTV51           = regexp.MustCompile(`(?i)5\.1|dd5|ddp5|dts|truehd`)
+	reTVSeeders      = regexp.MustCompile(`👤\s*(\d+)`)
 	reTVFullpack     = regexp.MustCompile(`(?i)\b(season|complete|full|pack)\b`)
 	reTVRange        = regexp.MustCompile(`(?i)s\d+e\d+\s*-\s*e?\d+`)
 	reTVMultiEp      = regexp.MustCompile(`(?i)s\d+e\d+`)
 	reTVSeason       = regexp.MustCompile(`\.s\d{2}\.`)
 	reTVSeasonP      = regexp.MustCompile(`\ss\d{2}\s*\(`)
 	reTVSpecialTitle = regexp.MustCompile(`(?i)\b(special|christmas|bonus|extra|ova)\b`)
-	reTVSeasonN   = regexp.MustCompile(`[Ss](\d+)`)
-	reTVSeasonR   = regexp.MustCompile(`\bs(\d{1,2})\s*[-–]\s*s(\d{1,2})\b`)
-	reTVSeasonW   = regexp.MustCompile(`\bseasons?\s*(\d{1,2})\s*[-–]\s*(\d{1,2})\b`)
-	reTVCompleteS = regexp.MustCompile(`(?i)\b(complete\s+series|all\s+seasons|full\s+series)\b`)
-	reTVEpNum     = regexp.MustCompile(`[Ss](\d+)[Ee](\d+)`)
-	reTV1xEp      = regexp.MustCompile(`(\d+)x(\d+)`)
-	reTVFileName  = regexp.MustCompile(`(.+)_S(\d+)E(\d+)_([a-f0-9]{8})\.mkv$`)
-	reTVNonWord   = regexp.MustCompile(`[^a-z0-9]`)
-	reTVSanitize  = regexp.MustCompile(`[<>:"/\\|?*'"&]`)
-	reTVSpaces    = regexp.MustCompile(`\s+`)
-	reTVUnders    = regexp.MustCompile(`_+`)
-	reTVYear      = regexp.MustCompile(`\(?(\d{4})\)?`)
-	reTVQuality   = regexp.MustCompile(`\b(2160p|1080p|720p|4k|uhd|hdr|dv|dovi|web|bluray|remux)\b.*`)
-	reTVHashURL   = regexp.MustCompile(`link=([a-f0-9]{40})`)
+	reTVSeasonN      = regexp.MustCompile(`[Ss](\d+)`)
+	reTVSeasonR      = regexp.MustCompile(`\bs(\d{1,2})\s*[-–]\s*s(\d{1,2})\b`)
+	reTVSeasonW      = regexp.MustCompile(`\bseasons?\s*(\d{1,2})\s*[-–]\s*(\d{1,2})\b`)
+	reTVCompleteS    = regexp.MustCompile(`(?i)\b(complete\s+series|all\s+seasons|full\s+series)\b`)
+	reTVEpNum        = regexp.MustCompile(`[Ss](\d+)[Ee](\d+)`)
+	reTV1xEp         = regexp.MustCompile(`(\d+)x(\d+)`)
+	reTVFileName     = regexp.MustCompile(`(.+)_S(\d+)E(\d+)_([a-f0-9]{8})\.mkv$`)
+	reTVNonWord      = regexp.MustCompile(`[^a-z0-9]`)
+	reTVSanitize     = regexp.MustCompile(`[<>:"/\\|?*'"&]`)
+	reTVSpaces       = regexp.MustCompile(`\s+`)
+	reTVUnders       = regexp.MustCompile(`_+`)
+	reTVYear         = regexp.MustCompile(`\(?(\d{4})\)?`)
+	reTVQuality      = regexp.MustCompile(`\b(2160p|1080p|720p|4k|uhd|hdr|dv|dovi|web|bluray|remux)\b.*`)
+	reTVHashURL      = regexp.MustCompile(`link=([a-f0-9]{40})`)
 )
 
 var tvExcludedGenreIDs = map[int]bool{99: true, 10763: true, 10764: true, 10767: true, 16: true}
@@ -168,6 +171,8 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 		processedThisRun: make(map[string]bool),
 		blacklistFile:    blFile,
 		invalidatePath:   cfg.InvalidatePath,
+		reITA:            CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
+		reExclLang:       CompileLanguageRegex(nil, cfg.Language.ExcludedFlags),
 	}
 
 	e.registry = e.loadRegistry()
@@ -863,7 +868,7 @@ func (e *TVGoEngine) classifyStream(s prowlarr.Stream) *TVStream {
 		return nil
 	}
 
-	if reTVExclLang.MatchString(title) {
+	if e.reExclLang.MatchString(title) {
 		return nil
 	}
 
@@ -925,7 +930,7 @@ func (e *TVGoEngine) calculateQualityScore(text string, seeders int) int {
 		score += tv51Bonus
 	}
 
-	if reTVITA.MatchString(t) {
+	if e.reITA.MatchString(t) {
 		score += tvITABonus
 	}
 

@@ -20,6 +20,7 @@ import (
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
+	"tiramisu/internal/config"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -53,6 +54,9 @@ type MovieGoEngine struct {
 	blacklistFile string
 
 	invalidatePath func(string)
+
+	reITA      *regexp.Regexp
+	reExclLang *regexp.Regexp
 }
 
 // CacheEntry is a generic cache entry with timestamp.
@@ -87,6 +91,7 @@ type MovieEngineConfig struct {
 	StateDir     string
 	LogsDir      string
 	ProwlarrCfg  prowlarr.ConfigProwlarr
+	Language     config.LanguageConfig
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -131,8 +136,6 @@ var (
 	reM51        = regexp.MustCompile(`(?i)5\.1|dts|ddp5|ddp|dd\+|eac3|ac3`)
 	reMStereo    = regexp.MustCompile(`(?i)stereo|aac|mp3|2\.0`)
 	reMRemux     = regexp.MustCompile(`(?i)\bremux\b`)
-	reMITA       = regexp.MustCompile(`(?i)\bita\b|🇮🇹`)
-	reMExclLang  = regexp.MustCompile(`🇪🇸|🇫🇷|🇩🇪|🇷🇺|🇨🇳|🇯🇵|🇰🇷|🇹🇭|🇵🇹|🇧🇷`)
 	reMGarbage   = regexp.MustCompile(`(?i)camrip|hdcam|hdts|telesync|\bts\b|telecine|\btc\b|\bscr\b|screener|webscreener`)
 	reMSeeders   = regexp.MustCompile(`👤\s*(\d+)`)
 	reMHashURL   = regexp.MustCompile(`link=([a-f0-9]{40})`)
@@ -174,6 +177,9 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 		imdbCFile:      filepath.Join(cfg.StateDir, "movie_imdb_cache.json"),
 		blacklistFile:  filepath.Join(cfg.StateDir, "blacklist.json"),
 		invalidatePath: cfg.InvalidatePath,
+
+		reITA:      CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
+		reExclLang: CompileLanguageRegex(nil, cfg.Language.ExcludedFlags),
 	}
 
 	e.noMKVCache = e.loadCache(e.noMKVCFile)
@@ -568,7 +574,7 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) (*MovieStream, st
 	if reMGarbage.MatchString(fullText) {
 		return nil, "garbage"
 	}
-	if reMExclLang.MatchString(title) {
+	if e.reExclLang.MatchString(title) {
 		return nil, "excl_lang"
 	}
 	if e.isBlacklisted(title) {
@@ -647,7 +653,7 @@ func (e *MovieGoEngine) calculateMovieScore(text string, seeders int, sizeGB flo
 		score += mMovieRemuxBonus
 	}
 
-	if reMITA.MatchString(text) {
+	if e.reITA.MatchString(text) {
 		score += mMovieITABonus
 	}
 

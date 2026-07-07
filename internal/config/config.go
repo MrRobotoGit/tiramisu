@@ -77,6 +77,16 @@ type QualityScoringConfig struct {
 	TV     *TVQualityWeights `json:"tv,omitempty"`
 }
 
+// LanguageConfig controls preferred/excluded audio-language matching used
+// by the Movie and TV sync engines when scoring and filtering torrents.
+type LanguageConfig struct {
+	// PreferredTerms are case-insensitive, word-boundary-matched release-name terms (e.g. "ita", "multi", "dual").
+	PreferredTerms []string `json:"preferred_terms"`
+	// PreferredFlags/ExcludedFlags are ISO 3166-1 alpha-2 codes matched against flag emoji in indexer result lines.
+	PreferredFlags []string `json:"preferred_flags"`
+	ExcludedFlags  []string `json:"excluded_flags"`
+}
+
 // Config holds all configurable parameters for the FUSE proxy
 type Config struct {
 	// --- Internal / Derived Fields ---
@@ -187,6 +197,9 @@ type Config struct {
 	// --- Quality Scoring ---
 	QualityScoringConfig QualityScoringConfig `json:"quality_scoring"`
 
+	// --- Language Matching ---
+	Language LanguageConfig `json:"language"`
+
 	// --- Engine Scripts (populated in LoadConfig, not from JSON) ---
 	EngineScripts map[string]EngineConfig `json:"-"`
 
@@ -242,6 +255,15 @@ func LoadConfig() Config {
 		MaxCacheEntries:         10000,
 		DiskWarmupQuotaGB:       15,
 		WarmupHeadSizeMB:        64,
+
+		Language: LanguageConfig{
+			PreferredTerms: []string{"ita", "multi", "dual"},
+			PreferredFlags: []string{"IT"},
+			ExcludedFlags: []string{
+				"ES", "FR", "DE", "RU", "CN", "JP", "KR", "TH", "PT", "BR",
+				"UA", "PL", "NL", "TR", "SA", "IN", "CZ", "HU", "RO",
+			},
+		},
 
 		Scheduler: SchedulerConfig{
 			Enabled:       false, // off by default — won't break installs using cron

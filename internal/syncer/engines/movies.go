@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"tiramisu/internal/config"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -26,6 +27,7 @@ type MoviesSyncerConfig struct {
 	StateDir     string
 	LogsDir      string
 	ProwlarrCfg  prowlarr.ConfigProwlarr
+	Language     config.LanguageConfig
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -60,6 +62,7 @@ func NewMoviesSyncer(cfg MoviesSyncerConfig) *MoviesSyncer {
 		StateDir:       stateDir,
 		LogsDir:        logsDir,
 		ProwlarrCfg:    cfg.ProwlarrCfg,
+		Language:       cfg.Language,
 		InvalidatePath: cfg.InvalidatePath,
 	}
 

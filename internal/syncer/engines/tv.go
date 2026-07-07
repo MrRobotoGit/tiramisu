@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"tiramisu/internal/config"
 	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
@@ -27,6 +28,7 @@ type TVSyncerConfig struct {
 	StateDir     string
 	LogsDir      string
 	ProwlarrCfg  prowlarr.ConfigProwlarr
+	Language     config.LanguageConfig
 	DB           *metadb.DB // V1.7.1: Optional SQLite backend
 	// InvalidatePath, when set, is called after removing a stub file/dir so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
@@ -62,6 +64,7 @@ func NewTVSyncer(cfg TVSyncerConfig) *TVSyncer {
 		StateDir:       stateDir,
 		LogsDir:        logsDir,
 		ProwlarrCfg:    cfg.ProwlarrCfg,
+		Language:       cfg.Language,
 		InvalidatePath: cfg.InvalidatePath,
 	}
 

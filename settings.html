@@ -453,6 +453,149 @@
             margin-top: 2px;
         }
 
+        .chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--section-bg);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 5px 6px 5px 12px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .chip .flag {
+            font-size: 15px;
+        }
+
+        .chip button {
+            border: none;
+            background: rgba(100, 116, 139, 0.18);
+            color: var(--muted);
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            font-size: 12px;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+
+        .chip button:hover {
+            background: rgba(239, 68, 68, 0.25);
+            color: var(--error);
+        }
+
+        .add-flag-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1.5px dashed var(--border);
+            background: transparent;
+            color: var(--muted);
+            font-size: 12.5px;
+            font-weight: 600;
+            padding: 6px 12px 6px 10px;
+            border-radius: 999px;
+            cursor: pointer;
+        }
+
+        .add-flag-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .picker-anchor {
+            position: relative;
+            display: inline-block;
+        }
+
+        .picker {
+            position: absolute;
+            top: calc(100% + 8px);
+            left: 0;
+            width: 240px;
+            max-height: 260px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.25);
+            padding: 10px;
+            z-index: 20;
+            display: none;
+        }
+
+        .picker.open {
+            display: block;
+        }
+
+        .picker input[type="text"] {
+            width: 100%;
+            height: 32px;
+            padding: 0 8px;
+            border: 1.5px solid var(--border);
+            border-radius: 6px;
+            font-size: 13px;
+            background: var(--input-bg);
+            color: var(--text);
+            margin-bottom: 8px;
+        }
+
+        .picker-list {
+            max-height: 180px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .picker-item {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: var(--text);
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        .picker-item:hover {
+            background: var(--section-bg);
+        }
+
+        .picker-item .code {
+            margin-left: auto;
+            font-size: 10.5px;
+            color: var(--muted);
+        }
+
+        .picker-item[disabled] {
+            opacity: 0.35;
+            cursor: default;
+        }
+
+        .picker-item[disabled]:hover {
+            background: none;
+        }
+
         .live-badge {
             display: inline-block;
             font-size: 10px;
@@ -741,6 +884,47 @@
                                 <input type="text" name="prowlarr_url" data-nested="prowlarr.url">
                                 <div class="hint">Prowlarr base URL (e.g. http://192.168.1.250:9696)</div>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <div class="form-section-title">Languages</div>
+
+                        <div class="form-group">
+                            <label>Preferred</label>
+                            <input type="text" name="language_preferred_terms" id="language_preferred_terms"
+                                placeholder="ita, multi, dual">
+                            <div class="hint">Comma-separated terms found in release naming — grants a scoring
+                                bonus</div>
+                        </div>
+                        <div class="chip-row" id="preferred-flags-row">
+                            <span class="picker-anchor">
+                                <button type="button" class="add-flag-btn"
+                                    onclick="toggleLangPicker('preferred')">+ Add flag</button>
+                                <div class="picker" id="picker-preferred">
+                                    <input type="text" placeholder="Search country or ISO code..."
+                                        aria-label="Search country or ISO code"
+                                        oninput="filterLangPicker(this, 'preferred')">
+                                    <div class="picker-list" id="picker-list-preferred"></div>
+                                </div>
+                            </span>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>Excluded</label>
+                            <div class="hint">Torrents matching these flags are filtered out entirely</div>
+                        </div>
+                        <div class="chip-row" id="excluded-flags-row">
+                            <span class="picker-anchor">
+                                <button type="button" class="add-flag-btn"
+                                    onclick="toggleLangPicker('excluded')">+ Add flag</button>
+                                <div class="picker" id="picker-excluded">
+                                    <input type="text" placeholder="Search country or ISO code..."
+                                        aria-label="Search country or ISO code"
+                                        oninput="filterLangPicker(this, 'excluded')">
+                                    <div class="picker-list" id="picker-list-excluded"></div>
+                                </div>
+                            </span>
                         </div>
                     </div>
 
@@ -1205,6 +1389,118 @@
 
         // --- Tiramisu Logic ---
         let originalEngine = {};
+
+        // UI-only convenience list for the flag picker's search-by-name.
+        // The emoji itself is always generated from the ISO code (toFlag),
+        // never looked up here — this list only powers the picker's text search.
+        const LANG_COUNTRIES = [
+            ["IT", "Italy"], ["ES", "Spain"], ["FR", "France"], ["DE", "Germany"],
+            ["RU", "Russia"], ["CN", "China"], ["JP", "Japan"], ["KR", "Korea"],
+            ["TH", "Thailand"], ["PT", "Portugal"], ["BR", "Brazil"], ["UA", "Ukraine"],
+            ["PL", "Poland"], ["NL", "Netherlands"], ["TR", "Turkey"], ["SA", "Saudi Arabia"],
+            ["IN", "India"], ["CZ", "Czech Republic"], ["HU", "Hungary"], ["RO", "Romania"],
+            ["GB", "United Kingdom"], ["US", "United States"], ["GR", "Greece"], ["SE", "Sweden"],
+        ];
+
+        function toFlag(code) {
+            const upper = String(code || '').toUpperCase();
+            if (!/^[A-Z]{2}$/.test(upper)) return '';
+            return String.fromCodePoint(...[...upper].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+        }
+
+        function currentLangCodes(rowId) {
+            return [...document.getElementById(rowId).querySelectorAll('.chip')].map(c => c.dataset.code);
+        }
+
+        function renderLangChip(rowId, code, name) {
+            const row = document.getElementById(rowId);
+            const anchor = row.querySelector('.picker-anchor');
+            const chip = document.createElement('span');
+            chip.className = 'chip';
+            chip.dataset.code = code;
+
+            const flagSpan = document.createElement('span');
+            flagSpan.className = 'flag';
+            flagSpan.textContent = toFlag(code);
+            chip.appendChild(flagSpan);
+            chip.appendChild(document.createTextNode(' ' + name + ' '));
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.title = 'Remove';
+            removeBtn.textContent = '✕';
+            removeBtn.onclick = () => { chip.remove(); rebuildLangPicker(rowId === 'preferred-flags-row' ? 'preferred' : 'excluded'); };
+            chip.appendChild(removeBtn);
+
+            row.insertBefore(chip, anchor);
+        }
+
+        function setLangChips(rowId, codes) {
+            const row = document.getElementById(rowId);
+            row.querySelectorAll('.chip').forEach(c => c.remove());
+            (codes || []).forEach(code => {
+                const entry = LANG_COUNTRIES.find(([c]) => c === code);
+                renderLangChip(rowId, code, entry ? entry[1] : code);
+            });
+        }
+
+        function rebuildLangPicker(which) {
+            const rowId = which === 'preferred' ? 'preferred-flags-row' : 'excluded-flags-row';
+            const list = document.getElementById(`picker-list-${which}`);
+            const present = new Set(currentLangCodes(rowId));
+            list.innerHTML = "";
+            LANG_COUNTRIES.forEach(([code, name]) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'picker-item';
+                const isPresent = present.has(code);
+                if (isPresent) btn.disabled = true;
+
+                const flagSpan = document.createElement('span');
+                flagSpan.className = 'flag';
+                flagSpan.textContent = toFlag(code);
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = name;
+                const codeSpan = document.createElement('span');
+                codeSpan.className = 'code';
+                codeSpan.textContent = code;
+                btn.appendChild(flagSpan);
+                btn.appendChild(nameSpan);
+                btn.appendChild(codeSpan);
+
+                btn.onclick = () => {
+                    if (isPresent) return;
+                    renderLangChip(rowId, code, name);
+                    rebuildLangPicker(which);
+                    document.getElementById(`picker-${which}`).classList.remove('open');
+                };
+                list.appendChild(btn);
+            });
+        }
+
+        function toggleLangPicker(which) {
+            document.querySelectorAll('.picker').forEach(p => {
+                if (p.id !== `picker-${which}`) p.classList.remove('open');
+            });
+            document.getElementById(`picker-${which}`).classList.toggle('open');
+        }
+
+        function filterLangPicker(input, which) {
+            const q = input.value.trim().toLowerCase();
+            document.querySelectorAll(`#picker-list-${which} .picker-item`).forEach(item => {
+                item.style.display = item.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+            });
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.picker-anchor')) {
+                document.querySelectorAll('.picker.open').forEach(p => p.classList.remove('open'));
+            }
+        });
+
+        rebuildLangPicker('preferred');
+        rebuildLangPicker('excluded');
+
         const ENGINE_ROOT_KEYS = [
             'physical_source_path', 'fuse_mount_path',
             'master_concurrency_limit', 'read_ahead_budget_mb',
@@ -1259,6 +1555,15 @@
                     form.querySelector('[data-nested="prowlarr.url"]').value = pr.url || pr.URL || "";
                 }
                 updateProwlarrState();
+                const lang = originalEngine.language || originalEngine.Language;
+                if (lang) {
+                    const terms = lang.preferred_terms || lang.PreferredTerms || [];
+                    document.getElementById('language_preferred_terms').value = terms.join(', ');
+                    setLangChips('preferred-flags-row', lang.preferred_flags || lang.PreferredFlags || []);
+                    setLangChips('excluded-flags-row', lang.excluded_flags || lang.ExcludedFlags || []);
+                    rebuildLangPicker('preferred');
+                    rebuildLangPicker('excluded');
+                }
                 markCouplingLoaded();
             } catch (e) { console.error("Engine load error", e); }
         }
@@ -1322,6 +1627,14 @@
                 enabled: formData.has('prowlarr_enabled'),
                 api_key: formData.get('prowlarr_api_key') || oldProwlarr.api_key || "",
                 url: formData.get('prowlarr_url') || oldProwlarr.url || ""
+            };
+
+            const termsRaw = formData.get('language_preferred_terms');
+            const terms = (termsRaw ?? '').split(',').map(s => s.trim()).filter(Boolean);
+            data.language = {
+                preferred_terms: terms,
+                preferred_flags: currentLangCodes('preferred-flags-row'),
+                excluded_flags: currentLangCodes('excluded-flags-row'),
             };
 
             const res = await fetch('/api/config', {
