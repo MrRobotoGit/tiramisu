@@ -1338,10 +1338,13 @@ func (t *Torrent) maybeEjectOutlierPeer(now time.Time) {
 		t.churnCooldown[host] = now.Add(peerEjectCooldown)
 	}
 	t.peerEjectCount.Add(1)
+	uselessFor := "ever (no useful chunk received)"
+	if !worst.lastUsefulChunkReceived.IsZero() {
+		uselessFor = now.Sub(worst.lastUsefulChunkReceived).Round(time.Second).String()
+	}
 	t.logger.WithDefaultLevel(log.Warning).Printf(
-		"[PeerEject] hash=%s dropping outlier peer %v: ewma %.0f B/s vs swarm median %.0f B/s, no useful chunk for %v",
-		t.infoHash.HexString(), worst.RemoteAddr, worst.ewmaRate, median,
-		now.Sub(worst.lastUsefulChunkReceived).Round(time.Second))
+		"[PeerEject] hash=%s dropping outlier peer %v: ewma %.0f B/s vs swarm median %.0f B/s, no useful chunk for %s",
+		t.infoHash.HexString(), worst.RemoteAddr, worst.ewmaRate, median, uselessFor)
 	worst.drop()
 	t.openNewConns()
 }
