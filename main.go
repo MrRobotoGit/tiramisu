@@ -3413,19 +3413,20 @@ func main() {
 
 		// Task 4: hedge counters live per-Torrent on the fork - sum trigger count across active
 		// torrents, report circuit breaker as open if any active torrent currently has it tripped.
-		var hedgeTriggerTotal int64
+		var hedgeTriggerTotal, peerEjectTotal int64
 		hedgeCircuitOpenAny := false
 		for _, tr := range torr.ListActiveTorrent() {
 			if tr.Torrent == nil {
 				continue
 			}
 			hedgeTriggerTotal += tr.Torrent.HedgeTriggerCount()
+			peerEjectTotal += tr.Torrent.PeerEjectCount()
 			if tr.Torrent.HedgeCircuitOpen() {
 				hedgeCircuitOpenAny = true
 			}
 		}
 
-		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "v304_banned_peers":%d}`,
+		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d}`,
 			AppVersion,
 			gc().ConfigPath,
 			time.Since(startTime),
@@ -3443,7 +3444,7 @@ func main() {
 			natPort,
 			updater.LatestVersion(), updater.UpdateAvailable(),
 			warmupBucketsJSON,
-			hedgeTriggerTotal, hedgeCircuitOpenAny, torr.V304BannedCount())
+			hedgeTriggerTotal, hedgeCircuitOpenAny, fetchFlightDedupCount.Load(), peerEjectTotal, torr.V304BannedCount())
 	})
 
 	http.HandleFunc("/webhook", handlePlexWebhook)

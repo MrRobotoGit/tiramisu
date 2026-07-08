@@ -55,6 +55,13 @@ type (
 		lastUsefulChunkReceived time.Time
 		lastChunkSent           time.Time
 
+		// Recent-throughput EWMA for outlier ejection (see maybeEjectOutlierPeer); unlike
+		// downloadRate()'s lifetime average, this reflects current behavior. Guarded by t.cl's lock.
+		ewmaRate         float64
+		ewmaSeeded       bool // false until first sample - distinguishes "no data" from a real zero rate
+		ewmaLastBytes    int64
+		ewmaLastSampleAt time.Time
+
 		// Stuff controlled by the local peer.
 		needRequestUpdate    string
 		requestState         request_strategy.PeerRequestState

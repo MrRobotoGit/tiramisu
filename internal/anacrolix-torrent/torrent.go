@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/netip"
 	"net/url"
 	"runtime"
@@ -129,6 +130,12 @@ type Torrent struct {
 	// hedgeWatchdogRunning guards against spawning more than one hedgeWatchdog goroutine per
 	// warmup-active cycle - SetWarmupActive(true) is called repeatedly (once per WriteChunk).
 	hedgeWatchdogRunning atomic.Bool
+
+	// Outlier peer ejection pacing (see samplePeerEwma/maybeEjectOutlierPeer). Timestamps guarded
+	// by t.cl's lock; peerEjectCount is atomic for lock-free /metrics reads.
+	lastPeerEwmaSampleAt time.Time
+	lastPeerEjectCheckAt time.Time
+	peerEjectCount       atomic.Int64
 
 	// The order pieces are requested if there's no stronger reason like availability or priority.
 	pieceRequestOrder []int
@@ -1033,6 +1040,12 @@ func (t *Torrent) HedgeCircuitOpen() bool {
 	return t.hedgeCircuitOpen.Load()
 }
 
+// PeerEjectCount returns the total number of outlier peers proactively ejected from this
+// torrent (see maybeEjectOutlierPeer), for /metrics.
+func (t *Torrent) PeerEjectCount() int64 {
+	return t.peerEjectCount.Load()
+}
+
 const (
 	hedgeWatchdogInterval = 250 * time.Millisecond
 	// hedgeCircuitBreakerThreshold: reviewed 2026-07-03 against real production data (a Plex
@@ -1063,6 +1076,10 @@ func (t *Torrent) hedgeWatchdog() {
 			continue
 		}
 		t.checkAndFireHedges()
+		// Shares this tick's gates with hedging - same reasoning for skipping when saturated.
+		now := time.Now()
+		t.samplePeerEwma(now)
+		t.maybeEjectOutlierPeer(now)
 		t.cl.unlock()
 	}
 }
@@ -1228,6 +1245,136 @@ func (t *Torrent) warmupP95(size int64) (p95 time.Duration, ok bool) {
 		idx = len(sorted) - 1
 	}
 	return sorted[idx], true
+}
+
+const (
+	peerEwmaSampleInterval = 5 * time.Second
+	peerEwmaAlpha          = 0.3
+	peerEjectCheckInterval = 10 * time.Second
+	peerEjectMinConns      = 8   // never eject below this swarm size
+	peerEjectMedianRatio   = 0.2 // outlier threshold: EWMA below this fraction of swarm median
+	peerEjectUselessAfter  = 10 * time.Second
+	peerEjectGracePeriod   = 30 * time.Second // don't judge connections younger than this
+	peerEjectCooldown      = 60 * time.Second // keep ejected IP out of outgoing dials
+)
+
+// samplePeerEwma updates each connected peer's throughput EWMA. Called from the hedge watchdog
+// tick; self-paces to peerEwmaSampleInterval. Client lock must be held.
+func (t *Torrent) samplePeerEwma(now time.Time) {
+	if now.Sub(t.lastPeerEwmaSampleAt) < peerEwmaSampleInterval {
+		return
+	}
+	t.lastPeerEwmaSampleAt = now
+	for c := range t.conns {
+		useful := c._stats.BytesReadUsefulData.Int64()
+		if c.ewmaLastSampleAt.IsZero() {
+			c.ewmaLastBytes = useful
+			c.ewmaLastSampleAt = now
+			continue
+		}
+		dt := now.Sub(c.ewmaLastSampleAt).Seconds()
+		if dt <= 0 {
+			continue
+		}
+		inst := float64(useful-c.ewmaLastBytes) / dt
+		c.ewmaLastBytes = useful
+		c.ewmaLastSampleAt = now
+		if !c.ewmaSeeded {
+			c.ewmaRate = inst
+			c.ewmaSeeded = true
+		} else {
+			c.ewmaRate = peerEwmaAlpha*inst + (1-peerEwmaAlpha)*c.ewmaRate
+		}
+	}
+}
+
+// maybeEjectOutlierPeer drops at most one statistical outlier connection per check, when the
+// pool is full and a replacement is queued in t.peers. Never ejects the sole source of an
+// imminently-needed piece. Client lock must be held.
+func (t *Torrent) maybeEjectOutlierPeer(now time.Time) {
+	if now.Sub(t.lastPeerEjectCheckAt) < peerEjectCheckInterval {
+		return
+	}
+	t.lastPeerEjectCheckAt = now
+	if len(t.conns) < peerEjectMinConns || len(t.conns) < t.maxEstablishedConns-2 {
+		return
+	}
+	if t.peers.Len() == 0 {
+		return // no queued replacement - a slow slot beats an empty one
+	}
+	rates := make([]float64, 0, len(t.conns))
+	var worst *PeerConn
+	for c := range t.conns {
+		if !c.ewmaSeeded || now.Sub(c.completedHandshake) < peerEjectGracePeriod {
+			continue
+		}
+		rates = append(rates, c.ewmaRate)
+		if worst == nil || c.ewmaRate < worst.ewmaRate {
+			worst = c
+		}
+	}
+	if worst == nil || len(rates) < peerEjectMinConns {
+		return
+	}
+	sort.Float64s(rates)
+	median := rates[len(rates)/2]
+	if median <= 0 {
+		return // swarm-wide stall (pause, tunnel hiccup) - nothing to single out
+	}
+	if worst.ewmaRate >= median*peerEjectMedianRatio {
+		return
+	}
+	if now.Sub(worst.lastUsefulChunkReceived) < peerEjectUselessAfter {
+		return
+	}
+	if t.peerIsSolePieceSource(worst) {
+		return
+	}
+	host, _, _ := net.SplitHostPort(worst.RemoteAddr.String())
+	if host != "" {
+		if t.churnCooldown == nil {
+			t.churnCooldown = make(map[string]time.Time)
+		}
+		t.churnCooldown[host] = now.Add(peerEjectCooldown)
+	}
+	t.peerEjectCount.Add(1)
+	t.logger.WithDefaultLevel(log.Warning).Printf(
+		"[PeerEject] hash=%s dropping outlier peer %v: ewma %.0f B/s vs swarm median %.0f B/s, no useful chunk for %v",
+		t.infoHash.HexString(), worst.RemoteAddr, worst.ewmaRate, median,
+		now.Sub(worst.lastUsefulChunkReceived).Round(time.Second))
+	worst.drop()
+	t.openNewConns()
+}
+
+// peerIsSolePieceSource reports whether c is the only connected peer with an incomplete piece
+// in the active warmup/playback-pressure window.
+func (t *Torrent) peerIsSolePieceSource(c *PeerConn) bool {
+	var begin, end pieceIndex
+	var ok bool
+	if t.warmupActive.Load() {
+		begin, end, ok = t.warmupPieceRange(hedgeWarmupPieceWindow)
+	} else {
+		begin, end, ok = t.playbackPressureRange()
+	}
+	if !ok {
+		return false
+	}
+	for i := begin; i < end; i++ {
+		if t.pieceComplete(i) || !c.peerHasPiece(i) {
+			continue
+		}
+		held := false
+		for other := range t.conns {
+			if other != c && other.peerHasPiece(i) {
+				held = true
+				break
+			}
+		}
+		if !held {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
@@ -1795,6 +1942,14 @@ func (t *Torrent) openNewConns() (initiated int) {
 			return
 		}
 		p := t.peers.PopMax()
+		// Skip IPs churned/ejected recently - avoid immediately re-filling a freed slot.
+		if t.cl.config.AggressivePeerManagement && len(t.churnCooldown) > 0 {
+			if host, _, _ := net.SplitHostPort(p.Addr.String()); host != "" {
+				if until, ok := t.churnCooldown[host]; ok && time.Now().Before(until) {
+					continue
+				}
+			}
+		}
 		opts := outgoingConnOpts{
 			peerInfo:                 p,
 			t:                        t,
