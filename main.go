@@ -167,9 +167,19 @@ var reEmptyNumber = regexp.MustCompile(`"(\w+)":\s*,`)
 
 var activeHandles sync.Map      // key: *MkvHandle, value: bool
 var inFlightPrefetches sync.Map // key: "path:offset", value: bool
-var activePumps sync.Map        // Map[string]*NativePumpState — one pump per file path
-var pumpTimers sync.Map         // key: path, value: *time.Timer
-var priorityTimers sync.Map     // key: path, value: *time.Timer
+
+// inFlightFetches dedups the sync FetchBlock fallback: concurrent misses in the same chunk
+// share one fetch instead of each running FetchBlock independently.
+var inFlightFetches sync.Map // key: "path:chunkAlignedOffset", value: *fetchFlight
+var fetchFlightDedupCount atomic.Int64
+
+type fetchFlight struct {
+	done chan struct{} // closed by the leader once its result is in raCache
+}
+
+var activePumps sync.Map    // Map[string]*NativePumpState — one pump per file path
+var pumpTimers sync.Map     // key: path, value: *time.Timer
+var priorityTimers sync.Map // key: path, value: *time.Timer
 
 // OpenTracker: contatori O(1) per handle aperti (per hash e per path).
 // Permette query rapide da cleanup e priority timer senza scansionare activeHandles.
@@ -1511,7 +1521,8 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			if prevOff == -1 && h.hash != "" {
 				warmChunk := raCache.ChunkSize(h.path)
 				warmStart := (off / warmChunk) * warmChunk
-				warmKey := fmt.Sprintf("warm:%s:%d", h.path, warmStart)
+				// Unified with predictive-prefetch key format to avoid double-fetching the same chunk.
+				warmKey := fmt.Sprintf("%s:%d", h.path, warmStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(warmKey, true); !loaded {
 					// Non-blocking slot check before spawning: under a saturated semaphore (e.g.
 					// a Plex scan burst touching hundreds of files), spawning first and waiting
@@ -1598,7 +1609,8 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			if h.hash != "" {
 				warmChunk := raCache.ChunkSize(h.path)
 				warmStart := (off / warmChunk) * warmChunk
-				warmKey := fmt.Sprintf("warm:%s:%d", h.path, warmStart)
+				// Unified with predictive-prefetch key format to avoid double-fetching the same chunk.
+				warmKey := fmt.Sprintf("%s:%d", h.path, warmStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(warmKey, true); !loaded {
 					// See the matching comment on the other WarmLanding site above: non-blocking
 					// slot check before spawning avoids creating a goroutine that just blocks.
@@ -1872,6 +1884,38 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	// If cache miss, use FetchBlock. Retry up to 3 times if torrent not ready (async Wake).
 	var buf []byte
 	var n int
+
+	// Dedup concurrent misses in the same chunk: leader fetches, followers wait and copy.
+	if h.hash != "" {
+		flightChunk := raCache.ChunkSize(h.path)
+		flightKey := fmt.Sprintf("%s:%d", h.path, (off/flightChunk)*flightChunk)
+		newFlight := &fetchFlight{done: make(chan struct{})}
+		if val, loaded := inFlightFetches.LoadOrStore(flightKey, newFlight); loaded {
+			fl := val.(*fetchFlight)
+			select {
+			case <-fl.done:
+			case <-fuseCtx.Done():
+				return nil, syscall.EINTR
+			}
+			if nCopy := raCache.CopyTo(h.path, off, end, dest); nCopy > 0 {
+				fetchFlightDedupCount.Add(1)
+				timing.UsedCache = true
+				timing.BytesRead = nCopy
+				atomic.StoreInt64(&h.lastOff, off)
+				h.mu.Lock()
+				h.lastLen = nCopy
+				h.lastTime = now
+				h.mu.Unlock()
+				return fuse.ReadResultData(dest[:nCopy]), 0
+			}
+			// Leader failed or missed our range — fetch directly, don't re-register.
+		} else {
+			defer func() {
+				inFlightFetches.Delete(flightKey)
+				close(newFlight.done)
+			}()
+		}
+	}
 
 	if h.hash != "" {
 		bufPtr := readBufferPool.Get().(*[]byte)
