@@ -737,11 +737,6 @@
                         <div class="form-section-title">FUSE Timing & Buffers</div>
                         <div class="form-grid">
                             <div class="form-group">
-                                <label>Read Buffer (KB)</label>
-                                <input type="number" name="read_buffer_size_kb">
-                                <div class="hint">OS read buffer (Samba: 1024)</div>
-                            </div>
-                            <div class="form-group">
                                 <label>FUSE Block (Bytes)</label>
                                 <input type="number" name="fuse_block_size_bytes">
                                 <div class="hint">FUSE block size (Samba Turbo: 1048576)</div>
@@ -1504,10 +1499,10 @@
         const ENGINE_ROOT_KEYS = [
             'physical_source_path', 'fuse_mount_path',
             'master_concurrency_limit', 'read_ahead_budget_mb',
-            'streaming_threshold_kb', 'read_buffer_size_kb', 'write_buffer_size_kb',
+            'streaming_threshold_kb',
             'fuse_block_size_bytes', 'attr_timeout_seconds', 'entry_timeout_seconds',
             'negative_timeout_seconds', 'metadata_cache_size_mb', 'max_cache_entries',
-            'cache_cleanup_interval_min', 'http_client_timeout_seconds', 'max_retry_attempts',
+            'cache_cleanup_interval_min', 'max_retry_attempts',
             'retry_delay_ms', 'gostorm_url', 'rescue_grace_period_seconds',
             'rescue_cooldown_hours', 'metrics_port', 'disk_warmup_quota_gb',
             'log_level', 'proxy_listen_port', 'blocklist_url',

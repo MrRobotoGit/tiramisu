@@ -97,8 +97,6 @@ type Config struct {
 	MasterConcurrencyLimit int    `json:"master_concurrency_limit"` // Global limit for concurrent HTTP requests to GoStorm
 	ReadAheadBudgetMB      int64  `json:"read_ahead_budget_mb"`     // Global budget for read-ahead in MB
 	MetadataCacheSizeMB    int64  `json:"metadata_cache_size_mb"`   // Size of metadata LRU cache in MB (V178)
-	WriteBufferSizeKB      int    `json:"write_buffer_size_kb"`     // Size of write buffer in KB
-	ReadBufferSizeKB       int    `json:"read_buffer_size_kb"`
 	FuseBlockSize          int    `json:"fuse_block_size_bytes"`
 	StreamingThresholdKB   int64  `json:"streaming_threshold_kb"`
 	LogLevel               string `json:"log_level"`
@@ -109,7 +107,6 @@ type Config struct {
 	NegativeTimeoutSeconds float64 `json:"negative_timeout_seconds"`
 
 	// --- HTTP Resilience ---
-	HTTPClientTimeoutSeconds int `json:"http_client_timeout_seconds"`
 	MaxRetryAttempts         int `json:"max_retry_attempts"`
 	RetryDelayMS             int `json:"retry_delay_ms"`
 	RescueGracePeriodSeconds int `json:"rescue_grace_period_seconds"`
@@ -151,20 +148,14 @@ type Config struct {
 	MaxConcurrentHTTP       int           `json:"-"`
 	RateLimitRequestsPerSec int           `json:"-"`
 	PreloadWorkers          int           `json:"-"`
-	MaxIdleConns            int           `json:"-"`
-	MaxIdleConnsPerHost     int           `json:"-"`
 	MaxConnsPerHost         int           `json:"-"`
 	ConcurrencyLimit        int           `json:"-"`
-	HTTPConnectTimeout      time.Duration `json:"-"`
-	HTTPReadTimeout         time.Duration `json:"-"`
 	KeepaliveInterval       time.Duration `json:"-"`
 	KeepaliveIdleStart      time.Duration `json:"-"`
 	KeepaliveMaxIdle        time.Duration `json:"-"`
 	CacheTTL                time.Duration `json:"-"`
 	UID                     uint32        `json:"-"`
 	GID                     uint32        `json:"-"`
-	WriteBufferSize         int           `json:"-"`
-	ReadBufferSize          int           `json:"-"`
 
 	// --- Disk Warmup ---
 	DiskWarmupQuotaGB int64 `json:"disk_warmup_quota_gb"` // Total SSD quota for warmup cache (default: 32)
@@ -232,8 +223,6 @@ func LoadConfig() Config {
 		MasterConcurrencyLimit: 25,
 		ReadAheadBudgetMB:      256,
 		MetadataCacheSizeMB:    50, // Default 50MB for metadata
-		WriteBufferSizeKB:      64,
-		ReadBufferSizeKB:       64,
 		FuseBlockSize:          1048576,
 		StreamingThresholdKB:   128,
 		LogLevel:               "INFO",
@@ -242,7 +231,6 @@ func LoadConfig() Config {
 		EntryTimeoutSeconds:    1.0,
 		NegativeTimeoutSeconds: 0.0,
 
-		HTTPClientTimeoutSeconds: 30,
 		MaxRetryAttempts:         6,
 		RetryDelayMS:             500,
 
@@ -448,8 +436,6 @@ func (c *Config) finalize() {
 	// Sync legacy fields with unified master limit
 	c.ConcurrencyLimit = c.MasterConcurrencyLimit
 	c.MaxConcurrentHTTP = c.MasterConcurrencyLimit
-	c.MaxIdleConns = c.MasterConcurrencyLimit
-	c.MaxIdleConnsPerHost = c.MasterConcurrencyLimit
 	c.MaxConnsPerHost = c.MasterConcurrencyLimit
 
 	// Map JSON fields to internal logic fields
@@ -465,12 +451,7 @@ func (c *Config) finalize() {
 		c.MetadataCacheSize = 1 * 1024 * 1024 // Min 1MB
 	}
 
-	// Calculate buffer sizes in bytes
-	c.WriteBufferSize = c.WriteBufferSizeKB * 1024
-	c.ReadBufferSize = c.ReadBufferSizeKB * 1024
 	c.StreamingThreshold = c.StreamingThresholdKB * 1024
-	c.HTTPConnectTimeout = time.Duration(c.HTTPClientTimeoutSeconds) * time.Second
-	c.HTTPReadTimeout = 45 * time.Second // Keep fixed for now
 	c.PreloadWorkers = c.PreloadWorkersCount
 	if c.MaxConcurrentPrefetch <= 0 {
 		c.MaxConcurrentPrefetch = 3 // Safety fallback
@@ -503,12 +484,12 @@ func (c *Config) LogConfig(logger *log.Logger) {
 	logger.Printf("Source: %s", c.ConfigPath)
 	logger.Printf("MasterConcurrencyLimit: %d", c.MasterConcurrencyLimit)
 	logger.Printf("ReadAheadBudget: %d MB", c.ReadAheadBudgetMB)
-	logger.Printf("Buffers (W/R): %d KB / %d KB (Block: %d)", c.WriteBufferSizeKB, c.ReadBufferSizeKB, c.FuseBlockSize)
+	logger.Printf("FUSE Block Size: %d", c.FuseBlockSize)
 	logger.Printf("StreamingThreshold: %d KB", c.StreamingThresholdKB)
 	logger.Printf("LogLevel: %s", c.LogLevel)
 	logger.Printf("GoStormBaseURL: %s", c.GoStormBaseURL)
 	logger.Printf("FUSE Timeouts (Attr/Entry/Neg): %.1f/%.1f/%.1f", c.AttrTimeoutSeconds, c.EntryTimeoutSeconds, c.NegativeTimeoutSeconds)
-	logger.Printf("HTTP Connect Timeout: %ds, Retries: %d, Delay: %dms", c.HTTPClientTimeoutSeconds, c.MaxRetryAttempts, c.RetryDelayMS)
+	logger.Printf("HTTP Retries: %d, Delay: %dms", c.MaxRetryAttempts, c.RetryDelayMS)
 	logger.Printf("Preload Engine: Workers=%d, Delay=%dms", c.PreloadWorkersCount, c.PreloadInitialDelayMS)
 
 	logger.Printf("Cache Management: Cleanup=%dm, MaxEntries=%d", c.CacheCleanupIntervalMin, c.MaxCacheEntries)
