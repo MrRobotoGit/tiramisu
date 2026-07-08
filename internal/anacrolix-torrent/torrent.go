@@ -2775,18 +2775,25 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 				}
 			}
 
-			// V304: Threshold-based eviction — ban any peer with >= 3 bad pieces
-			// regardless of whether they are the sole dirtier.
-			// LoadOrStore ensures each IP is banned and logged only once per session.
+			// V304: Threshold-based eviction — ban any peer whose IP accumulates >= 3 bad
+			// pieces, counted per IP (not per connection) so reconnects don't reset the tally.
+			// LoadOrStore ensures each IP is banned and logged only once.
 			const badPeerThreshold int64 = 3
 			for _, c := range bannableTouchers {
-				if c.stats().PiecesDirtiedBad.Int64() >= badPeerThreshold {
-					ipStr := c.remoteIp().String()
+				ip := c.remoteIp()
+				if ip == nil {
+					continue
+				}
+				ipStr := ip.String()
+				if n := v304AddCorrupt(ipStr); n >= badPeerThreshold {
 					if _, alreadyBanned := v304BannedIPs.LoadOrStore(ipStr, struct{}{}); !alreadyBanned {
 						t.logger.Levelf(log.Warning,
-							"[AdaptiveShield] evicting peer %v: %d corrupt pieces (threshold %d) — session ban applied",
-							c.remoteIp(), c.stats().PiecesDirtiedBad.Int64(), badPeerThreshold)
+							"[AdaptiveShield] evicting peer %v: %d corrupt pieces (threshold %d) — ban applied",
+							ipStr, n, badPeerThreshold)
 						c.ban()
+						if v304OnBan != nil {
+							go v304OnBan(ipStr) // goroutine: no IO under cl lock
+						}
 					}
 				}
 			}

@@ -54,6 +54,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -3332,6 +3333,20 @@ func main() {
 				restorePlaybackStates(stateDB)
 				registry.SetStateDir(GetStateDir())
 				logger.Printf("[StateDB] Active: %s", dbPath)
+
+				// V304 ban persistence: restore prior bans (30-day TTL) and persist new ones.
+				if ips, err := stateDB.LoadV304Bans(30 * 24 * time.Hour); err != nil {
+					logger.Printf("WARNING: Failed to load V304 bans: %v", err)
+				} else if len(ips) > 0 {
+					torrent.V304LoadBans(ips)
+					logger.Printf("[V304] Restored %d persisted peer bans", len(ips))
+				}
+				banDB := stateDB
+				torrent.V304SetOnBan(func(ip string) {
+					if err := banDB.SaveV304Ban(ip); err != nil {
+						logger.Printf("WARNING: Failed to persist V304 ban for %s: %v", ip, err)
+					}
+				})
 			}
 		}
 	}
