@@ -55,8 +55,9 @@ type MovieGoEngine struct {
 
 	invalidatePath func(string)
 
-	reITA      *regexp.Regexp
-	reExclLang *regexp.Regexp
+	reITA         *regexp.Regexp
+	reExclLang    *regexp.Regexp
+	exclLanguages map[string]bool
 }
 
 // CacheEntry is a generic cache entry with timestamp.
@@ -178,8 +179,9 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 		blacklistFile:  filepath.Join(cfg.StateDir, "blacklist.json"),
 		invalidatePath: cfg.InvalidatePath,
 
-		reITA:      CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
-		reExclLang: CompileLanguageRegex(nil, cfg.Language.ExcludedFlags),
+		reITA:         CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
+		reExclLang:    CompileLanguageRegex(ExcludedTitleTerms(cfg.Language.ExcludedFlags), cfg.Language.ExcludedFlags),
+		exclLanguages: ExcludedLanguageSet(cfg.Language.ExcludedFlags),
 	}
 
 	e.noMKVCache = e.loadCache(e.noMKVCFile)
@@ -288,7 +290,7 @@ func (e *MovieGoEngine) discoverMovies(ctx context.Context) ([]tmdb.Movie, error
 			continue
 		}
 		for _, m := range movies {
-			if !seen[m.ID] {
+			if !seen[m.ID] && !e.exclLanguages[m.Language] {
 				seen[m.ID] = true
 				all = append(all, m)
 			}

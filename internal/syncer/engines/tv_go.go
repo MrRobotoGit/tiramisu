@@ -51,8 +51,9 @@ type TVGoEngine struct {
 
 	invalidatePath func(string)
 
-	reITA      *regexp.Regexp
-	reExclLang *regexp.Regexp
+	reITA         *regexp.Regexp
+	reExclLang    *regexp.Regexp
+	exclLanguages map[string]bool
 }
 
 // TVEpisodeEntry is a single entry in the TV episode registry.
@@ -172,7 +173,8 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 		blacklistFile:    blFile,
 		invalidatePath:   cfg.InvalidatePath,
 		reITA:            CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
-		reExclLang:       CompileLanguageRegex(nil, cfg.Language.ExcludedFlags),
+		reExclLang:       CompileLanguageRegex(ExcludedTitleTerms(cfg.Language.ExcludedFlags), cfg.Language.ExcludedFlags),
+		exclLanguages:    ExcludedLanguageSet(cfg.Language.ExcludedFlags),
 	}
 
 	e.registry = e.loadRegistry()
@@ -533,7 +535,12 @@ func (e *TVGoEngine) passesShowFilters(show tmdb.TVShow) bool {
 		}
 	}
 
-	// Language: English always accepted, others need premium IT provider
+	// Language: explicitly excluded languages are a hard reject regardless of
+	// provider availability; English is always accepted; other languages need
+	// a premium IT provider.
+	if e.exclLanguages[show.Language] {
+		return false
+	}
 	if show.Language == "en" {
 		return true
 	}
