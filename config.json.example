@@ -24,6 +24,7 @@
   "gostorm_url": "http://127.0.0.1:8090",
   "proxy_listen_port": 8080,
   "metrics_port": 9080,
+  "blocklist_enabled": false,
   "blocklist_url": "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz",
   "physical_source_path": "/mnt/tiramisu-mkv-real",
   "fuse_mount_path": "/mnt/tiramisu-mkv-virtual",

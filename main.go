@@ -160,6 +160,11 @@ var virtualMountPath string
 var backgroundStopChan = make(chan struct{})
 var backgroundStopOnce sync.Once
 
+var (
+	blockListMu   sync.Mutex
+	blockListStop chan struct{}
+)
+
 // readBufferPool size matches Config.ReadAheadBase (set in main).
 var readBufferPool *sync.Pool
 
@@ -3273,20 +3278,8 @@ func main() {
 		go ai.StartAITuner(context.Background(), provider)
 	}
 
-	if gc().BlockListURL != "" {
-		safeGo(func() {
-			updateBlockList(gc().BlockListURL)
-			ticker := time.NewTicker(24 * time.Hour)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					updateBlockList(gc().BlockListURL)
-				case <-backgroundStopChan:
-					return
-				}
-			}
-		})
+	if gc().BlockListEnabled && gc().BlockListURL != "" {
+		startBlockListLoop(gc().BlockListURL)
 	}
 
 	safeGo(func() {
@@ -3505,14 +3498,21 @@ func main() {
 				return
 			}
 			// Reload in memory (V1.4.0 Live Update)
+			oldEnabled := gc().BlockListEnabled
 			oldURL := gc().BlockListURL
 			cfg := config.LoadConfig()
 			globalConfig.Store(&cfg)
 			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
-			if gc().BlockListURL != "" && gc().BlockListURL != oldURL {
-				safeGo(func() {
-					updateBlockList(gc().BlockListURL)
-				})
+
+			newEnabled := gc().BlockListEnabled
+			newURL := gc().BlockListURL
+			switch {
+			case newEnabled && (!oldEnabled || newURL != oldURL):
+				// was off -> on, or URL changed while staying on: (re)start with fresh URL
+				startBlockListLoop(newURL)
+			case !newEnabled && oldEnabled:
+				// was on -> off: stop future refreshes
+				stopBlockListLoop()
 			}
 			logger.Printf("[Config] Updated via Dashboard API")
 			w.WriteHeader(200)
@@ -3874,6 +3874,47 @@ func startHandleGC() {
 			}
 		}
 	})
+}
+
+// startBlockListLoop (re)starts the background blocklist refresh loop for the given URL,
+// stopping any previously running loop first (used for both startup and runtime toggles).
+func startBlockListLoop(urlStr string) {
+	if urlStr == "" {
+		return
+	}
+	blockListMu.Lock()
+	if blockListStop != nil {
+		close(blockListStop)
+	}
+	stop := make(chan struct{})
+	blockListStop = stop
+	blockListMu.Unlock()
+
+	safeGo(func() {
+		updateBlockList(urlStr)
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				updateBlockList(gc().BlockListURL)
+			case <-stop:
+				return
+			case <-backgroundStopChan:
+				return
+			}
+		}
+	})
+}
+
+// stopBlockListLoop signals the running blocklist refresh loop (if any) to exit.
+func stopBlockListLoop() {
+	blockListMu.Lock()
+	if blockListStop != nil {
+		close(blockListStop)
+		blockListStop = nil
+	}
+	blockListMu.Unlock()
 }
 
 // updateBlockList downloads and updates the BitTorrent blocklist

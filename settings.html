@@ -843,8 +843,14 @@
                                 <input type="number" name="proxy_listen_port">
                             </div>
                             <div class="form-group" style="grid-column: 1 / -1;">
+                                <div class="switch-item" style="margin-bottom: 8px;">
+                                    <span>Enable IP BlockList</span>
+                                    <label class="switch"><input type="checkbox" name="blocklist_enabled"
+                                            onchange="updateBlockListState()"><span class="slider"></span></label>
+                                </div>
+                                <div class="hint" style="margin-bottom: 12px;">Impacts swarm performance; not needed if you use a VPN</div>
                                 <label>IP BlockList URL</label>
-                                <input type="text" name="blocklist_url"
+                                <input type="text" name="blocklist_url" id="blocklist_url_input"
                                     placeholder="https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz">
                                 <div class="hint">Block malicious/anti-P2P peers automatically</div>
                             </div>
@@ -1273,6 +1279,15 @@
             urlHint.style.color = enabled ? '#b45309' : '';
         }
 
+        // --- BlockList state → URL field readonly when disabled ---
+        function updateBlockListState() {
+            const enabled = document.querySelector('[name="blocklist_enabled"]')?.checked;
+            const urlInput = document.getElementById('blocklist_url_input');
+            if (!urlInput) return;
+            urlInput.disabled = !enabled;
+            urlInput.style.opacity = enabled ? '1' : '0.5';
+        }
+
         // --- Adaptive Shield state (disabled when ResponsiveMode is OFF) ---
         function updateAdaptiveShieldState() {
             const responsive = document.querySelector('[name="responsiveMode"]');
@@ -1550,6 +1565,9 @@
                     form.querySelector('[data-nested="prowlarr.url"]').value = pr.url || pr.URL || "";
                 }
                 updateProwlarrState();
+                const blEnabled = document.querySelector('[name="blocklist_enabled"]');
+                if (blEnabled) blEnabled.checked = originalEngine.blocklist_enabled || false;
+                updateBlockListState();
                 const lang = originalEngine.language || originalEngine.Language;
                 if (lang) {
                     const terms = lang.preferred_terms || lang.PreferredTerms || [];
@@ -1587,6 +1605,8 @@
                     if (!isNaN(parsed)) data[k] = parsed;
                 }
             });
+
+            data.blocklist_enabled = formData.has('blocklist_enabled');
 
             const natpmpKey = originalEngine.NatPMP ? 'NatPMP' : 'natpmp';
             const oldNat = originalEngine[natpmpKey] || {};

@@ -2,13 +2,13 @@ package config
 
 import (
 	"encoding/json"
-	"tiramisu/internal/prowlarr"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"tiramisu/internal/prowlarr"
 
 	"github.com/google/uuid"
 )
@@ -123,14 +123,15 @@ type Config struct {
 	MaxCacheEntries         int `json:"max_cache_entries"`
 
 	// --- Connectivity ---
-	GoStormBaseURL  string `json:"gostorm_url"`
-	ProxyListenPort int    `json:"proxy_listen_port"`
-	MetricsPort     int    `json:"metrics_port"`
-	BlockListURL    string `json:"blocklist_url"`
-	AIURL           string `json:"ai_url"`      // V1.4.5: AI Optimizer sidecar URL
-	AIProvider      string `json:"ai_provider"` // V1.7.1: Provider type (local, openrouter, openai)
-	AIModel         string `json:"ai_model"`    // V1.7.1: Model ID for cloud providers
-	AI_API_KEY      string `json:"ai_api_key"`  // V1.7.1: API key for cloud providers
+	GoStormBaseURL   string `json:"gostorm_url"`
+	ProxyListenPort  int    `json:"proxy_listen_port"`
+	MetricsPort      int    `json:"metrics_port"`
+	BlockListEnabled bool   `json:"blocklist_enabled"`
+	BlockListURL     string `json:"blocklist_url"`
+	AIURL            string `json:"ai_url"`      // V1.4.5: AI Optimizer sidecar URL
+	AIProvider       string `json:"ai_provider"` // V1.7.1: Provider type (local, openrouter, openai)
+	AIModel          string `json:"ai_model"`    // V1.7.1: Model ID for cloud providers
+	AI_API_KEY       string `json:"ai_api_key"`  // V1.7.1: API key for cloud providers
 
 	// --- FUSE Paths ---
 	// Fallback when CLI args are omitted. CLI args always take precedence.
@@ -231,8 +232,8 @@ func LoadConfig() Config {
 		EntryTimeoutSeconds:    1.0,
 		NegativeTimeoutSeconds: 0.0,
 
-		MaxRetryAttempts:         6,
-		RetryDelayMS:             500,
+		MaxRetryAttempts: 6,
+		RetryDelayMS:     500,
 
 		PreloadWorkersCount:   4,
 		PreloadInitialDelayMS: 1000,
@@ -260,10 +261,11 @@ func LoadConfig() Config {
 			WatchlistSync: WatchlistSyncConfig{Enabled: true, IntervalHours: 1},
 		},
 
-		TorrentioURL:    "https://torrentio.strem.fun",
-		GoStormBaseURL:  "http://127.0.0.1:8090",
-		ProxyListenPort: 8080,
-		MetricsPort:     9080,
+		TorrentioURL:     "https://torrentio.strem.fun",
+		GoStormBaseURL:   "http://127.0.0.1:8090",
+		ProxyListenPort:  8080,
+		MetricsPort:      9080,
+		BlockListEnabled: false,
 
 		EnableTelemetry: true,
 		TelemetryURL:    "https://telemetry.gostream.workers.dev",
