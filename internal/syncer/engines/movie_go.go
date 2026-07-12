@@ -128,15 +128,16 @@ const (
 )
 
 var (
-	reM4K        = regexp.MustCompile(`(?i)2160p|4[kK]|uhd`)
-	reM1080p     = regexp.MustCompile(`(?i)1080p|1080i|fhd`)
-	reM720p      = regexp.MustCompile(`(?i)720p|720i`)
-	reMHDR       = regexp.MustCompile(`(?i)\bhdr\b|hdr10\+?`)
-	reMDV        = regexp.MustCompile(`(?i)\bdv\b|dovi|dolby.?vision`)
+	reM4K    = regexp.MustCompile(`(?i)2160p|4[kK]|uhd`)
+	reM1080p = regexp.MustCompile(`(?i)1080p|1080i|fhd`)
+	reM720p  = regexp.MustCompile(`(?i)720p|720i`)
+	// \b treats "_" as a word char, so "\bhdr\b" misses "_HDR_" - use a custom boundary.
+	reMHDR       = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?`)
+	reMDV        = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
 	reMAtmos     = regexp.MustCompile(`(?i)atmos`)
 	reM51        = regexp.MustCompile(`(?i)5\.1|dts|ddp5|ddp|dd\+|eac3|ac3`)
 	reMStereo    = regexp.MustCompile(`(?i)stereo|aac|mp3|2\.0`)
-	reMRemux     = regexp.MustCompile(`(?i)\bremux\b`)
+	reMRemux     = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])remux(?:$|[^A-Za-z0-9])`)
 	reMGarbage   = regexp.MustCompile(`(?i)camrip|hdcam|hdts|telesync|\bts\b|telecine|\btc\b|\bscr\b|screener|webscreener`)
 	reMSeeders   = regexp.MustCompile(`👤\s*(\d+)`)
 	reMHashURL   = regexp.MustCompile(`link=([a-f0-9]{40})`)
@@ -196,11 +197,15 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 	return e
 }
 
-// removeStub deletes a stub file and invalidates the FUSE layer's cached state for it.
-// A plain os.Remove on the physical path bypasses the mount's Unlink handler, so the
-// virtual file would keep being listed and served until cache expiry — long enough for
-// a Plex scan to register the replaced file as a ghost duplicate version.
-func (e *MovieGoEngine) removeStub(path string) {
+// removeStub deletes a stub file, invalidates its FUSE cache state, and removes the
+// underlying torrent from GoStorm. hash may be empty; a RemoveTorrent error doesn't
+// block the stub deletion.
+func (e *MovieGoEngine) removeStub(ctx context.Context, path, hash string) {
+	if hash != "" {
+		if err := e.gostorm.RemoveTorrent(ctx, hash); err != nil {
+			e.logger.Printf("[MovieSync] WARNING: failed to remove torrent %s for %s: %v", hash, filepath.Base(path), err)
+		}
+	}
 	os.Remove(path)
 	if e.invalidatePath != nil {
 		e.invalidatePath(path)
@@ -303,6 +308,7 @@ func (e *MovieGoEngine) discoverMovies(ctx context.Context) ([]tmdb.Movie, error
 type movieFile struct {
 	path  string
 	imdb  string
+	hash  string
 	score int
 }
 
@@ -329,15 +335,20 @@ func (e *MovieGoEngine) buildExistingMovieIndex() (map[string]movieFile, map[str
 		var imdb string
 		content := strings.TrimSpace(string(data))
 
+		var url string
 		// Try JSON format first (new Go format)
 		if strings.HasPrefix(content, "{") {
 			var obj map[string]interface{}
 			if err := json.Unmarshal([]byte(content), &obj); err == nil {
 				imdb, _ = obj["imdb"].(string)
+				url, _ = obj["url"].(string)
 			}
 		} else {
-			// Text format (old Python format): line 4 = IMDB ID
+			// Text format (old Python format): line 1 = URL, line 4 = IMDB ID
 			lines := strings.SplitN(content, "\n", 4)
+			if len(lines) >= 1 {
+				url = strings.TrimSpace(lines[0])
+			}
 			if len(lines) >= 4 {
 				imdb = strings.TrimSpace(lines[3])
 			}
@@ -346,9 +357,13 @@ func (e *MovieGoEngine) buildExistingMovieIndex() (map[string]movieFile, map[str
 		if imdb == "" {
 			return nil
 		}
+		var hash string
+		if m := reMHashURL.FindStringSubmatch(url); len(m) >= 2 {
+			hash = m[1]
+		}
 		score := e.calculateMovieScore(info.Name(), 0, 0, reM4K.MatchString(info.Name()))
 		if existing, ok := index[imdb]; !ok || score > existing.score {
-			index[imdb] = movieFile{path: path, imdb: imdb, score: score}
+			index[imdb] = movieFile{path: path, imdb: imdb, hash: hash, score: score}
 		}
 		return nil
 	})
@@ -467,7 +482,7 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		// Remove existing if upgrading
 		if existingPath != "" {
 			e.logger.Printf("[MovieSync] Upgrade: removing %s", filepath.Base(existingPath))
-			e.removeStub(existingPath)
+			e.removeStub(ctx, existingPath, existing.hash)
 		}
 
 		filename := e.buildMovieFilename(title, movie.ReleaseDate, c)
@@ -895,7 +910,7 @@ func (e *MovieGoEngine) cleanupOrphanedFiles(ctx context.Context) {
 			return nil
 		}
 		if !activeHashes[m[1]] {
-			e.removeStub(path)
+			e.removeStub(ctx, path, m[1])
 		}
 		return nil
 	})

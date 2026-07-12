@@ -111,9 +111,10 @@ const (
 )
 
 var (
-	reTV4K           = regexp.MustCompile(`(?i)2160p|4k|uhd`)
-	reTV1080p        = regexp.MustCompile(`(?i)1080p`)
-	reTVHDR          = regexp.MustCompile(`(?i)\bhdr\b|hdr10\+?|\bdv\b|dovi|dolby.?vision`)
+	reTV4K    = regexp.MustCompile(`(?i)2160p|4k|uhd`)
+	reTV1080p = regexp.MustCompile(`(?i)1080p`)
+	// \b treats "_" as a word char, so "\bhdr\b" misses "_HDR_" - use a custom boundary.
+	reTVHDR          = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?|(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
 	reTVAtmos        = regexp.MustCompile(`(?i)atmos`)
 	reTV51           = regexp.MustCompile(`(?i)5\.1|dd5|ddp5|dts|truehd`)
 	reTVSeeders      = regexp.MustCompile(`👤\s*(\d+)`)
@@ -183,11 +184,15 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 	return e
 }
 
-// removeStub deletes a stub file/dir and invalidates the FUSE layer's cached state for
-// it. A plain os.Remove on the physical path bypasses the mount's Unlink handler, so the
-// virtual file would keep being listed and served until cache expiry — long enough for a
-// Plex scan to register the replaced file as a ghost duplicate version.
-func (e *TVGoEngine) removeStub(path string) {
+// removeStub deletes a stub file/dir, invalidates its FUSE cache state, and removes the
+// underlying torrent from GoStorm. hash may be empty (e.g. for a plain directory); a
+// failed RemoveTorrent doesn't block the stub deletion.
+func (e *TVGoEngine) removeStub(ctx context.Context, path, hash string) {
+	if hash != "" {
+		if err := e.gostorm.RemoveTorrent(ctx, hash); err != nil {
+			e.logger.Printf("[TVSync] WARNING: failed to remove torrent %s for %s: %v", hash, filepath.Base(path), err)
+		}
+	}
 	os.Remove(path)
 	if e.invalidatePath != nil {
 		e.invalidatePath(path)
@@ -275,7 +280,7 @@ func (e *TVGoEngine) Run(ctx context.Context) error {
 	// torrent is missing from GoStorm, restore it first. cleanupOrphanedFiles
 	// runs after so it cannot delete a file that rehydrate still needs.
 	e.rehydrateMissingTorrents(ctx)
-	e.cleanupOrphanedFiles()
+	e.cleanupOrphanedFiles(ctx)
 	e.cleanupOrphanedTorrents(ctx)
 
 	e.logger.Printf("TV sync complete: %d shows, %d episodes created, %d skipped, %d upgrades",
@@ -1088,7 +1093,7 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, strea
 
 		if e.createMKV(epPath, streamURL, vf.Length, magnet) {
 			if existing, ok := e.registry[key]; ok && existing.FilePath != "" && existing.FilePath != epPath {
-				e.removeStub(existing.FilePath)
+				e.removeStub(ctx, existing.FilePath, existing.Hash)
 				e.stats.Upgrades++
 			}
 			e.registerEpisode(key, stream.QualityScore, hash, epPath, "fullpack")
@@ -1167,7 +1172,7 @@ func (e *TVGoEngine) processSingle(ctx context.Context, showName string, stream 
 
 	if e.createMKV(epPath, streamURL, bestFile.Length, magnet) {
 		if existing, ok := e.registry[key]; ok && existing.FilePath != "" && existing.FilePath != epPath {
-			e.removeStub(existing.FilePath)
+			e.removeStub(ctx, existing.FilePath, existing.Hash)
 			e.stats.Upgrades++
 		}
 		e.registerEpisode(key, stream.QualityScore, hash, epPath, "single")
@@ -1231,7 +1236,7 @@ func (e *TVGoEngine) reconcileRegistry() {
 	}
 }
 
-func (e *TVGoEngine) cleanupOrphanedFiles() {
+func (e *TVGoEngine) cleanupOrphanedFiles(ctx context.Context) {
 	if _, err := os.Stat(e.tvDir); err != nil {
 		return
 	}
@@ -1246,7 +1251,7 @@ func (e *TVGoEngine) cleanupOrphanedFiles() {
 			return nil
 		}
 		if !regPaths[path] {
-			e.removeStub(path)
+			e.removeStub(ctx, path, e.readHashFromMKV(path))
 		}
 		return nil
 	})
@@ -1262,7 +1267,7 @@ func (e *TVGoEngine) cleanupOrphanedFiles() {
 	for i := len(dirs) - 1; i >= 0; i-- {
 		entries, _ := os.ReadDir(dirs[i])
 		if len(entries) == 0 {
-			e.removeStub(dirs[i])
+			e.removeStub(ctx, dirs[i], "")
 		}
 	}
 }
