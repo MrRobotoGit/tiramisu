@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/iplist"
 	"github.com/anacrolix/torrent/metainfo"
 
 	"tiramisu/internal/gostorm/log"
@@ -246,6 +247,16 @@ func SetTorrent(hashHex, title, poster, category string, data string) *Torrent {
 		return torr
 	} else {
 		return torrDb
+	}
+}
+
+// SetIPBlocklist live-swaps the running BT engine's blocklist. No-op if the engine
+// hasn't connected yet.
+func SetIPBlocklist(list iplist.Ranger) {
+	btsMu.RLock()
+	defer btsMu.RUnlock()
+	if bts != nil {
+		bts.SetIPBlocklist(list)
 	}
 }
 

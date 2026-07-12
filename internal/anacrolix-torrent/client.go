@@ -80,7 +80,7 @@ type Client struct {
 	torrents          map[InfoHash]*Torrent
 	pieceRequestOrder map[interface{}]*request_strategy.PieceRequestOrder
 
-	acceptLimiter map[ipStr]int
+	acceptLimiter      map[ipStr]int
 	numHalfOpen        int
 	activePieceHashers int // client-level cap: max runtime.NumCPU() concurrent hashers
 
@@ -458,6 +458,14 @@ func (cl *Client) Close() (errs []error) {
 	cl.event.Broadcast()
 	closeGroup.Wait() // defer is LIFO. We want to Wait() after cl.unlock()
 	return
+}
+
+// SetIPBlocklist live-swaps the blocklist consulted by ipBlockRange, so a background
+// refresh takes effect immediately instead of only on the next restart.
+func (cl *Client) SetIPBlocklist(list iplist.Ranger) {
+	cl.lock()
+	defer cl.unlock()
+	cl.ipBlockList = list
 }
 
 func (cl *Client) ipBlockRange(ip net.IP) (r iplist.Range, blocked bool) {

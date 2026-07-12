@@ -17,6 +17,7 @@ import (
 	"tiramisu/internal/gostorm/native"
 	"tiramisu/internal/gostorm/settings"
 	"tiramisu/internal/gostorm/torr"
+	torrutils "tiramisu/internal/gostorm/torr/utils"
 	torrstor "tiramisu/internal/gostorm/torr/storage/torrstor"
 	tsutils "tiramisu/internal/gostorm/utils"
 	"tiramisu/internal/gostorm/web"
@@ -3935,6 +3936,13 @@ func updateBlockList(urlStr string) {
 	}
 
 	logger.Printf("[BlockList] Updated successfully: %d bytes saved to %s", n, destPath)
+
+	if list, err := torrutils.ReadBlockedIP(); err == nil {
+		torr.SetIPBlocklist(list)
+		logger.Printf("[BlockList] Live-reloaded into running engine")
+	} else {
+		logger.Printf("[BlockList] WARNING: downloaded but failed to reload live: %v", err)
+	}
 }
 
 // GetStateDir returns the centralized state directory path.

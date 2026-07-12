@@ -14,6 +14,7 @@ import (
 	"github.com/anacrolix/dht/v2"
 	"github.com/anacrolix/publicip"
 	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/iplist"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/mse"
 	"golang.org/x/time/rate"
@@ -121,6 +122,18 @@ func NewBTS() *BTServer {
 	bts.torrents = make(map[metainfo.Hash]*Torrent)
 	bts.tickerStop = make(chan struct{})
 	return bts
+}
+
+// SetIPBlocklist live-swaps the underlying client's blocklist, so a background
+// refresh (see main.updateBlockList) takes effect immediately instead of only on
+// the next Connect(). No-op if the client isn't up yet.
+func (bt *BTServer) SetIPBlocklist(list iplist.Ranger) {
+	bt.mu.Lock()
+	client := bt.client
+	bt.mu.Unlock()
+	if client != nil {
+		client.SetIPBlocklist(list)
+	}
 }
 
 func (bt *BTServer) Connect() error {
