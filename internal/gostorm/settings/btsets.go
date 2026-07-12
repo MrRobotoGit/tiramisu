@@ -41,8 +41,9 @@ type BTSets struct {
 	UploadRateLimit   int // in kb, 0 - inf
 	ConnectionsLimit  int
 	// AggressivePeerManagement enables warmup-phase PEX churn and tail-hedging for
-	// streaming cold-start latency. Zero-value false is already the safe default,
-	// no explicit default assignment needed (unlike ConnectionsLimit).
+	// streaming cold-start latency. Defaults to true (see SetDefaultConfig/loadBTSets) —
+	// validated in production since 2026-07-03: circuit breaker threshold confirmed
+	// against real trip data, no panics/regressions observed.
 	AggressivePeerManagement bool
 	PeersListenPort          int
 	BlockListURL             string
@@ -164,6 +165,7 @@ func SetDefaultConfig() {
 	sets.DisableUTP = true
 	sets.ShowFSActiveTorr = true
 	sets.StoreSettingsInJson = true
+	sets.AggressivePeerManagement = true
 	BTsets = sets
 	if !ReadOnly {
 		buf, err := json.Marshal(BTsets)
@@ -219,6 +221,7 @@ func loadBTSets() {
 	sets.DisableUTP = true
 	sets.ShowFSActiveTorr = true
 	sets.StoreSettingsInJson = true
+	sets.AggressivePeerManagement = true
 	BTsets = sets
 	if !ReadOnly {
 		buf, err := json.Marshal(BTsets)
