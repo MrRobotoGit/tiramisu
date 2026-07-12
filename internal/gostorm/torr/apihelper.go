@@ -147,6 +147,10 @@ func PeekTorrent(hashHex string) *Torrent {
 	btsMu.RLock()
 	defer btsMu.RUnlock()
 
+	if bts == nil {
+		return nil
+	}
+
 	hash := metainfo.NewHashFromHex(hashHex)
 	tor := bts.GetTorrent(hash)
 	if tor != nil {
@@ -325,6 +329,10 @@ func ListActiveTorrent() []*Torrent {
 	btsMu.RLock()
 	localBts := bts
 	btsMu.RUnlock()
+
+	if localBts == nil {
+		return nil
+	}
 
 	btlist := localBts.ListTorrents()
 	var ret []*Torrent
