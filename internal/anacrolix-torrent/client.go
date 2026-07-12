@@ -1154,7 +1154,10 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 	const (
 		probeWindow      = 3 * time.Second
 		probeFirstPieces = 3
-		churnCooldownDur = 10 * time.Second
+		// 10s produced too many wasted re-probes in production (57% of all churn events over
+		// 10 days were repeat drops of a peer that had just been churned) - a peer that lacked
+		// the warmup-region pieces 10s ago is very unlikely to have them now. Raised to 30s.
+		churnCooldownDur = 30 * time.Second
 	)
 	host, _, _ := net.SplitHostPort(pc.RemoteAddr.String())
 
