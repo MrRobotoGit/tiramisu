@@ -71,6 +71,7 @@ type Client struct {
 	listeners      []Listener
 	dhtServers     []DhtServer
 	ipBlockList    iplist.Ranger
+	dhtIPBlocklist *swappableIPBlocklist
 
 	// Set of addresses that have our client ID. This intentionally will
 	// include ourselves if we end up trying to connect to our own address
@@ -204,6 +205,7 @@ func (cl *Client) init(cfg *ClientConfig) {
 	cl.activeAnnounceLimiter.SlotsPerKey = 2
 	cl.event.L = cl.locker()
 	cl.ipBlockList = cfg.IPBlocklist
+	cl.dhtIPBlocklist = newSwappableIPBlocklist(cfg.IPBlocklist)
 	cl.httpClient = &http.Client{
 		Transport: cfg.WebTransport,
 	}
@@ -407,7 +409,7 @@ func (cl *Client) listenNetworks() (ns []network) {
 func (cl *Client) NewAnacrolixDhtServer(conn net.PacketConn) (s *dht.Server, err error) {
 	logger := cl.logger.WithNames("dht", conn.LocalAddr().String())
 	cfg := dht.ServerConfig{
-		IPBlocklist:    cl.ipBlockList,
+		IPBlocklist:    cl.dhtIPBlocklist,
 		Conn:           conn,
 		OnAnnouncePeer: cl.onDHTAnnouncePeer,
 		PublicIP: func() net.IP {
@@ -461,11 +463,57 @@ func (cl *Client) Close() (errs []error) {
 }
 
 // SetIPBlocklist live-swaps the blocklist consulted by ipBlockRange, so a background
-// refresh takes effect immediately instead of only on the next restart.
+// refresh takes effect immediately instead of only on the next restart. Also updates
+// dhtIPBlocklist, the wrapper handed to already-constructed dht.Server instances at
+// NewAnacrolixDhtServer time - dht.Server keeps whatever iplist.Ranger it was given at
+// construction and has no setter of its own, so without this indirection a live-reload
+// would only ever reach new peer connections, never DHT routing.
 func (cl *Client) SetIPBlocklist(list iplist.Ranger) {
 	cl.lock()
 	defer cl.unlock()
 	cl.ipBlockList = list
+	if cl.dhtIPBlocklist != nil {
+		cl.dhtIPBlocklist.set(list)
+	}
+}
+
+// swappableIPBlocklist implements iplist.Ranger by delegating to an inner Ranger that
+// can be swapped after construction. dht.Server stores whatever iplist.Ranger it's given
+// as an interface value and never re-reads it from the Client, so handing it this wrapper
+// (instead of a raw snapshot) lets SetIPBlocklist's live-reload reach it after the fact.
+type swappableIPBlocklist struct {
+	mu    sync.RWMutex
+	inner iplist.Ranger
+}
+
+func newSwappableIPBlocklist(initial iplist.Ranger) *swappableIPBlocklist {
+	return &swappableIPBlocklist{inner: initial}
+}
+
+func (w *swappableIPBlocklist) set(list iplist.Ranger) {
+	w.mu.Lock()
+	w.inner = list
+	w.mu.Unlock()
+}
+
+func (w *swappableIPBlocklist) Lookup(ip net.IP) (r iplist.Range, ok bool) {
+	w.mu.RLock()
+	inner := w.inner
+	w.mu.RUnlock()
+	if inner == nil {
+		return
+	}
+	return inner.Lookup(ip)
+}
+
+func (w *swappableIPBlocklist) NumRanges() int {
+	w.mu.RLock()
+	inner := w.inner
+	w.mu.RUnlock()
+	if inner == nil {
+		return 0
+	}
+	return inner.NumRanges()
 }
 
 func (cl *Client) ipBlockRange(ip net.IP) (r iplist.Range, blocked bool) {

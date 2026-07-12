@@ -9,35 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"github.com/cespare/xxhash/v2"
-	"tiramisu/internal/ai"
-	"tiramisu/internal/cache"
-	"tiramisu/internal/catalog"
-	"tiramisu/internal/config"
-	server "tiramisu/internal/gostorm"
-	"tiramisu/internal/gostorm/native"
-	"tiramisu/internal/gostorm/settings"
-	"tiramisu/internal/gostorm/torr"
-	torrutils "tiramisu/internal/gostorm/torr/utils"
-	torrstor "tiramisu/internal/gostorm/torr/storage/torrstor"
-	tsutils "tiramisu/internal/gostorm/utils"
-	"tiramisu/internal/gostorm/web"
-	"tiramisu/internal/lockmgr"
-	"tiramisu/internal/metadb"
-	"tiramisu/internal/natpmp"
-	"tiramisu/internal/monitor/collector"
-	"tiramisu/internal/monitor/dashboard"
-	"tiramisu/internal/opentracker"
-	"tiramisu/internal/preload"
-	"tiramisu/internal/prowlarr"
-	"tiramisu/internal/ratelimit"
-	"tiramisu/internal/registry"
-	"tiramisu/internal/telemetry"
-	syncercache "tiramisu/internal/syncer/cache"
-	"tiramisu/internal/syncer/engines"
-	"tiramisu/internal/syncer/scheduler"
-	"tiramisu/internal/updater"
-	"tiramisu/internal/vfs"
-	"tiramisu/internal/warmup"
 	"io"
 	"log"
 	"net/http"
@@ -54,6 +25,35 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"tiramisu/internal/ai"
+	"tiramisu/internal/cache"
+	"tiramisu/internal/catalog"
+	"tiramisu/internal/config"
+	server "tiramisu/internal/gostorm"
+	"tiramisu/internal/gostorm/native"
+	"tiramisu/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/torr"
+	torrstor "tiramisu/internal/gostorm/torr/storage/torrstor"
+	torrutils "tiramisu/internal/gostorm/torr/utils"
+	tsutils "tiramisu/internal/gostorm/utils"
+	"tiramisu/internal/gostorm/web"
+	"tiramisu/internal/lockmgr"
+	"tiramisu/internal/metadb"
+	"tiramisu/internal/monitor/collector"
+	"tiramisu/internal/monitor/dashboard"
+	"tiramisu/internal/natpmp"
+	"tiramisu/internal/opentracker"
+	"tiramisu/internal/preload"
+	"tiramisu/internal/prowlarr"
+	"tiramisu/internal/ratelimit"
+	"tiramisu/internal/registry"
+	syncercache "tiramisu/internal/syncer/cache"
+	"tiramisu/internal/syncer/engines"
+	"tiramisu/internal/syncer/scheduler"
+	"tiramisu/internal/telemetry"
+	"tiramisu/internal/updater"
+	"tiramisu/internal/vfs"
+	"tiramisu/internal/warmup"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -201,7 +201,7 @@ type NativePumpState struct {
 	reader           *native.NativeReader
 	path             string
 	refCount         int32
-	playerOff        int64      // last known player position, saved on handle release
+	playerOff        int64       // last known player position, saved on handle release
 	interruptPending atomic.Bool // prevents cascade: only the first handle per seek fires Interrupt()
 }
 
@@ -375,7 +375,7 @@ func fillAttrFromStat(st *syscall.Stat_t, out *fuse.Attr) {
 	out.Rdev = uint32(st.Rdev)
 	// out.Blksize = uint32(st.Blksize) // CRITICAL: Samba uses for buffer sizing
 	out.Blksize = uint32(gc().FuseBlockSize) // Configurable block size (default 1MB)
-	out.Blocks = uint64(st.Blocks)                   // CRITICAL: Samba uses for throughput calc
+	out.Blocks = uint64(st.Blocks)           // CRITICAL: Samba uses for throughput calc
 	out.Size = uint64(st.Size)
 
 	// Use time.Now() as cross-platform baseline for virtualized FUSE attributes.
@@ -392,8 +392,8 @@ func fillAttrFromMetadata(m *vfs.Metadata, out *fuse.Attr) {
 	out.Uid, out.Gid = gc().UID, gc().GID
 	out.Nlink = 1
 	// out.Blksize = 4096                                 // Standard block size
-	out.Blksize = uint32(gc().FuseBlockSize) // Configurable block size (default 1MB)
-	out.Blocks = (uint64(m.Size) + 511) / 512        // Estimate blocks based on size
+	out.Blksize = uint32(gc().FuseBlockSize)  // Configurable block size (default 1MB)
+	out.Blocks = (uint64(m.Size) + 511) / 512 // Estimate blocks based on size
 
 	ts := sanitizeTime(m.Mtime)
 	out.Mtime = ts
@@ -2409,6 +2409,7 @@ func (c *ReadAheadCache) MaxCachedOffset(p string) int64 {
 	return maxEnd
 
 }
+
 // chunkKey returns a compound key using the per-path adaptive chunk size.
 func (c *ReadAheadCache) chunkKey(path string, offset int64) string {
 	return fmt.Sprintf("%s:%d", path, offset/c.ChunkSize(path))
@@ -3940,7 +3941,11 @@ func updateBlockList(urlStr string) {
 
 	logger.Printf("[BlockList] Updating from %s...", urlStr)
 
-	resp, err := http.Get(urlStr)
+	// A bare http.Get has no deadline: a stalled connection (e.g. a VPN flap mid-download)
+	// hangs this goroutine forever. Since this call runs before the loop's select, closing
+	// blockListStop can't interrupt it either — a timeout is the only way out.
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(urlStr)
 	if err != nil {
 		logger.Printf("[BlockList] Download error: %v", err)
 		return
@@ -3963,16 +3968,31 @@ func updateBlockList(urlStr string) {
 		reader = gz
 	}
 
-	out, err := os.Create(destPath)
+	// Write to a temp file and rename atomically, so a download that dies mid-copy
+	// (network drop, process kill) can't leave destPath truncated and destroy the
+	// last known-good blocklist.
+	tmpPath := destPath + ".tmp"
+	out, err := os.Create(tmpPath)
 	if err != nil {
 		logger.Printf("[BlockList] File create error: %v", err)
 		return
 	}
-	defer out.Close()
 
 	n, err := io.Copy(out, reader)
 	if err != nil {
+		out.Close()
+		os.Remove(tmpPath)
 		logger.Printf("[BlockList] File write error: %v", err)
+		return
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmpPath)
+		logger.Printf("[BlockList] File close error: %v", err)
+		return
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		os.Remove(tmpPath)
+		logger.Printf("[BlockList] File rename error: %v", err)
 		return
 	}
 

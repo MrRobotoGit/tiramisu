@@ -67,6 +67,13 @@ func parseBlockList(buf []byte) (iplist.Ranger, error) {
 		log.TLogln(fmt.Sprintf("Readed ranges: %d (Total lines: %d, Errors: %d)", len(ranges), lineCount, errorCount))
 		return iplist.New(ranges), nil
 	}
+	// Zero valid ranges from an otherwise-clean scan (no scanner.Err()) must still surface
+	// as an error: the caller treats a nil error as "reload succeeded" and would live-swap
+	// in a nil blocklist, silently disabling the filter instead of keeping the last-good one.
+	if err := scanner.Err(); err != nil {
+		log.TLogln(fmt.Sprintf("No ranges loaded from blocklist! (Lines read: %d, Errors: %d)", lineCount, errorCount))
+		return nil, err
+	}
 	log.TLogln(fmt.Sprintf("No ranges loaded from blocklist! (Lines read: %d, Errors: %d)", lineCount, errorCount))
-	return nil, scanner.Err()
+	return nil, fmt.Errorf("no valid ranges parsed (lines read: %d, errors: %d)", lineCount, errorCount)
 }
