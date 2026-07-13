@@ -41,7 +41,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - The **embedded Control Panel** at `:9080/control` lets you adjust all FUSE and engine settings live, compiled directly into the binary.
 - The **Health Monitor Dashboard** at `:9080/dashboard` shows a real-time speed graph, an active stream panel with movie poster and quality badges, sync controls, and system stats, all embedded in the Go binary.
 - **Adaptive Chunk Size** keeps playback smooth on any file, any bitrate, without manual tuning: the buffer scales itself to what the file actually needs instead of using one fixed size for everything.
-- **AdaptiveShield** automatically balances speed against data integrity: it runs fast by default and only slows down to verify data more strictly when it detects a peer sending bad data, then relaxes again once the swarm proves clean.
+- **AdaptiveShield** automatically balances speed against data integrity: it runs fast by default and only slows down to verify data more strictly when it detects a peer sending bad data, then relaxes again once the swarm proves clean. Peers that keep sending corrupt data are banned outright, and that ban is remembered for 30 days, even across a service restart.
 - **TailHedge** kills the specific kind of stutter caused by a single slow peer holding up the exact byte the player needs right now, by quietly asking a second peer for the same data and using whichever arrives first.
 - **PEXChurn** speeds up cold starts by dropping peers that turn out to be useless for the file you are actually watching, freeing connection slots for peers that can actually help.
 - Everything ships as a **single binary**: GoStorm engine, Tiramisu, metrics, control panel, and webhook receiver in one `tiramisu` executable.
@@ -263,6 +263,8 @@ Two read modes, automatically managed:
 | **Strict** | Only SHA1-verified pieces served | Automatically activated on corruption detection |
 
 When a corrupt piece is detected (`MarkNotComplete()`), the Adaptive Shield switches to Strict Mode until a clean streak is confirmed, then automatically restores Responsive. The required clean streak escalates each time Strict re-triggers within the same playback session: 30 s the first time, 60 s the second, 90 s the third, 120 s from the fourth on. This escalation resets only on a genuine stop (`media.stop`), not on Plex-internal seeks or buffering probes, so a swarm that keeps sending bad pieces gets progressively more scrutiny instead of resetting to the same short timer every time. The mode transition uses an atomic boolean, so there is no mutex contention on the hot read path.
+
+Beyond slowing down, AdaptiveShield also keeps a tally of corrupt pieces per peer. A peer that crosses that threshold is not just disconnected, it is banned outright, and the ban is remembered across reconnects, across other torrents, and even across a full Tiramisu restart (bans automatically expire after 30 days). In practice this means a single bad or malicious peer only gets to cause trouble once, it is then permanently removed from that torrent's swarm, and the rest of the playback session (and any future one) stays clean without any manual intervention.
 
 ### 5. Seek-Master Architecture
 
@@ -636,7 +638,7 @@ Settings are written to `config.json` and require a **service restart**. The **R
 | **Paths** | Physical Source Path (Samba root), FUSE Mount Path |
 | **Prowlarr Indexer** | Enable Prowlarr, API Key, URL |
 | **Media Manager (Plex)** | TMDB API Key, Plex URL, Plex Token, Movies Library ID, Series TV Library ID |
-| **Connectivity & Rescue** | GoStorm URL, Rescue Grace/Cooldown, Metrics Port, Log Level, Tiramisu Port, BlockList URL |
+| **Connectivity & Rescue** | GoStorm URL, Rescue Grace/Cooldown, Metrics Port, Log Level, Tiramisu Port, Enable BlockList, BlockList URL |
 
 ### GoStorm Engine Panel (right)
 
@@ -727,7 +729,8 @@ nano /home/pi/Tiramisu/config.json
 | `gostorm_url` | `http://127.0.0.1:8090` | GoStorm internal API URL |
 | `proxy_listen_port` | `8080` | Tiramisu FUSE HTTP port |
 | `metrics_port` | `9080` | Metrics, Control Panel, Webhook port |
-| `blocklist_url` | *(BT_BlockLists)* | Gzipped IP blocklist URL (24 h refresh) |
+| `blocklist_enabled` | `false` | Enable the peer IP blocklist (impacts swarm performance; not needed if you use a VPN) |
+| `blocklist_url` | *(iblocklist Level 1)* | Gzipped IP blocklist URL (24 h refresh) |
 | `plex.url` | *(none)* | Plex server URL |
 | `plex.token` | *(none)* | Plex authentication token |
 | `plex.library_id` | `0` | Plex movies library section ID |

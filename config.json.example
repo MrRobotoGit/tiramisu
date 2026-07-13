@@ -25,7 +25,7 @@
   "proxy_listen_port": 8080,
   "metrics_port": 9080,
   "blocklist_enabled": false,
-  "blocklist_url": "https://github.com/Naunter/BT_BlockLists/raw/master/bt_blocklists.gz",
+  "blocklist_url": "https://storage.iblocklist.com/ln8miglg7ok0qeoi9ybn/files/3lrs62z5xd4stkvuqi58/ydxerpxkpcfqjaybcssw.gz",
   "physical_source_path": "/mnt/tiramisu-mkv-real",
   "fuse_mount_path": "/mnt/tiramisu-mkv-virtual",
   "disk_warmup_quota_gb": 15,
