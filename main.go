@@ -3541,7 +3541,8 @@ func main() {
 		if contentType == "" {
 			contentType = "movie"
 		}
-		streams := prowlarrClient.FetchTorrents(imdbID, contentType, title)
+		year, _ := strconv.Atoi(r.URL.Query().Get("year"))
+		streams := prowlarrClient.FetchTorrents(imdbID, contentType, title, year)
 		if streams == nil {
 			streams = []prowlarr.Stream{}
 		}

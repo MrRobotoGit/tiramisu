@@ -416,7 +416,11 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 
 	// Get streams
 	e.logger.Printf("[MovieSync] Processing: %s (%s)", title, imdbID)
-	candidates, hadRaw, err := e.getMovieStreams(ctx, imdbID, title)
+	year := 0
+	if len(movie.ReleaseDate) >= 4 {
+		year, _ = strconv.Atoi(movie.ReleaseDate[:4])
+	}
+	candidates, hadRaw, err := e.getMovieStreams(ctx, imdbID, title, year)
 	if err != nil || len(candidates) == 0 {
 		if hadRaw {
 			e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_valid_stream", TS: time.Now().Unix()})
@@ -515,12 +519,12 @@ type MovieStream struct {
 	SizeGB       float64
 }
 
-func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title string) ([]MovieStream, bool, error) {
+func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title string, year int) ([]MovieStream, bool, error) {
 	hadRaw := false
 
 	// Prowlarr first
 	if e.prowlarr != nil {
-		streams := e.prowlarr.FetchTorrents(imdbID, "movie", title)
+		streams := e.prowlarr.FetchTorrents(imdbID, "movie", title, year)
 		if len(streams) > 0 {
 			hadRaw = true
 			if candidates := e.filterMovieStreams(streams); len(candidates) > 0 {

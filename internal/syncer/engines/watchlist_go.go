@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,7 +124,8 @@ func (e *WatchlistGoEngine) Run(ctx context.Context) error {
 			continue
 		}
 
-		streams, err := e.getStreams(ctx, item.IMDBID, item.Title)
+		year, _ := strconv.Atoi(item.Year)
+		streams, err := e.getStreams(ctx, item.IMDBID, item.Title, year)
 		if err != nil || len(streams) == 0 {
 			skipped++
 			continue
@@ -361,9 +363,9 @@ func (e *WatchlistGoEngine) isAlreadyPresent(item WatchlistItem, imdbSet map[str
 	return titleIndex[norm] != ""
 }
 
-func (e *WatchlistGoEngine) getStreams(ctx context.Context, imdbID, title string) ([]prowlarr.Stream, error) {
+func (e *WatchlistGoEngine) getStreams(ctx context.Context, imdbID, title string, year int) ([]prowlarr.Stream, error) {
 	if e.prowlarr != nil {
-		streams := e.prowlarr.FetchTorrents(imdbID, "movie", title)
+		streams := e.prowlarr.FetchTorrents(imdbID, "movie", title, year)
 		if len(streams) > 0 {
 			return streams, nil
 		}

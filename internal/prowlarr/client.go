@@ -44,20 +44,24 @@ func NewClient(cfg ConfigProwlarr) *Client {
 
 // FetchTorrents queries Prowlarr and returns Stremio-format streams.
 // contentType is "movie" or "series". title is the show/movie name.
+// year is the release year and is only used as a keyword-search qualifier for movies
+// (a series' year reflects season 1's air date, not later seasons, so it isn't used there).
 // seasons is optional and used for series keyword search (e.g. "title s01").
 // Returns an empty slice (never nil) if disabled or on error.
-func (c *Client) FetchTorrents(imdbID, contentType, title string, seasons ...int) []Stream {
+func (c *Client) FetchTorrents(imdbID, contentType, title string, year int, seasons ...int) []Stream {
 	if c == nil {
 		return []Stream{}
 	}
-	results := c.fetchFromProwlarr(imdbID, contentType, title, seasons...)
+	results := c.fetchFromProwlarr(imdbID, contentType, title, year, seasons...)
 	return c.mapToStremioFormat(results)
 }
 
 // fetchFromProwlarr executes an API query using the IMDb ID and merges results by infoHash.
 // If contentType is "series" and seasons are provided, it also executes keyword searches
-// (e.g., "Show Name s01") in parallel to maximize discovery of 4K releases.
-func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, seasons ...int) []ProwlarrResult {
+// (e.g., "Show Name s01") in parallel to maximize discovery of 4K releases. For movies, a
+// single "Title Year" keyword query is added (e.g. "Gone 2026"), since indexers without
+// IMDb-ID search (1337x, etc.) otherwise never contribute movie results at all.
+func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, seasons ...int) []ProwlarrResult {
 	prowlarrType := "movie"
 	if contentType == "series" {
 		prowlarrType = "tvsearch"
@@ -90,6 +94,16 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, seasons ..
 				"query": fmt.Sprintf("%s s%02d", cleanTitle, s),
 			}))
 		}
+	}
+
+	// Secondary query: Title + Year keyword (Movies only) — narrows matches on indexers
+	// that do free-text search, and gives indexers without IMDb-ID search (1337x, etc.)
+	// a chance to return anything at all.
+	if contentType == "movie" && year > 0 {
+		cleanTitle := strings.ReplaceAll(title, ":", "")
+		queries = append(queries, mergeParams(baseParams, map[string]string{
+			"query": fmt.Sprintf("%s %d", cleanTitle, year),
+		}))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)

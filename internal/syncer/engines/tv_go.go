@@ -765,7 +765,7 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		for s := startSeason; s <= endSeason; s++ {
 			targetSeasons = append(targetSeasons, s)
 		}
-		streams := e.prowlarr.FetchTorrents(imdbID, "series", showName, targetSeasons...)
+		streams := e.prowlarr.FetchTorrents(imdbID, "series", showName, 0, targetSeasons...)
 		for _, s := range streams {
 			h := strings.ToLower(s.InfoHash)
 			if h != "" && !seenHashes[h] {
@@ -775,20 +775,15 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		}
 		e.logger.Printf("    Prowlarr: %d streams in %v", len(allStreams), time.Since(tp).Round(time.Millisecond))
 
-		// If Prowlarr returned streams but none survive classification, discard and try Torrentio.
-		if len(allStreams) > 0 {
-			anyUsable := false
-			for _, s := range allStreams {
-				if e.classifyStream(s) != nil {
-					anyUsable = true
-					break
-				}
-			}
-			if !anyUsable {
-				e.logger.Printf("    Prowlarr: all %d streams discarded — trying Torrentio", len(allStreams))
-				allStreams = allStreams[:0]
-				clear(seenHashes)
-			}
+		// If none of Prowlarr's streams survive the full classification (quality, season range,
+		// episode cap), discard and try Torrentio. Uses the same filter as the final result below,
+		// so a stream that's well-formed but for the wrong season correctly counts as "unusable"
+		// instead of silently skipping the fallback (found in production: Il Corsaro Blu returning
+		// old-season results for long-running shows suppressed the Torrentio fallback entirely).
+		if len(allStreams) > 0 && len(e.classifyAndFilter(allStreams, startSeason, endSeason, tmdbSeasonEps)) == 0 {
+			e.logger.Printf("    Prowlarr: all %d streams discarded — trying Torrentio", len(allStreams))
+			allStreams = allStreams[:0]
+			clear(seenHashes)
 		}
 	}
 
@@ -823,9 +818,16 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		e.logger.Printf("    Torrentio fallback: %d streams from %d eps in %v", len(allStreams), epsFetched, time.Since(tt).Round(time.Millisecond))
 	}
 
-	// Classify
+	return e.classifyAndFilter(allStreams, startSeason, endSeason, tmdbSeasonEps)
+}
+
+// classifyAndFilter runs classifyStream on each raw stream and keeps only those matching the
+// target season range and TMDB's canonical episode count. Used both to decide whether Prowlarr's
+// results are usable at all (fallback trigger) and to build the final result, so both checks stay
+// in sync.
+func (e *TVGoEngine) classifyAndFilter(streams []prowlarr.Stream, startSeason, endSeason int, tmdbSeasonEps map[int]int) []TVStream {
 	var classified []TVStream
-	for _, s := range allStreams {
+	for _, s := range streams {
 		c := e.classifyStream(s)
 		if c == nil {
 			continue
@@ -845,7 +847,6 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		}
 		classified = append(classified, *c)
 	}
-
 	return classified
 }
 
