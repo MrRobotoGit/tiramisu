@@ -288,6 +288,25 @@ func (c *Client) SearchMovie(ctx context.Context, query, year string) (int, erro
 	return result.Results[0].ID, nil
 }
 
+// SearchMovieBest returns the best-matching Movie for a free-text title (and optional year),
+// using the same response shape as Discover/Popular so callers get title/release_date/language.
+func (c *Client) SearchMovieBest(ctx context.Context, query, year string) (Movie, error) {
+	urlStr := fmt.Sprintf("%s/search/movie?api_key=%s&query=%s&page=1",
+		baseURL, c.apiKey, url.QueryEscape(query))
+	if year != "" {
+		urlStr += "&year=" + year
+	}
+
+	movies, err := c.fetchDiscoverPage(ctx, urlStr)
+	if err != nil {
+		return Movie{}, err
+	}
+	if len(movies) == 0 {
+		return Movie{}, fmt.Errorf("no results for %q", query)
+	}
+	return movies[0], nil
+}
+
 func (c *Client) fetchDiscoverPage(ctx context.Context, urlStr string) ([]Movie, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, err

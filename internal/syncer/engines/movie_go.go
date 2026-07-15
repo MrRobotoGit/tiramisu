@@ -18,6 +18,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"tiramisu/internal/catalog"
+	"tiramisu/internal/catalog/rottentomatoes"
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
 	"tiramisu/internal/config"
@@ -30,6 +31,7 @@ type MovieGoEngine struct {
 	tmdb      *tmdb.Client
 	torrentio *torrentio.Client
 	prowlarr  *prowlarr.Client
+	rt        *rottentomatoes.Client
 	plexURL   string
 	plexToken string
 	plexLib   int
@@ -164,6 +166,7 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 		tmdb:      tmdb.NewClient(cfg.TMDBAPIKey),
 		torrentio: torrentio.NewClient(cfg.TorrentioURL, "sort=qualitysize|qualityfilter=480p,720p,scr,cam"),
 		prowlarr:  prowlarrClient,
+		rt:        rottentomatoes.NewClient(),
 		plexURL:   cfg.PlexURL,
 		plexToken: cfg.PlexToken,
 		plexLib:   cfg.PlexLib,
@@ -298,6 +301,24 @@ func (e *MovieGoEngine) discoverMovies(ctx context.Context) ([]tmdb.Movie, error
 			if !seen[m.ID] && !e.exclLanguages[m.Language] {
 				seen[m.ID] = true
 				all = append(all, m)
+			}
+		}
+	}
+
+	// Rotten Tomatoes "Movies at Home": recent digital/streaming releases. Titles overlap only
+	// ~20% with the TMDB endpoints above (checked 2026-07-13), so each one is resolved against
+	// TMDB by title+year to fold into the same dedup/filter path as everything else.
+	if e.rt != nil {
+		if rtMovies, err := e.rt.FetchMoviesAtHome(ctx); err == nil {
+			for _, rm := range rtMovies {
+				m, err := e.tmdb.SearchMovieBest(ctx, rm.Title, rm.Year)
+				if err != nil {
+					continue
+				}
+				if !seen[m.ID] && !e.exclLanguages[m.Language] {
+					seen[m.ID] = true
+					all = append(all, m)
+				}
 			}
 		}
 	}
