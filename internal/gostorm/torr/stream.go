@@ -57,6 +57,14 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 	defer atomic.AddInt32(&activeStreams, -1)
 	// Stream disconnect timeout (same as torrent)
 	streamTimeout := sets.BTsets.TorrentDisconnectTimeout
+	// V800: In STRICT mode (non-responsive), pieces must complete SHA-1 verification before serving.
+	// This takes longer than responsive (per-chunk) mode, so the fixed 15-30s absolute timeout
+	// expires mid-piece on slow swarms, killing the stream and forcing reconnect thrashing.
+	// Doubling the timeout for STRICT mode gives pieces enough time to complete without affecting
+	// TorrentDisconnectTimeout's use elsewhere (torrent expiry, idle detection, AI Tuner).
+	if !torrstor.IsResponsive() {
+		streamTimeout *= 2
+	}
 
 	if !t.GotInfo() {
 		http.NotFound(resp, req)

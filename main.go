@@ -1295,7 +1295,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		if pumpedBytes > 64*1024*1024 {
 			isHealthy := false
 			if val, ok := playbackRegistry.Load(h.path); ok {
-				if ps, ok := val.(*PlaybackState); ok && ps.GetStatus() {
+				if ps, ok := val.(*PlaybackState); ok && (ps.GetStatus() || ps.IsInferredPlayback()) {
 					isHealthy = true
 				}
 			}
@@ -1816,7 +1816,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			// On-the-fly pump upgrade for confirmed playback with available slot.
 			if isStreaming && h.hash != "" {
 				if val, ok := playbackRegistry.Load(h.path); ok {
-					if ps, ok := val.(*PlaybackState); ok && ps.GetStatus() {
+					if ps, ok := val.(*PlaybackState); ok && (ps.GetStatus() || ps.IsInferredPlayback()) {
 						select {
 						case masterDataSemaphore <- struct{}{}:
 							h.hasSlot = true
