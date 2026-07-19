@@ -12,6 +12,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MrRobotoGit/tiramisu)
 [![Docker Pulls](https://img.shields.io/docker/pulls/mrrobotogit/tiramisu?logo=docker&label=Docker+Pulls)](https://hub.docker.com/r/mrrobotogit/tiramisu)
 [![Docker Image Size](https://img.shields.io/docker/image-size/mrrobotogit/tiramisu/latest?logo=docker&label=Image+Size)](https://hub.docker.com/r/mrrobotogit/tiramisu)
+[![Mentioned in Awesome Selfhosted](https://awesome.re/mentioned-badge.svg)](https://github.com/awesome-selfhosted/awesome-selfhosted)
 
 > [!NOTE]
 > This project used to be called GoStream. It is now Tiramisu, same project, same codebase, just a new name. Nothing about how it works has changed, and everything in this README still applies. If you are upgrading from an older install, note that the binary name, config paths, and systemd service name have all changed too, so a fresh run of the install script is the easiest way to pick up the new layout.
