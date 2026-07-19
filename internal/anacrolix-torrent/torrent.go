@@ -1055,11 +1055,22 @@ const (
 	hedgeCircuitBreakerThreshold = 30
 	hedgeCircuitBreakerWindow    = 60 * time.Second
 	hedgeCircuitBreakerCooldown  = 5 * time.Minute
+	// hedgeNoBaselineCeiling: stateless fallback threshold used when warmupP95 has too few
+	// samples to be trusted (ok=false) - covers cold starts on dead swarms (zero responses
+	// ever) AND playback-pressure on resumed torrents, where warmupActive is never set and
+	// no latency samples are ever recorded. Anchored at 2x the fork's own streaming
+	// targetLatency (2.0s, peer.go nominalMaxRequests): a chunk pending >4s while warmup or
+	// playback-pressure is active is unambiguously on the freeze critical path (TTFF target
+	// 2-4s cold start). First reasonable value derived theoretically, NOT production-
+	// validated - calibrate from /metrics + [TailHedge] 'exceeded ceiling' logs, same method
+	// used for hedgeCircuitBreakerThreshold (which was validated on real data 2026-07-03).
+	hedgeNoBaselineCeiling = 4 * time.Second
 )
 
 // hedgeWatchdog periodically scans in-flight requests within whichever region is currently
 // active (warmup, or playback pressure - see SetWarmupActive/SetPlaybackPressure) and fires a
-// duplicate request to a next-best peer for any exceeding the observed p95 for its size. Spawned
+// duplicate request to a next-best peer for any exceeding the observed p95 for its size (or the
+// fixed hedgeNoBaselineCeiling when no baseline exists). Spawned
 // once from either signal; exits on its own once both end or the torrent closes, resetting
 // hedgeWatchdogRunning so a future cycle can spawn a fresh one.
 func (t *Torrent) hedgeWatchdog() {
@@ -1085,7 +1096,8 @@ func (t *Torrent) hedgeWatchdog() {
 }
 
 // checkAndFireHedges scans currently in-flight requests and hedges any warmup-region request
-// that has exceeded the observed p95 latency for its size. Client lock must be held.
+// that has exceeded the observed p95 latency for its size - or, when no trustworthy latency
+// baseline exists, the fixed hedgeNoBaselineCeiling. Client lock must be held.
 // hedgeWarmupPieceWindow bounds hedging to the first N pieces of the file being warmed - wider
 // than Task 3's 3-piece connection probe (which only needs a cheap "does this peer look useful"
 // signal), since hedging should cover the actual in-flight warmup fetch range. The fork doesn't
@@ -1124,11 +1136,20 @@ func (t *Torrent) checkAndFireHedges() {
 		if pieceIdx < begin || pieceIdx >= end {
 			continue // outside the warmed file's piece range - not a warmup-region request
 		}
-		p95, ok := t.warmupP95(int64(req.Length))
-		if !ok || now.Sub(rs.when) < p95 {
+		threshold, ok := t.warmupP95(int64(req.Length))
+		trigger := "p95"
+		if !ok {
+			// No trustworthy latency baseline (dead-swarm cold start, or resumed torrent
+			// whose warmup never ran): fall back to the stateless absolute ceiling.
+			// Deliberately NOT a clamp - when p95 exists it always wins, even above the
+			// ceiling (see spec §3 decision 1).
+			threshold = hedgeNoBaselineCeiling
+			trigger = "ceiling"
+		}
+		if now.Sub(rs.when) < threshold {
 			continue
 		}
-		t.fireHedge(r, req, rs.peer)
+		t.fireHedge(r, req, rs.peer, trigger)
 	}
 }
 
@@ -1142,7 +1163,11 @@ func (t *Torrent) checkAndFireHedges() {
 // rolling 60s hedge-rate circuit breaker: if hedges spike, that signals the shared VPN tunnel
 // itself is saturated (not peer variance), so hedging is auto-disabled for a cooldown period
 // rather than making tunnel contention worse. Client lock must be held.
-func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer) {
+//
+// trigger labels which threshold fired ("p95" or "ceiling") and is used only in the log
+// line - it exists so production calibration can distinguish baseline-driven hedges from
+// no-baseline ceiling hedges (see hedgeNoBaselineCeiling).
+func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer, trigger string) {
 	// Pick the candidate BEFORE touching the circuit breaker's rate counter - a stalled request
 	// with no alternative peer available (common in exactly the low-peer-count swarms this
 	// feature targets) must not count against the breaker, since zero duplicate bytes are ever
@@ -1199,7 +1224,7 @@ func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer) {
 	candidate.validReceiveChunks[r]++
 	candidate.peerImpl._request(req)
 	t.hedgeTriggerCount.Add(1)
-	t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Hedging piece=%d begin=%d to %v (original request exceeded p95)", t.infoHash.HexString(), req.Index, req.Begin, candidate.RemoteAddr)
+	t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Hedging piece=%d begin=%d to %v (original request exceeded %s)", t.infoHash.HexString(), req.Index, req.Begin, candidate.RemoteAddr, trigger)
 }
 
 // maxWarmupLatencySamples caps the ring buffer per chunk size - only enough recent samples to
