@@ -817,16 +817,8 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	// hasFullWarmup: Open returns instantly only if both head and tail warmup files are ready.
 	// headReady: Allows async Wake and direct ID injection for instant start.
 	headReady := false
-	availableRange := int64(0)
 	if warmup.DiskWarmup != nil && hashStr != "" {
-		availableRange = warmup.DiskWarmup.GetAvailableRange(hashStr, urlFileIdx)
-		headReady = availableRange > 0
-	}
-	// TEMP DEBUG (2026-07-19, remove once the stuck-warmupActive-on-seek-bypass hypothesis is
-	// resolved): the exact GetAvailableRange value behind headReady's true/false decision -
-	// forceTorrentWarmupActive fires below only when this is false.
-	if hashStr != "" {
-		logger.Printf("[WarmupDebug] Open hash=%s fileID=%d availableRange=%d headReady=%v", hashStr, urlFileIdx, availableRange, headReady)
+		headReady = warmup.DiskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
 	}
 
 	magnetCandidate := n.vMeta.URL
@@ -1436,10 +1428,6 @@ func forceTorrentWarmupActive(hash string, fileID int) {
 		return
 	}
 	if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
-		// TEMP DEBUG (2026-07-19, remove once the stuck-warmupActive-on-seek-bypass hypothesis
-		// is resolved): confirms this call site (vs. the DiskWarmup writeWorker path below) is
-		// the one that set warmupActive true for a given hash/fileID.
-		logger.Printf("[WarmupDebug] forceTorrentWarmupActive (Open, !headReady) hash=%s fileID=%d", hash, fileID)
 		tr.Torrent.SetWarmupActive(true, fileID)
 	}
 }
@@ -3247,10 +3235,6 @@ func main() {
 	// returns immediately (see OnWarmupStateChange doc comment in internal/warmup/warmup.go).
 	warmup.OnWarmupStateChange = func(hash string, fileID int, active bool) {
 		if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
-			// TEMP DEBUG (2026-07-19, remove once the stuck-warmupActive-on-seek-bypass
-			// hypothesis is resolved): active=true means STARTING (file didn't exist yet),
-			// active=false means COMPLETED (off+n >= FileSize written this session).
-			logger.Printf("[WarmupDebug] DiskWarmup writeWorker hash=%s fileID=%d active=%v (true=STARTING/false=COMPLETED)", hash, fileID, active)
 			tr.Torrent.SetWarmupActive(active, fileID)
 		}
 	}

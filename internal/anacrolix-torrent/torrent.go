@@ -953,13 +953,7 @@ func (t *Torrent) numPiecesCompleted() (num pieceIndex) {
 // whether this torrent currently has an in-flight warmup fetch, gating aggressive PEX churn.
 func (t *Torrent) SetWarmupActive(active bool, fileID int) {
 	t.warmupFileID.Store(int64(fileID))
-	prev := t.warmupActive.Swap(active)
-	// TEMP DEBUG (2026-07-19, remove once the stuck-warmupActive-on-seek-bypass hypothesis is
-	// resolved): only logs on actual true<->false transitions, not the repeated true->true calls
-	// per WriteChunk, so this stays cheap even during a normal warmup burst.
-	if prev != active {
-		t.logger.WithDefaultLevel(log.Warning).Printf("[WarmupDebug] hash=%s fileID=%d warmupActive %v->%v", t.infoHash.HexString(), fileID, prev, active)
-	}
+	t.warmupActive.Store(active)
 	// SetWarmupActive(true) is called repeatedly (once per WriteChunk) while warmup is in
 	// flight - only spawn one watchdog per cycle. CompareAndSwap ensures a second call while one
 	// is already running is a no-op; the running watchdog resets this to false itself on exit.
