@@ -7,7 +7,9 @@ import (
 
 // V304: Explicit IP ban set, keyed by IP string.
 // Unlike badPeerIPs (netip.Addr), string keys avoid IPv4/IPv6 normalization mismatches.
-// Populated when a peer accumulates >= badPeerThreshold corrupt pieces.
+// Populated either immediately (certain attribution: sole dirtier of a piece) or once a peer
+// accumulates >= badPeerThreshold corrupt pieces (uncertain attribution: multi-dirtier) -
+// badPeerThreshold is defined at its call site in torrent.go, not here.
 var v304BannedIPs sync.Map
 
 // v304CorruptCounts tracks corrupt-piece counts per IP (not per connection), so a

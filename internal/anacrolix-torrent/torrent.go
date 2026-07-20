@@ -953,7 +953,13 @@ func (t *Torrent) numPiecesCompleted() (num pieceIndex) {
 // whether this torrent currently has an in-flight warmup fetch, gating aggressive PEX churn.
 func (t *Torrent) SetWarmupActive(active bool, fileID int) {
 	t.warmupFileID.Store(int64(fileID))
-	t.warmupActive.Store(active)
+	prev := t.warmupActive.Swap(active)
+	// TEMP DEBUG (2026-07-19, remove once the stuck-warmupActive-on-seek-bypass hypothesis is
+	// resolved): only logs on actual true<->false transitions, not the repeated true->true calls
+	// per WriteChunk, so this stays cheap even during a normal warmup burst.
+	if prev != active {
+		t.logger.WithDefaultLevel(log.Warning).Printf("[WarmupDebug] hash=%s fileID=%d warmupActive %v->%v", t.infoHash.HexString(), fileID, prev, active)
+	}
 	// SetWarmupActive(true) is called repeatedly (once per WriteChunk) while warmup is in
 	// flight - only spawn one watchdog per cycle. CompareAndSwap ensures a second call while one
 	// is already running is a no-op; the running watchdog resets this to false itself on exit.
@@ -2800,6 +2806,24 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 					// https://github.com/anacrolix/torrent/issues/715.
 					t.logger.Levelf(log.Warning, "banning %v for being sole dirtier of piece %v after failed piece check", c, piece)
 					c.ban()
+					// V304: sole-dirtier attribution is certain (no other peer touched this piece),
+					// so persist immediately instead of waiting for badPeerThreshold like the
+					// multi-dirtier path below - there's no ambiguity here to average out. Without
+					// this, the highest-confidence corruption case had the weakest ban durability:
+					// c.ban() alone only writes to badPeerIPs (in-memory, process-lifetime), so a
+					// sole dirtier was fully rehabilitated on every restart while lower-confidence
+					// multi-dirtier bans persisted 30 days.
+					if ip := c.remoteIp(); ip != nil {
+						ipStr := ip.String()
+						if _, alreadyBanned := v304BannedIPs.LoadOrStore(ipStr, struct{}{}); !alreadyBanned {
+							t.logger.Levelf(log.Warning,
+								"[AdaptiveShield] evicting peer %v: sole dirtier of piece %v — ban applied",
+								ipStr, piece)
+							if v304OnBan != nil {
+								go v304OnBan(ipStr) // goroutine: no IO under cl lock
+							}
+						}
+					}
 				}
 			}
 

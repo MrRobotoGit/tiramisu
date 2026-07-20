@@ -320,7 +320,8 @@ func ListTorrent() []*Torrent {
 	return ret
 }
 
-// V304BannedCount returns the number of peer IPs banned since process start.
+// V304BannedCount returns the number of currently banned peer IPs, including bans restored
+// from persisted state at startup (not just ones applied since this process started).
 func V304BannedCount() int {
 	return torrent.V304BannedCount()
 }

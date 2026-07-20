@@ -817,8 +817,16 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	// hasFullWarmup: Open returns instantly only if both head and tail warmup files are ready.
 	// headReady: Allows async Wake and direct ID injection for instant start.
 	headReady := false
+	availableRange := int64(0)
 	if warmup.DiskWarmup != nil && hashStr != "" {
-		headReady = warmup.DiskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
+		availableRange = warmup.DiskWarmup.GetAvailableRange(hashStr, urlFileIdx)
+		headReady = availableRange > 0
+	}
+	// TEMP DEBUG (2026-07-19, remove once the stuck-warmupActive-on-seek-bypass hypothesis is
+	// resolved): the exact GetAvailableRange value behind headReady's true/false decision -
+	// forceTorrentWarmupActive fires below only when this is false.
+	if hashStr != "" {
+		logger.Printf("[WarmupDebug] Open hash=%s fileID=%d availableRange=%d headReady=%v", hashStr, urlFileIdx, availableRange, headReady)
 	}
 
 	magnetCandidate := n.vMeta.URL
@@ -1224,7 +1232,13 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		default:
 		}
 
-		// Re-read chunkSize each iteration: pieceLen may arrive after pump start (new torrents).
+		// Re-read chunkSize each iteration for consistency with raCache's own lookups - not
+		// because it can change mid-pump. SetPieceLen is called exactly once, at pump start
+		// (main.go:1084), only if metadata is already resolved at that moment; if not, this
+		// stays at the ReadAheadBase fallback for the pump's entire lifetime. No late-binding path
+		// exists today - if one is ever added, chunkKey's offset/chunkSize indexing means a
+		// mid-pump size change must purge that path's existing raCache entries first, or stale
+		// keys orphan and double-cache.
 		chunkSize = raCache.ChunkSize(h.path)
 
 		// Release idle slot: confirmed playback gets 2h, background scans get 45s.
@@ -1422,6 +1436,10 @@ func forceTorrentWarmupActive(hash string, fileID int) {
 		return
 	}
 	if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
+		// TEMP DEBUG (2026-07-19, remove once the stuck-warmupActive-on-seek-bypass hypothesis
+		// is resolved): confirms this call site (vs. the DiskWarmup writeWorker path below) is
+		// the one that set warmupActive true for a given hash/fileID.
+		logger.Printf("[WarmupDebug] forceTorrentWarmupActive (Open, !headReady) hash=%s fileID=%d", hash, fileID)
 		tr.Torrent.SetWarmupActive(true, fileID)
 	}
 }
@@ -2323,11 +2341,15 @@ func (c *ReadAheadCache) SetPieceLen(path string, pl int64) {
 		c.pieceLens.Store(path, n*pl)
 		return
 	}
-	// pl > base: BitTorrent piece lengths are always powers of two (BEP3/BEP52), and base
-	// defaults to a power of two as well, so base always evenly divides pl here — using base
-	// directly still lands every chunk boundary exactly on a piece boundary. Stored explicitly
-	// (instead of falling through to ChunkSize's own base fallback) so pieceLens always has an
-	// entry once pieceLen is known, and re-reads pick up base config changes at pump start.
+	// pl > base: chunk boundaries coincide with piece boundaries only at multiples of
+	// lcm(base, pl) - with power-of-two pl and base (mandatory in BEP52/v2, merely
+	// conventional in BEP3/v1, and the default ReadAheadBase) that's simply every
+	// (pl/base)-th boundary. ~25% of the library uses non-power-of-two piece lengths
+	// (see recycle() below), for which alignment is rarer still. Either way alignment
+	// here is best-effort - reads are byte-range based regardless. Stored explicitly
+	// (instead of falling through to ChunkSize's own base fallback) so pieceLens always
+	// has an entry once pieceLen is known, and re-reads pick up base config changes at
+	// pump start.
 	c.pieceLens.Store(path, base)
 }
 
@@ -3225,6 +3247,10 @@ func main() {
 	// returns immediately (see OnWarmupStateChange doc comment in internal/warmup/warmup.go).
 	warmup.OnWarmupStateChange = func(hash string, fileID int, active bool) {
 		if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
+			// TEMP DEBUG (2026-07-19, remove once the stuck-warmupActive-on-seek-bypass
+			// hypothesis is resolved): active=true means STARTING (file didn't exist yet),
+			// active=false means COMPLETED (off+n >= FileSize written this session).
+			logger.Printf("[WarmupDebug] DiskWarmup writeWorker hash=%s fileID=%d active=%v (true=STARTING/false=COMPLETED)", hash, fileID, active)
 			tr.Torrent.SetWarmupActive(active, fileID)
 		}
 	}
