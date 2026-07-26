@@ -3581,7 +3581,11 @@ func main() {
 	})
 
 	// Sync Scheduler (Fase 1)
-	if gc().Scheduler.Enabled {
+	// Routes are always registered so the Control Panel's manual "Run now" works
+	// immediately after enabling+saving, without requiring a restart. Only the
+	// automatic cron loop (sched.Run) is gated by Scheduler.Enabled, since that's
+	// what could collide with a user's own external cron setup.
+	{
 		schedCfg := scheduler.SchedulerConfig{
 			Enabled:       gc().Scheduler.Enabled,
 			MoviesSync:    scheduler.DailyJobConfig(gc().Scheduler.MoviesSync),
@@ -3669,10 +3673,14 @@ func main() {
 			w.WriteHeader(http.StatusAccepted)
 		})
 
-		safeGo(func() {
-			sched.Run(backgroundStopChan)
-		})
-		logger.Printf("[Scheduler] enabled (Go native)")
+		if gc().Scheduler.Enabled {
+			safeGo(func() {
+				sched.Run(backgroundStopChan)
+			})
+			logger.Printf("[Scheduler] enabled (Go native)")
+		} else {
+			logger.Printf("[Scheduler] auto-run disabled, manual API available")
+		}
 	}
 
 	// Health Monitor + Dashboard (Fase 5)

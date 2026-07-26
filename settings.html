@@ -947,12 +947,12 @@
                             <div class="form-group">
                                 <label>Movies Library ID</label>
                                 <input type="number" name="plex_library_id" data-nested="plex.library_id">
-                                <div class="hint">Plex library ID for movies (0 = disabled)</div>
+                                <div class="hint">Plex library ID for movies. Only gates the post-sync Plex refresh call (0 = skip refresh) — the TMDB/Torrentio sync engine runs regardless, Jellyfin-only setups can leave this at 0.</div>
                             </div>
                             <div class="form-group">
                                 <label>Series TV Library ID</label>
                                 <input type="number" name="plex_tv_library_id" data-nested="plex.tv_library_id">
-                                <div class="hint">Plex library ID for TV series (0 = disabled)</div>
+                                <div class="hint">Plex library ID for TV series. Only gates the post-sync Plex refresh call (0 = skip refresh) — the TMDB/Torrentio sync engine runs regardless, Jellyfin-only setups can leave this at 0.</div>
                             </div>
                         </div>
                     </div>
