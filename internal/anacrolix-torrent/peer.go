@@ -641,10 +641,15 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 			}
 		}
 		// Tail-hedging (Task 4): capture the send timestamp before deleteRequest wipes
-		// t.requestState[req] - only while a warmup fetch is in flight for this torrent.
+		// t.requestState[req] - while a warmup fetch OR playback-pressure hedge window is active.
+		// Without the playbackPressureActive arm, resumed torrents (warmupActive never set) never
+		// record a single latency sample, so checkAndFireHedges' generalized hedge permanently
+		// falls back to hedgeNoBaselineCeiling instead of a real p95 - samples recorded here feed
+		// the same per-size warmupLatencySamples ring warmupP95 reads regardless of which phase
+		// triggered the request, so both phases benefit once either has real data.
 		var warmupReqSentAt time.Time
 		recordWarmupLatencySample := false
-		if t.warmupActive.Load() {
+		if t.warmupActive.Load() || t.playbackPressureActive.Load() {
 			if rs, ok := t.requestState[req]; ok {
 				warmupReqSentAt = rs.when
 				recordWarmupLatencySample = true
