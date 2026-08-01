@@ -1345,7 +1345,14 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				handle.mu.Lock()
 				lastLen, lastTime := handle.lastLen, handle.lastTime
 				handle.mu.Unlock()
-				relevant = lastLen >= int(gc().StreamingThreshold) && now.Sub(lastTime) < 30*time.Second
+				// Post-confirmation the freshness window is the real discriminator (the
+				// 30s window can only be satisfied by a handle that keeps reading, i.e.
+				// actual playback); the size gate only needs to exclude metadata crumbs.
+				// StreamingThreshold/4 (32KB) still catches the 64KB reads Synology's
+				// CIFS client makes, which the 128KB gate silently dropped - a far
+				// resume stayed FetchBlock-served with no pump jump at all. False
+				// positives are self-healed by the V284 re-anchor below.
+				relevant = lastLen >= int(gc().StreamingThreshold)/4 && now.Sub(lastTime) < 30*time.Second
 			}
 			if !relevant && !playbackConfirmedOrInferred {
 				// V284 pre-confirmation adaptive threshold: before the webhook fires (first
@@ -1372,9 +1379,14 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		// Snap pump to player position when seek gap exceeds budget, aligned to chunk boundary.
 		// Bidirectional: a wrong guess (e.g. the pre-confirmation V284 threshold firing on a
 		// metadata probe at a far offset) leaves the pump stranded AHEAD of the player for the
-		// whole session, since the jump below only fires when playerOff > offset. The mirrored
-		// backward clause re-anchors the pump to the player when it has run away by more than a
-		// budget - self-healing instead of session-breaking (player then served by FetchBlock).
+		// whole session, since the forward jump below only fires when playerOff > offset. The
+		// mirrored backward clause re-anchors the pump to the player when it has run away by
+		// more than twice the budget. 2x, not 1x: the pump is DESIGNED to lead the player by
+		// up to one budget and then idle at its hard limit (nativePumpChunk sleeps past
+		// diff>budget) - re-anchoring at 1x made every idle pump bounce 0 -> budget -> 0
+		// forever, re-climbing through already-cached head chunks at microsecond speed
+		// (5+ re-anchors per second in production, 3217 in 20 minutes, pump effectively dead).
+		// Only leads beyond 2x budget are pathological (a stranded pump) and worth a reset.
 		jumpThreshold := int64(gc().ReadAheadBudget)
 		if playerOff > offset+jumpThreshold {
 			jumpTo := (playerOff / chunkSize) * chunkSize
@@ -1386,7 +1398,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				(playerOff-offset)/(1024*1024))
 			offset = jumpTo
 			pumpedBytes = 0 // reset grace period so throttle doesn't fire immediately
-		} else if playerOff > 0 && offset > playerOff+jumpThreshold {
+		} else if playerOff > 0 && offset > playerOff+2*jumpThreshold {
 			jumpBack := (playerOff / chunkSize) * chunkSize
 			if jumpBack < 0 {
 				jumpBack = 0
