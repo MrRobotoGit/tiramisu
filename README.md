@@ -895,15 +895,18 @@ docker run -d \
   --cap-add NET_ADMIN \
   -v /path/to/config.json:/config.json:ro \
   -v /mnt/tiramisu-mkv-real:/mnt/tiramisu-mkv-real \
-  -v /mnt/tiramisu-mkv-virtual:/mnt/tiramisu-mkv-virtual \
+  -v /mnt/tiramisu-mkv-virtual:/mnt/tiramisu-mkv-virtual:rshared \
   -p 8090:8090 \
   -p 9080:9080 \
   mrrobotogit/tiramisu:latest
 ```
 
-Or use `--privileged` as a simpler alternative to the individual capabilities (e.g. on a Raspberry Pi where the container is fully trusted).
+Or use `--privileged` as a simpler alternative to the individual capabilities (e.g. on a Raspberry Pi where the container is fully trusted). In practice `--cap-add SYS_ADMIN`/`NET_ADMIN` alone have been reported insufficient on some Ubuntu hosts — if the container starts cleanly but the virtual directory stays empty, use `--privileged`.
 
 `config.json` must be volume-mounted at `/config.json` (the default `MKV_PROXY_CONFIG_PATH`). Use `config.json.example` as the starting point.
+
+> [!TIP]
+> **Troubleshooting: real directory fills up, virtual stays empty.** If `docker logs` shows `FUSE mounted at ... all systems active` and the InodeMap saving files, but `/mnt/tiramisu-mkv-virtual` is empty on the host, the FUSE mount succeeded *inside* the container but never propagated out — Docker bind mounts default to private propagation, so a mount created inside the container isn't visible outside it. Fix: add `:rshared` to the virtual volume's `-v` flag (as above). If Docker then refuses to start with an error like *"must be shared or slave"*, the host mountpoint itself isn't shared yet - run `sudo mount --make-rshared /mnt` (or whichever parent directory holds it) once, then restart the container.
 
 **Build from source** (from the repository root):
 
