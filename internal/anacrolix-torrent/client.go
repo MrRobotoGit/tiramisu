@@ -1143,7 +1143,7 @@ func (t *Torrent) runHandshookConn(pc *PeerConn) error {
 // churnIfUselessForWarmup gives a newly-connected peer a short window to report pieces near the
 // start of the file actually being warmed (per t.warmupFileID) via its bitfield/have messages
 // (arriving concurrently through pc.mainReadLoop). If after that window the peer has none of the
-// first few pieces of THAT FILE's own piece range (not necessarily piece 0 of the torrent - a
+// first pieces of THAT FILE's own piece range (not necessarily piece 0 of the torrent - a
 // multi-file torrent's warmed file may start well past piece 0), disconnect it immediately
 // instead of holding the connection slot - treats new connections as disposable probes during the
 // warmup window only, mapping which peers are actually useful far faster than waiting for default
@@ -1152,30 +1152,41 @@ func (t *Torrent) runHandshookConn(pc *PeerConn) error {
 // via Torrent.SetWarmupActive).
 func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 	const (
-		probeWindow      = 3 * time.Second
-		probeFirstPieces = 3
+		probeWindow = 3 * time.Second
+		// Matches hedgeWarmupPieceWindow (the hedge's own probe of the same warmed file) instead
+		// of a much narrower window - a peer holding pieces 4-32 of the head is still useful to
+		// the 64MB head warmup and shouldn't be churned just because churn used to check fewer
+		// pieces than the hedge logic checks on the very same file.
+		probePieces = hedgeWarmupPieceWindow
 		// 10s produced too many wasted re-probes in production (57% of all churn events over
 		// 10 days were repeat drops of a peer that had just been churned) - a peer that lacked
 		// the warmup-region pieces 10s ago is very unlikely to have them now. Raised to 30s.
 		churnCooldownDur = 30 * time.Second
 	)
-	host, _, _ := net.SplitHostPort(pc.RemoteAddr.String())
+	key := churnCooldownKey(pc.RemoteAddr)
 
 	t.cl.lock()
 	now := time.Now()
-	if until, ok := t.churnCooldown[host]; ok {
-		if now.Before(until) {
-			// Already proved useless for this warmup recently - drop immediately without wasting
-			// another 3s probe window; lacking a piece isn't a ban-worthy offense, just not worth
-			// re-checking every few seconds while the peer likely still doesn't have it.
-			t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] hash=%s dropping peer %v - still in %v cooldown from a prior churn", t.infoHash.HexString(), pc.RemoteAddr, churnCooldownDur)
-			pc.drop()
-			t.cl.unlock()
-			return
+	// giveSecondChance: this reconnect landed on an existing, still-valid cooldown entry that
+	// hasn't used its one second-chance probe yet - a peer's first drop can be a slow bitfield
+	// (arrived just after the 3s window closed) rather than genuine uselessness, so give it one
+	// more full probe before trusting the verdict. entry.probed==true means that second chance
+	// was already spent and failed again; only then do we drop without probing.
+	giveSecondChance := false
+	if entry, ok := t.churnCooldown[key]; ok {
+		if now.Before(entry.until) {
+			if entry.probed {
+				t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] hash=%s dropping peer %v - still in %v cooldown after its second-chance probe also failed", t.infoHash.HexString(), pc.RemoteAddr, churnCooldownDur)
+				pc.drop()
+				t.cl.unlock()
+				return
+			}
+			giveSecondChance = true
+		} else {
+			// Expired - opportunistic cleanup so churnCooldown doesn't grow unbounded over a
+			// long-lived torrent's many warmup cycles (seeks each set warmupActive true again).
+			delete(t.churnCooldown, key)
 		}
-		// Expired - opportunistic cleanup so churnCooldown doesn't grow unbounded over a
-		// long-lived torrent's many warmup cycles (seeks each set warmupActive true again).
-		delete(t.churnCooldown, host)
 	}
 	t.cl.unlock()
 
@@ -1185,7 +1196,7 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 	if pc.closed.IsSet() || !t.warmupActive.Load() {
 		return // already gone, or warmup finished while we were waiting - nothing to churn
 	}
-	begin, end, ok := t.warmupPieceRange(probeFirstPieces)
+	begin, end, ok := t.warmupPieceRange(probePieces)
 	if !ok {
 		// Metadata not resolved yet, or file index out of range - can't compute a real piece
 		// range. Keep the connection; safe default (never drop without positive evidence).
@@ -1197,12 +1208,10 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 		}
 	}
 	t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] hash=%s dropping peer %v - no warmup-region pieces (file range [%d,%d)) after %v probe", t.infoHash.HexString(), pc.RemoteAddr, begin, end, probeWindow)
-	if host != "" {
-		if t.churnCooldown == nil {
-			t.churnCooldown = make(map[string]time.Time)
-		}
-		t.churnCooldown[host] = time.Now().Add(churnCooldownDur)
+	if t.churnCooldown == nil {
+		t.churnCooldown = make(map[string]churnCooldownEntry)
 	}
+	t.churnCooldown[key] = churnCooldownEntry{until: time.Now().Add(churnCooldownDur), probed: giveSecondChance}
 	pc.drop()
 }
 

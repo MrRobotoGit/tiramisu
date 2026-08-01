@@ -101,7 +101,11 @@ type Torrent struct {
 	// AdaptiveShield's corruption-based bans) - lacking a piece is normal, legitimate behavior,
 	// just wasteful to re-probe every few seconds during an active warmup. Guarded by t.cl's lock
 	// (already held by every caller that touches this), not a separate mutex.
-	churnCooldown map[string]time.Time
+	// churnCooldownEntry.probed distinguishes a fresh cooldown (peer gets one more full probe on
+	// its next reconnect, in case the first drop was just a slow bitfield) from one that has
+	// already used that second chance and failed again (further reconnects during the same
+	// window drop immediately, preserving the original point of the cooldown).
+	churnCooldown map[string]churnCooldownEntry
 
 	// warmupLatencySamples tracks rolling response-time samples per chunk size, used to compute
 	// a p95 threshold for tail-hedging warmup pieces (see warmupP95/recordWarmupLatency). Simple
@@ -962,10 +966,28 @@ func (t *Torrent) SetWarmupActive(active bool, fileID int) {
 	}
 }
 
+// churnCooldownEntry is the value type of Torrent.churnCooldown - see that field's doc comment.
+type churnCooldownEntry struct {
+	until  time.Time
+	probed bool
+}
+
+// churnCooldownKey returns the key used to index Torrent.churnCooldown for a peer address:
+// the host part when addr splits cleanly (so a peer reconnecting from a new port still hits
+// its own cooldown entry), or the address's full string otherwise - hosts that don't split
+// (malformed/atypical RemoteAddr) would otherwise never land in churnCooldown at all, letting
+// them dodge the cooldown and get re-probed every time (see churnIfUselessForWarmup).
+func churnCooldownKey(addr PeerRemoteAddr) string {
+	if host, _, err := net.SplitHostPort(addr.String()); err == nil && host != "" {
+		return host
+	}
+	return addr.String()
+}
+
 // warmupPieceRange returns the [begin, end) piece index range for the file currently being
-// warmed (per warmupFileID), scoped to at most probeFirstPieces from the start of that file -
-// not the whole torrent. Returns ok=false if the file index is out of range or metadata isn't
-// resolved yet (caller should treat that as "don't restrict, or skip" as appropriate).
+// warmed (per warmupFileID), scoped to at most maxPieces from the start of that file - not the
+// whole torrent. Returns ok=false if the file index is out of range or metadata isn't resolved
+// yet (caller should treat that as "don't restrict, or skip" as appropriate).
 func (t *Torrent) warmupPieceRange(maxPieces int) (begin, end pieceIndex, ok bool) {
 	if !t.haveInfo() {
 		return 0, 0, false
@@ -1355,13 +1377,10 @@ func (t *Torrent) maybeEjectOutlierPeer(now time.Time) {
 	if t.peerIsSolePieceSource(worst) {
 		return
 	}
-	host, _, _ := net.SplitHostPort(worst.RemoteAddr.String())
-	if host != "" {
-		if t.churnCooldown == nil {
-			t.churnCooldown = make(map[string]time.Time)
-		}
-		t.churnCooldown[host] = now.Add(peerEjectCooldown)
+	if t.churnCooldown == nil {
+		t.churnCooldown = make(map[string]churnCooldownEntry)
 	}
+	t.churnCooldown[churnCooldownKey(worst.RemoteAddr)] = churnCooldownEntry{until: now.Add(peerEjectCooldown)}
 	t.peerEjectCount.Add(1)
 	uselessFor := "ever (no useful chunk received)"
 	if !worst.lastUsefulChunkReceived.IsZero() {
@@ -1972,10 +1991,8 @@ func (t *Torrent) openNewConns() (initiated int) {
 		p := t.peers.PopMax()
 		// Skip IPs churned/ejected recently - avoid immediately re-filling a freed slot.
 		if t.cl.config.AggressivePeerManagement && len(t.churnCooldown) > 0 {
-			if host, _, _ := net.SplitHostPort(p.Addr.String()); host != "" {
-				if until, ok := t.churnCooldown[host]; ok && time.Now().Before(until) {
-					continue
-				}
+			if entry, ok := t.churnCooldown[churnCooldownKey(p.Addr)]; ok && time.Now().Before(entry.until) {
+				continue
 			}
 		}
 		opts := outgoingConnOpts{
