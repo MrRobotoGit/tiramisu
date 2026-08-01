@@ -1105,10 +1105,34 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 					pbs.mu.RLock()
 					lastSeekOff := pbs.LastSeekOff
 					pbs.mu.RUnlock()
-					if lastSeekOff > 2*1024*1024 {
+					// Reject values already in (or past) the tail-probe zone: LastSeekOff is
+					// monotonically increasing at the write site (off > ps.LastSeekOff), so a
+					// single Cues probe near EOF - recorded before the write-site guard above
+					// existed, or from a build that predates it - poisons the value forever;
+					// no real playback position can ever be bigger to overwrite it. Anchoring
+					// the pump there makes nativePumpChunk see offset >= h.size on its very
+					// first iteration (genuine EOF) - the pump never starts at all. This guard
+					// heals every already-corrupted library entry, not just new writes.
+					if lastSeekOff > 2*1024*1024 && lastSeekOff < h.size-tailProbeZoneSize(h.size) {
 						logger.Printf("[ResumeAnchor] Seeding pump start from persisted resume position: %.1fMB",
 							float64(lastSeekOff)/(1<<20))
 						atomic.StoreInt64(&h.lastOff, lastSeekOff)
+					} else if lastSeekOff >= h.size-tailProbeZoneSize(h.size) {
+						// Self-heal: a value in the tail zone (or beyond EOF) is a poisoned tail
+						// probe, never a real resume position. The guard above already refuses to
+						// anchor on it; zeroing it here (memory + DB) makes the poison go away
+						// permanently instead of lingering in playback_states for the file's
+						// lifetime (and skewing IsInferredPlayback's streaming check). One-shot
+						// per path: once zeroed in memory, subsequent pump starts read 0 and
+						// never re-enter this branch. A genuine near-end resume loses its anchor,
+						// same accepted tradeoff as the write-site guard - the pump starts at the
+						// head and V284/re-anchor follows the player dynamically.
+						pbs.mu.Lock()
+						pbs.LastSeekOff = 0
+						pbs.mu.Unlock()
+						savePlaybackStateToDB(pbs)
+						logger.Printf("[ResumeAnchor] Zeroed poisoned last_seek_off (%.1fMB in tail zone) for %s",
+							float64(lastSeekOff)/(1<<20), filepath.Base(h.path))
 					}
 				}
 			}
@@ -1511,6 +1535,21 @@ func shouldInterruptForSeek(prevOff, off, budget int64) bool {
 	return off > prevOff+budget || prevOff > off+budget
 }
 
+// tailProbeZoneSize returns the adaptive tail-probe zone size for a file of the given size:
+// 5%, clamped to [64MB, 2GB]. Shared by the WARMUP->TAIL_PROBE transition, the LastSeekOff
+// write-site guard, and the ResumeAnchor seed-site guard - a single scanner probe reading MKV
+// Cues near the end of a file must never look like a real playback position to any of them.
+func tailProbeZoneSize(size int64) int64 {
+	zone := size / 20 // 5%
+	if zone < 64*1024*1024 {
+		zone = 64 * 1024 * 1024
+	}
+	if zone > 2*1024*1024*1024 {
+		zone = 2 * 1024 * 1024 * 1024
+	}
+	return zone
+}
+
 // forceTorrentWarmupActive marks hash/fileID as warmup-active unconditionally. Used at Open() for
 // genuine cold starts (!headReady), before any WriteChunk has happened yet (and thus before
 // DiskWarmup's writeWorker has had a chance to record the STARTING state itself), so aggressive
@@ -1579,7 +1618,13 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			ps.mu.Lock()
 			ps.ReadCount++
 			ps.LastReadAt = now
-			if off > 2*1024*1024 && off > ps.LastSeekOff {
+			// Exclude the tail-probe zone: Plex reads near the end of every file for MKV Cues
+			// before confirming playback, even on a cold library scan the user never watches.
+			// LastSeekOff is monotonically increasing (off > ps.LastSeekOff), so recording a tail
+			// probe here is permanent - no real playback position is ever bigger than the file's
+			// own tail, so it can never overwrite a corrupted value. See ResumeAnchor's seed-site
+			// guard below for the matching read-side fix (this one only stops new corruption).
+			if off > 2*1024*1024 && off < h.size-tailProbeZoneSize(h.size) && off > ps.LastSeekOff {
 				ps.LastSeekOff = off
 			}
 			ps.mu.Unlock()
@@ -1672,13 +1717,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	// Detect pre-confirmation tail probe (5% of file, 64MB–2GB) to suppress pump interrupt.
-	dynamicThreshold := h.size / 20 // 5%
-	if dynamicThreshold < 64*1024*1024 {
-		dynamicThreshold = 64 * 1024 * 1024
-	}
-	if dynamicThreshold > 2*1024*1024*1024 {
-		dynamicThreshold = 2 * 1024 * 1024 * 1024
-	}
+	dynamicThreshold := tailProbeZoneSize(h.size)
 
 	// Transition WARMUP→TAIL_PROBE on first tail region read during discovery phase.
 	if h.state.Load() == stateWarmup && h.hash != "" && h.size > dynamicThreshold && off >= h.size-dynamicThreshold {
