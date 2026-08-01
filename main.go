@@ -1092,6 +1092,28 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 
 		logger.Printf("[V264] Native Pump Started (Slot Acquired): %s", filepath.Base(h.path))
 
+		// Seed h.lastOff from the persisted resume position (V750 playback_states.last_seek_off)
+		// before any of the anchoring logic below runs, so a cold pump-start (h.lastOff still -1,
+		// no live signal yet) for a file resumed deep into its runtime is treated exactly like an
+		// inherited primary-reconnect position (see newRefs==1 above) instead of starting near
+		// MaxCachedOffset/0 - without this, resuming at e.g. 19GB left the pump buffering from
+		// scratch while the player was served entirely by FetchBlock until something else caught
+		// up. >2MB matches the existing real-playback-vs-scanner threshold (main.go IsInferredPlayback).
+		if atomic.LoadInt64(&h.lastOff) < 0 {
+			if val, ok := playbackRegistry.Load(h.path); ok {
+				if pbs, ok := val.(*PlaybackState); ok {
+					pbs.mu.RLock()
+					lastSeekOff := pbs.LastSeekOff
+					pbs.mu.RUnlock()
+					if lastSeekOff > 2*1024*1024 {
+						logger.Printf("[ResumeAnchor] Seeding pump start from persisted resume position: %.1fMB",
+							float64(lastSeekOff)/(1<<20))
+						atomic.StoreInt64(&h.lastOff, lastSeekOff)
+					}
+				}
+			}
+		}
+
 		// Start background pump — resume from last cached position
 		resumeOffset := raCache.MaxCachedOffset(h.path)
 
@@ -1260,12 +1282,15 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		}
 
 		timeoutLimit := 45 * time.Second
+		playbackConfirmedOrInferred := false
 		if val, ok := playbackRegistry.Load(h.path); ok {
 			if ps, ok := val.(*PlaybackState); ok {
 				if ps.GetStatus() {
 					timeoutLimit = 2 * time.Hour
+					playbackConfirmedOrInferred = true
 				} else if ps.IsInferredPlayback() {
 					timeoutLimit = 10 * time.Minute // V750: Inferred playback
+					playbackConfirmedOrInferred = true
 				}
 			}
 		}
@@ -1275,11 +1300,43 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 			return
 		}
 
-		// Sync to primary handles only; secondary metadata probes cause false 10GB+ jumps.
+		// Sync from primary handles always, plus secondary (attached) handles once playback is
+		// confirmed/inferred - the false-10GB+-jump risk that motivated primary-only sync comes
+		// from pre-confirmation metadata probes; once the webhook (or inferred heuristic) has
+		// fired, a secondary handle reading like real streaming (isStreaming-equivalent: lastLen
+		// >= StreamingThreshold) and fresh (<30s) is the actual player, just attached to a pump
+		// someone else created (see Read()'s on-the-fly upgrade gate on !h.hasSlot, which an
+		// attached handle never re-enters). Without this, the pump never follows a player that
+		// attached to an existing pump instead of creating it - it just idles at its own offset
+		// while the real playback position races ahead, served entirely by FetchBlock.
 		playerOff := int64(0)
+		now := time.Now()
 		activeHandles.Range(func(key, value interface{}) bool {
 			handle := key.(*MkvHandle)
-			if handle.path == h.path && handle.isPrimaryHandle {
+			if handle.path != h.path {
+				return true
+			}
+			relevant := handle.isPrimaryHandle
+			if !relevant && playbackConfirmedOrInferred {
+				handle.mu.Lock()
+				lastLen, lastTime := handle.lastLen, handle.lastTime
+				handle.mu.Unlock()
+				relevant = lastLen >= int(gc().StreamingThreshold) && now.Sub(lastTime) < 30*time.Second
+			}
+			if !relevant && !playbackConfirmedOrInferred {
+				// V284 pre-confirmation adaptive threshold: before the webhook fires (first
+				// 0-5s), a big streaming-sized read from an attached handle already looks like
+				// the real player, not the small metadata probe the primary-only gate exists to
+				// exclude. Tighter freshness (5s vs. 30s post-confirmation) and this only feeds
+				// the one-shot V284 jump below, not sustained sync - the jump is self-limiting
+				// (pump stops itself once within budget), so a wrong guess costs at most one
+				// ReadAheadBudget-sized wasted jump, not a permanently mis-synced pump.
+				handle.mu.Lock()
+				lastLen, lastTime := handle.lastLen, handle.lastTime
+				handle.mu.Unlock()
+				relevant = lastLen >= int(gc().StreamingThreshold) && now.Sub(lastTime) < 5*time.Second
+			}
+			if relevant {
 				off := atomic.LoadInt64(&handle.lastOff)
 				if off > playerOff {
 					playerOff = off
@@ -1289,6 +1346,11 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		})
 
 		// Snap pump to player position when seek gap exceeds budget, aligned to chunk boundary.
+		// Bidirectional: a wrong guess (e.g. the pre-confirmation V284 threshold firing on a
+		// metadata probe at a far offset) leaves the pump stranded AHEAD of the player for the
+		// whole session, since the jump below only fires when playerOff > offset. The mirrored
+		// backward clause re-anchors the pump to the player when it has run away by more than a
+		// budget - self-healing instead of session-breaking (player then served by FetchBlock).
 		jumpThreshold := int64(gc().ReadAheadBudget)
 		if playerOff > offset+jumpThreshold {
 			jumpTo := (playerOff / chunkSize) * chunkSize
@@ -1299,6 +1361,16 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				offset/(1024*1024), jumpTo/(1024*1024), playerOff/(1024*1024),
 				(playerOff-offset)/(1024*1024))
 			offset = jumpTo
+			pumpedBytes = 0 // reset grace period so throttle doesn't fire immediately
+		} else if playerOff > 0 && offset > playerOff+jumpThreshold {
+			jumpBack := (playerOff / chunkSize) * chunkSize
+			if jumpBack < 0 {
+				jumpBack = 0
+			}
+			logger.Printf("[V284] Pump re-anchor: %dMB → %dMB (player at %dMB, lead %dMB)",
+				offset/(1024*1024), jumpBack/(1024*1024), playerOff/(1024*1024),
+				(offset-playerOff)/(1024*1024))
+			offset = jumpBack
 			pumpedBytes = 0 // reset grace period so throttle doesn't fire immediately
 		}
 
@@ -1629,6 +1701,19 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	// restarts and resets the flag (preventing the thrash loop seen in the logs).
 	budget := int64(gc().ReadAheadBudget)
 	if h.nativeReader != nil && !isTailProbe && shouldInterruptForSeek(prevOff, off, budget) {
+		// Promote to primary on a genuine seek once playback is confirmed/inferred - mirrors the
+		// refCount 0->1 "primary reconnect" promotion at attach time (main.go:1030): a secondary
+		// (attached) handle doing a real seek during confirmed playback IS the player, and needs
+		// isPrimaryHandle so the pump loop's playerOff sync and Release's ps.playerOff
+		// persistence (see nativePump) pick it up instead of only the original primary handle,
+		// which may be an idle stale probe by now.
+		if !h.isPrimaryHandle {
+			if val, ok := playbackRegistry.Load(h.path); ok {
+				if pbs, ok := val.(*PlaybackState); ok && (pbs.GetStatus() || pbs.IsInferredPlayback()) {
+					h.isPrimaryHandle = true
+				}
+			}
+		}
 		var ps *NativePumpState
 		if val, ok := activePumps.Load(h.path); ok {
 			ps = val.(*NativePumpState)
