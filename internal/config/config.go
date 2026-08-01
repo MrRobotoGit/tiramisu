@@ -446,6 +446,12 @@ func (c *Config) finalize() {
 	if c.ReadAheadBudget < 10*1024*1024 {
 		c.ReadAheadBudget = 10 * 1024 * 1024 // Min 10MB
 	}
+	// Budget must cover at least one adaptive chunk (ReadAheadBase, up to 16MB): a smaller
+	// budget makes every pump Put() exceed it permanently (the just-added chunk is exempt from
+	// eviction), turning the soft-limit throttle in nativePumpChunk into a permanent near-freeze.
+	if c.ReadAheadBudget < c.ReadAheadBase {
+		c.ReadAheadBudget = c.ReadAheadBase
+	}
 
 	// Calculate MetadataCacheSize in bytes
 	c.MetadataCacheSize = c.MetadataCacheSizeMB * 1024 * 1024

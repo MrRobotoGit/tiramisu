@@ -165,7 +165,6 @@ type NativeReader struct {
 }
 
 func (r *NativeReader) SetPieceLen(n int64) { r.pieceLen.Store(n) }
-func (r *NativeReader) PieceLen() int64      { return r.pieceLen.Load() }
 
 // ErrInterrupted is returned by ReadAt when the pipe was closed by Interrupt().
 var ErrInterrupted = fmt.Errorf("interrupted by seek")

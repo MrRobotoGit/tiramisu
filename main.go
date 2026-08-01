@@ -1190,6 +1190,11 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		// Only delete if our sharedState is still the registered one (prevents pump A's defer from deleting pump B).
 		if val, ok := activePumps.Load(h.path); ok && val == sharedState {
 			activePumps.Delete(h.path)
+			// Purge the adaptive chunk size set at this pump's start (SetPieceLen, main.go:1075):
+			// otherwise pieceLens keeps growing with entries for paths no pump is streaming
+			// anymore, and a future pump for the same path with a different piece length would
+			// see the stale entry via ChunkSize() until a fresh SetPieceLen call overwrites it.
+			raCache.pieceLens.Delete(h.path)
 		}
 
 		if pumpExitedHealthy {
@@ -1366,9 +1371,22 @@ func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, p
 		}
 	}
 
-	if data := raCache.Get(h.path, offset, offset); data != nil {
+	end := offset + chunkSize
+	if end > h.size {
+		end = h.size
+	}
+
+	// Coverage-aware skip-check: must cover the WHOLE [offset, end-1] range, not just probe the
+	// first byte. A single-byte probe would still hit after a partial Put (see the drift fix
+	// below), letting the pump skip a chunk that's only partially cached and leave a hole.
+	// Covered() does the check without copying; this is the common path in steady-state
+	// playback, so only pay for Get()'s up-to-16MB defensive copy when DiskWarmup actually
+	// needs the bytes.
+	if raCache.Covered(h.path, offset, end-1) {
 		if warmup.DiskWarmup != nil && h.hash != "" && offset <= warmup.FileSize {
-			warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, data, offset)
+			if data := raCache.Get(h.path, offset, end-1); data != nil {
+				warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, data, offset)
+			}
 		}
 		return false, offset + chunkSize
 	}
@@ -1380,11 +1398,6 @@ func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, p
 		if warmupCoverage >= offset+chunkSize {
 			return false, offset + chunkSize
 		}
-	}
-
-	end := offset + chunkSize
-	if end > h.size {
-		end = h.size
 	}
 
 	// Use buffer from pool to reduce allocations
@@ -1403,7 +1416,18 @@ func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, p
 		return true, offset + int64(n)
 	}
 
-	return false, offset + int64(n)
+	// A short read (fewer bytes than requested, err==nil) happens when a stream hiccup gets
+	// silently converted to (n, nil) upstream (see native.go ReadAt's ErrUnexpectedEOF handling).
+	// Continuing from offset+n would leave the pump mid-chunk permanently: every Put/skip-check
+	// keys off ChunkSize-aligned offsets, so an unaligned continuation drifts off the chunk grid
+	// for the rest of the pump's lifetime, turning every future chunk boundary into a cache miss.
+	// Snap forward to the next chunk boundary instead; the small gap this skips is filled on demand
+	// by FUSE reads landing in it (native.go's ReadAt handles both small and large forward jumps).
+	got := offset + int64(n)
+	if int64(n) < end-offset {
+		return false, (got/chunkSize + 1) * chunkSize
+	}
+	return false, got
 }
 
 // shouldInterruptForSeek returns true for genuine seeks beyond budget.
@@ -2443,6 +2467,28 @@ func (c *ReadAheadCache) SwitchContext(newPath string) {
 			c.triggerGlobalEviction(activePath, activeSessionID)
 		})
 	}
+}
+
+// Covered reports whether the cache fully covers [off, end] without copying any bytes —
+// use this for presence/coverage checks on the hot path; call Get separately only once the
+// actual data is needed, to avoid an up-to-16MB defensive copy on every check.
+func (c *ReadAheadCache) Covered(p string, off, end int64) bool {
+	s := c.getShard(p)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key := c.chunkKey(p, off)
+	if b, ok := s.buffers[key]; ok && off >= b.start && off <= b.end {
+		if end <= b.end {
+			atomic.StoreInt64(&b.lastAccess, time.Now().UnixNano())
+			return true
+		}
+		if b2, ok2 := s.buffers[c.chunkKey(p, end)]; ok2 && b2.start == b.end+1 && b2.end >= end {
+			atomic.StoreInt64(&b.lastAccess, time.Now().UnixNano())
+			atomic.StoreInt64(&b2.lastAccess, time.Now().UnixNano())
+			return true
+		}
+	}
+	return false
 }
 
 func (c *ReadAheadCache) Get(p string, off, end int64) []byte {
