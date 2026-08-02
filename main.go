@@ -1267,6 +1267,9 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 	pumpedBytes := int64(0)
 	// Align startOffset to chunk boundary
 	offset := (startOffset / chunkSize) * chunkSize
+	// Sticky player position across loop iterations - see the sync block below for why this
+	// can't just be recomputed as a plain MAX every tick.
+	lastKnownPlayerOff := int64(0)
 
 	for {
 		select {
@@ -1324,27 +1327,49 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 			return
 		}
 
-		// Sync from primary handles always, plus secondary (attached) handles once playback is
-		// confirmed/inferred - the false-10GB+-jump risk that motivated primary-only sync comes
-		// from pre-confirmation metadata probes; once the webhook (or inferred heuristic) has
-		// fired, a secondary handle reading like real streaming (isStreaming-equivalent: lastLen
-		// >= StreamingThreshold) and fresh (<30s) is the actual player, just attached to a pump
-		// someone else created (see Read()'s on-the-fly upgrade gate on !h.hasSlot, which an
-		// attached handle never re-enters). Without this, the pump never follows a player that
-		// attached to an existing pump instead of creating it - it just idles at its own offset
-		// while the real playback position races ahead, served entirely by FetchBlock.
-		playerOff := int64(0)
+		// Sync from primary handles (while still fresh) plus secondary (attached) handles once
+		// playback is confirmed/inferred - the false-10GB+-jump risk that motivated primary-only
+		// sync comes from pre-confirmation metadata probes; once the webhook (or inferred
+		// heuristic) has fired, a secondary handle reading like real streaming (isStreaming-
+		// equivalent: lastLen >= StreamingThreshold) and fresh (<30s) is the actual player, just
+		// attached to a pump someone else created (see Read()'s on-the-fly upgrade gate on
+		// !h.hasSlot, which an attached handle never re-enters). Without this, the pump never
+		// follows a player that attached to an existing pump instead of creating it - it just
+		// idles at its own offset while the real playback position races ahead, served entirely
+		// by FetchBlock.
+		//
+		// The primary handle's OWN freshness now matters too: once a real player attaches as
+		// secondary (the exact scenario above), the original primary handle - often just Plex's
+		// initial header probe - goes dormant with a frozen, near-zero lastOff. Treating primary
+		// as unconditionally relevant (as before) meant that on any tick where the secondary's
+		// 30s/5s freshness check happened to narrowly miss (client-side buffering, scheduling
+		// jitter - normal, not rare), the MAX fell back to that stale frozen value, snapping the
+		// pump - correctly per the code, wrongly per reality - all the way back, then immediately
+		// forward again next tick. 6517 forward+backward jump pairs in ~19h of production, most
+		// within the same second: this was thrashing, not occasional resync.
+		//
+		// Fix: track the last tick that found ANY fresh handle (primary now gated too, 60s -
+		// generous vs. the 30s/5s below since a genuinely active primary reads far more often)
+		// and keep that value across ticks where nothing currently qualifies, instead of
+		// collapsing to 0 and firing a bogus reset. The independent idle-timeout check above
+		// still kills the pump outright if the path goes truly dead for longer than that.
+		currentPlayerOff := int64(0)
+		foundFreshHandle := false
 		now := time.Now()
 		activeHandles.Range(func(key, value interface{}) bool {
 			handle := key.(*MkvHandle)
 			if handle.path != h.path {
 				return true
 			}
-			relevant := handle.isPrimaryHandle
-			if !relevant && playbackConfirmedOrInferred {
-				handle.mu.Lock()
-				lastLen, lastTime := handle.lastLen, handle.lastTime
-				handle.mu.Unlock()
+			handle.mu.Lock()
+			lastLen, lastTime, lastActivity := handle.lastLen, handle.lastTime, handle.lastActivityTime
+			handle.mu.Unlock()
+
+			var relevant bool
+			switch {
+			case handle.isPrimaryHandle:
+				relevant = now.Sub(lastActivity) < 60*time.Second
+			case playbackConfirmedOrInferred:
 				// Post-confirmation the freshness window is the real discriminator (the
 				// 30s window can only be satisfied by a handle that keeps reading, i.e.
 				// actual playback); the size gate only needs to exclude metadata crumbs.
@@ -1353,8 +1378,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				// resume stayed FetchBlock-served with no pump jump at all. False
 				// positives are self-healed by the V284 re-anchor below.
 				relevant = lastLen >= int(gc().StreamingThreshold)/4 && now.Sub(lastTime) < 30*time.Second
-			}
-			if !relevant && !playbackConfirmedOrInferred {
+			default:
 				// V284 pre-confirmation adaptive threshold: before the webhook fires (first
 				// 0-5s), a big streaming-sized read from an attached handle already looks like
 				// the real player, not the small metadata probe the primary-only gate exists to
@@ -1362,19 +1386,20 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				// the one-shot V284 jump below, not sustained sync - the jump is self-limiting
 				// (pump stops itself once within budget), so a wrong guess costs at most one
 				// ReadAheadBudget-sized wasted jump, not a permanently mis-synced pump.
-				handle.mu.Lock()
-				lastLen, lastTime := handle.lastLen, handle.lastTime
-				handle.mu.Unlock()
 				relevant = lastLen >= int(gc().StreamingThreshold) && now.Sub(lastTime) < 5*time.Second
 			}
 			if relevant {
-				off := atomic.LoadInt64(&handle.lastOff)
-				if off > playerOff {
-					playerOff = off
+				foundFreshHandle = true
+				if off := atomic.LoadInt64(&handle.lastOff); off > currentPlayerOff {
+					currentPlayerOff = off
 				}
 			}
 			return true
 		})
+		if foundFreshHandle {
+			lastKnownPlayerOff = currentPlayerOff
+		}
+		playerOff := lastKnownPlayerOff
 
 		// Snap pump to player position when seek gap exceeds budget, aligned to chunk boundary.
 		// Bidirectional: a wrong guess (e.g. the pre-confirmation V284 threshold firing on a
