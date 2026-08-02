@@ -11,6 +11,11 @@ import (
 	"tiramisu/internal/gostorm/settings"
 )
 
+// strictEscalationCapSeconds bounds the 30s-per-cycle escalation (see strictCycleCount) at its
+// slowest tier: 30 minutes, reached only after sustained/repeated corruption (cycle 60+), not on
+// an isolated event.
+const strictEscalationCapSeconds = 1800
+
 var (
 	// V303: Atomic Shield Protection
 	// Using atomic.Int64 to store last corruption Unix timestamp for thread-safety.
@@ -22,7 +27,12 @@ var (
 	// staticCorruptionCount tracks consecutive corrupted pieces for delayed activation.
 	staticCorruptionCount atomic.Int32
 	// strictCycleCount escalates the clean streak required each time STRICT is re-triggered.
-	// 1st cycle: 30s, 2nd: 60s, 3rd: 90s, 4th+: 120s. Resets on media.stop.
+	// 1st cycle: 30s, 2nd: 60s, 3rd: 90s, ... capped at strictEscalationCapSeconds. Deliberately
+	// NOT reset on media.stop (Plex-internal seeks/pauses must not erase escalation history on a
+	// genuinely corrupted swarm - see ResetShield). It IS reset once a full clean streak is
+	// achieved (below) - without that, this global, never-otherwise-reset counter would keep
+	// climbing for the process's entire uptime and every future single corruption event
+	// anywhere would immediately serve the escalation cap instead of a fresh 30s.
 	strictCycleCount atomic.Int32
 )
 
@@ -108,8 +118,8 @@ func (p *Piece) MarkNotComplete() error {
 		if count > 1 {
 			cycle := strictCycleCount.Add(1)
 			cleanNeeded := int64(30) * int64(cycle)
-			if cleanNeeded > 120 {
-				cleanNeeded = 120
+			if cleanNeeded > strictEscalationCapSeconds {
+				cleanNeeded = strictEscalationCapSeconds
 			}
 			log.TLogln("[AdaptiveShield] Persistent corruption - Force STRICT mode (Shield: ACTIVE, cycle", cycle, ", need", cleanNeeded, "s clean)")
 			shieldActive.Store(true)
@@ -132,8 +142,8 @@ func (p *Piece) MarkNotComplete() error {
 				if cleanNeeded < 30*time.Second {
 					cleanNeeded = 30 * time.Second
 				}
-				if cleanNeeded > 120*time.Second {
-					cleanNeeded = 120 * time.Second
+				if cleanNeeded > strictEscalationCapSeconds*time.Second {
+					cleanNeeded = strictEscalationCapSeconds * time.Second
 				}
 
 				if elapsed > cleanNeeded {
@@ -141,6 +151,12 @@ func (p *Piece) MarkNotComplete() error {
 						log.TLogln("[AdaptiveShield] Clean streak detected (", cleanNeeded.Seconds(), "s) - Restoring FAST mode (Shield: OFF)")
 					}
 					staticCorruptionCount.Store(0)
+					// Escalation history clears on a genuine clean streak (see strictCycleCount's
+					// doc comment) - only media.stop/seek must NOT reset it. Without this, cycle
+					// only ever grows for the process's lifetime and every future isolated
+					// corruption event would immediately hit strictEscalationCapSeconds instead of
+					// starting fresh at 30s.
+					strictCycleCount.Store(0)
 					isWatchdogRunning.Store(false)
 					return
 				}
