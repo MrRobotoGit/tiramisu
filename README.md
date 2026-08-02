@@ -1143,4 +1143,4 @@ Tiramisu is free and open source. If it's saving you a monthly chip, consider fu
 
 ## License
 
-GNU General Public License v2.0
+GNU General Public License v3.0
