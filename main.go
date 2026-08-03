@@ -2546,6 +2546,10 @@ type raShard struct {
 }
 
 func newReadAheadCache() *ReadAheadCache {
+	// Static 32-buffer default: newReadAheadCache runs at package init (var raCache),
+	// BEFORE config is loaded - gc() is nil here, so nothing config-dependent may be
+	// touched. The pool is re-anchored to the budget once config exists via
+	// AnchorPoolToConfig() (called from main after loading).
 	c := &ReadAheadCache{
 		shardMask: 31,
 		pool:      make(chan []byte, 32), // Cap at 32 chunks (512MB max pool)
@@ -2556,6 +2560,37 @@ func newReadAheadCache() *ReadAheadCache {
 		}
 	}
 	return c
+}
+
+// AnchorPoolToConfig re-sizes the recycled-buffer pool to the configured budget. Idle buffers
+// are only ever needed to absorb eviction/overwrite storms, whose size scales with how much
+// live content the budget allows - previously a fixed 32 (512MB max pool) regardless of
+// budget: wasteful at 128MB (8 live chunks, 512MB parked), zero storm headroom at 512MB
+// (32 live chunks fill it exactly). clamp(budget/base*2, 16, 32): 2x live content for storm
+// headroom, never below 16 (allocation churn), never above 32 (unbounded parking). Safe to
+// swap c.pool here: called once at boot from main(), before any pump/read goroutine exists.
+func (c *ReadAheadCache) AnchorPoolToConfig() {
+	base := gc().ReadAheadBase
+	if base <= 0 {
+		base = 16 * 1024 * 1024
+	}
+	budget := gc().ReadAheadBudget
+	if budget <= 0 {
+		budget = 256 * 1024 * 1024
+	}
+	poolCap := int(budget / base * 2)
+	if poolCap < 16 {
+		poolCap = 16
+	}
+	if poolCap > 32 {
+		poolCap = 32
+	}
+	if poolCap == cap(c.pool) {
+		return
+	}
+	logger.Printf("[RaCache] Pool cap anchored to budget: %d buffers (%dMB max, budget %dMB, base %dMB)",
+		poolCap, poolCap*int(base)/1024/1024, budget/1024/1024, base/1024/1024)
+	c.pool = make(chan []byte, poolCap)
 }
 
 func (c *ReadAheadCache) getShard(path string) *raShard {
@@ -3466,6 +3501,10 @@ func main() {
 		},
 	}
 	logger.Printf("ReadBufferPool initialized with size: %d bytes (matches ReadAheadBase)", poolSize)
+
+	// Config is loaded: anchor the raCache recycled-buffer pool to the budget now (at package
+	// init gc() was nil, so newReadAheadCache kept the static 32-buffer default).
+	raCache.AnchorPoolToConfig()
 
 	catalog.SetRetryDefaults(gc().MaxRetryAttempts, time.Duration(gc().RetryDelayMS)*time.Millisecond)
 
