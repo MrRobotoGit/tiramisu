@@ -2565,10 +2565,14 @@ func newReadAheadCache() *ReadAheadCache {
 // AnchorPoolToConfig re-sizes the recycled-buffer pool to the configured budget. Idle buffers
 // are only ever needed to absorb eviction/overwrite storms, whose size scales with how much
 // live content the budget allows - previously a fixed 32 (512MB max pool) regardless of
-// budget: wasteful at 128MB (8 live chunks, 512MB parked), zero storm headroom at 512MB
-// (32 live chunks fill it exactly). clamp(budget/base*2, 16, 32): 2x live content for storm
-// headroom, never below 16 (allocation churn), never above 32 (unbounded parking). Safe to
-// swap c.pool here: called once at boot from main(), before any pump/read goroutine exists.
+// budget: wasteful at 128MB (8 live chunks, 512MB parked), and at 512MB (32 live chunks) the
+// 32-cap was 1:1 with live content, leaving no margin for the 32-shard concurrent-pop burst
+// (every Put pops one buffer before its eviction recycle lands - with all shards popping
+// simultaneously the pool must hold live-count buffers or allocations churn).
+// clamp(budget/base*2, 16, 64): 2x live content so the margin holds across the whole range
+// (256MB->32, 512MB->64), floor 16 to avoid allocation churn on tiny budgets, ceiling 64 to
+// bound parking. The ceiling is nearly free: the pool only ever retains buffers that were
+// already allocated, it never pre-allocates.
 func (c *ReadAheadCache) AnchorPoolToConfig() {
 	base := gc().ReadAheadBase
 	if base <= 0 {
@@ -2582,8 +2586,8 @@ func (c *ReadAheadCache) AnchorPoolToConfig() {
 	if poolCap < 16 {
 		poolCap = 16
 	}
-	if poolCap > 32 {
-		poolCap = 32
+	if poolCap > 64 {
+		poolCap = 64
 	}
 	if poolCap == cap(c.pool) {
 		return
