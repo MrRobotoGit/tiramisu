@@ -927,11 +927,10 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 }
 
 // handleState values for MkvHandle.state (atomic.Uint32).
-// A handle transitions one-way: stateWarmup → stateStreaming or stateTailProbe.
+// A handle transitions one-way: stateWarmup → stateStreaming.
 const (
 	stateWarmup    uint32 = 0 // Initial: SSD warmup eligible (TTFF phase)
 	stateStreaming uint32 = 1 // Pump-only streaming; no SSD warmup
-	stateTailProbe uint32 = 2 // Plex scan probe: tail region, stateless FetchBlock
 )
 
 func stateName(s uint32) string {
@@ -940,8 +939,6 @@ func stateName(s uint32) string {
 		return "WARMUP"
 	case stateStreaming:
 		return "STREAMING"
-	case stateTailProbe:
-		return "TAIL_PROBE"
 	default:
 		return "UNKNOWN"
 	}
@@ -966,7 +963,7 @@ type MkvHandle struct {
 	hasSlot         bool
 	isWatching      bool
 	hasWarmup       bool          // true if both head+tail warmup available at Open time
-	state           atomic.Uint32 // handleState: stateWarmup | stateStreaming | stateTailProbe
+	state           atomic.Uint32 // handleState: stateWarmup | stateStreaming
 	pumpOnce        sync.Once
 	isPrimaryHandle bool // true for pump creator and primary reconnects (refCount 0→1)
 }
@@ -1102,39 +1099,23 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		// scratch while the player was served entirely by FetchBlock until something else caught
 		// up. >2MB matches the existing real-playback-vs-scanner threshold (main.go IsInferredPlayback).
 		if atomic.LoadInt64(&h.lastOff) < 0 {
+			seeded := false
 			if val, ok := playbackRegistry.Load(h.path); ok {
 				if pbs, ok := val.(*PlaybackState); ok {
 					pbs.mu.RLock()
 					lastSeekOff := pbs.LastSeekOff
 					pbs.mu.RUnlock()
-					// Reject values already in (or past) the tail-probe zone: LastSeekOff is
-					// monotonically increasing at the write site (off > ps.LastSeekOff), so a
-					// single Cues probe near EOF - recorded before the write-site guard above
-					// existed, or from a build that predates it - poisons the value forever;
-					// no real playback position can ever be bigger to overwrite it. Anchoring
-					// the pump there makes nativePumpChunk see offset >= h.size on its very
-					// first iteration (genuine EOF) - the pump never starts at all. This guard
-					// heals every already-corrupted library entry, not just new writes.
-					if lastSeekOff > 2*1024*1024 && lastSeekOff < h.size-tailProbeZoneSize(h.size) {
-						logger.Printf("[ResumeAnchor] Seeding pump start from persisted resume position: %.1fMB",
-							float64(lastSeekOff)/(1<<20))
-						atomic.StoreInt64(&h.lastOff, lastSeekOff)
-					} else if lastSeekOff >= h.size-tailProbeZoneSize(h.size) {
-						// Self-heal: a value in the tail zone (or beyond EOF) is a poisoned tail
-						// probe, never a real resume position. The guard above already refuses to
-						// anchor on it; zeroing it here (memory + DB) makes the poison go away
-						// permanently instead of lingering in playback_states for the file's
-						// lifetime (and skewing IsInferredPlayback's streaming check). One-shot
-						// per path: once zeroed in memory, subsequent pump starts read 0 and
-						// never re-enter this branch. A genuine near-end resume loses its anchor,
-						// same accepted tradeoff as the write-site guard - the pump starts at the
-						// head and V284/re-anchor follows the player dynamically.
-						pbs.mu.Lock()
-						pbs.LastSeekOff = 0
-						pbs.mu.Unlock()
-						savePlaybackStateToDB(pbs)
-						logger.Printf("[ResumeAnchor] Zeroed poisoned last_seek_off (%.1fMB in tail zone) for %s",
-							float64(lastSeekOff)/(1<<20), filepath.Base(h.path))
+					seeded = h.seedResumeAnchor(pbs, lastSeekOff)
+				}
+			}
+			// V751: registry miss or fresh entry (a clean stop before boot leaves
+			// IsStopped=true, which restorePlaybackStates filters out) → fall back to the
+			// DB so a mid-file resume still anchors the pump at the real position instead
+			// of starting from 0 while the player is served entirely by FetchBlock.
+			if !seeded && stateDB != nil {
+				if rec, err := stateDB.LoadPlaybackStateByPath(h.path); err == nil && rec != nil && rec.LastSeekOff > 0 {
+					if h.seedResumeAnchor(nil, rec.LastSeekOff) {
+						logger.Printf("[ResumeAnchor] Seeded pump start from DB: %.1fMB", float64(rec.LastSeekOff)/(1<<20))
 					}
 				}
 			}
@@ -1575,7 +1556,7 @@ func shouldInterruptForSeek(prevOff, off, budget int64) bool {
 }
 
 // tailProbeZoneSize returns the adaptive tail-probe zone size for a file of the given size:
-// 5%, clamped to [64MB, 2GB]. Shared by the WARMUP->TAIL_PROBE transition, the LastSeekOff
+// 5%, clamped to [64MB, 2GB]. Shared by the LastSeekOff
 // write-site guard, and the ResumeAnchor seed-site guard - a single scanner probe reading MKV
 // Cues near the end of a file must never look like a real playback position to any of them.
 func tailProbeZoneSize(size int64) int64 {
@@ -1587,6 +1568,91 @@ func tailProbeZoneSize(size int64) int64 {
 		zone = 2 * 1024 * 1024 * 1024
 	}
 	return zone
+}
+
+// shouldServeTailFromSSD reports whether a read at offset off (file size size) can be
+// served from the tail warmup file (the last tailWarmupSize bytes). Pure gate for the
+// Read() path: ReadTail itself is range-safe (returns 0 outside coverage), so this
+// only decides whether the SSD tail is even a candidate. It deliberately does not
+// depend on handle state - any first read with off >= warmup.FileSize transitions
+// WARMUP→STREAMING (seek/resume detection) before a state-gated tail check could run.
+// A resume in the last 16MB was therefore served by network FetchBlock (~16s TTFF on
+// a 36.6GB remux, 2026-08-06) although the tail file was complete on SSD.
+func shouldServeTailFromSSD(off, size, tailWarmupSize int64) bool {
+	if size <= 0 || tailWarmupSize <= 0 {
+		return false
+	}
+	tailStart := size - tailWarmupSize
+	if tailStart < 0 {
+		tailStart = 0
+	}
+	return off >= tailStart
+}
+
+// resumeAnchorFromPersisted applies the tail-probe guard to a persisted resume
+// position. Returns (anchor, zeroed): anchor is a valid pump start (0 when unusable),
+// zeroed=true when the value lies in the tail-probe zone (or beyond EOF) and must be
+// cleared - a single scanner probe reading MKV Cues near the end of a file must never
+// look like a real playback position. Shared by the registry seeding and the DB
+// fallback so both paths apply identical semantics.
+func resumeAnchorFromPersisted(lastSeekOff, size int64) (anchor int64, zeroed bool) {
+	if lastSeekOff > 2*1024*1024 && lastSeekOff < size-tailProbeZoneSize(size) {
+		return lastSeekOff, false
+	}
+	if lastSeekOff >= size-tailProbeZoneSize(size) {
+		return 0, true
+	}
+	return 0, false
+}
+
+// shouldInterruptPump decides whether a read should interrupt the pump. Reads served
+// from the SSD tail warmup (shouldServeTailFromSSD) never touch the pump - Interrupt()
+// + ResetShield() would only stall a pump the read does not need. The old isTailProbe
+// gate was unreachable dead state (any read in the tail zone first transitions
+// WARMUP→STREAMING), so a live scrub into the last 16MB interrupted the pump even
+// though the SSD served the read instantly.
+func shouldInterruptPump(prevOff, off, budget int64, tailServed bool) bool {
+	if tailServed {
+		return false
+	}
+	return shouldInterruptForSeek(prevOff, off, budget)
+}
+
+// seedResumeAnchor applies the tail-probe guard to a persisted resume position and,
+// when valid, anchors the pump start there. ps is optional (nil on the DB fallback
+// path). Returns true when the pump start was anchored. Zeroing a poisoned tail-probe
+// value is a targeted UPDATE - it must never clobber the previous session's flags.
+func (h *MkvHandle) seedResumeAnchor(ps *PlaybackState, lastSeekOff int64) bool {
+	if lastSeekOff <= 2*1024*1024 {
+		return false
+	}
+	anchor, zeroed := resumeAnchorFromPersisted(lastSeekOff, h.size)
+	if anchor > 0 {
+		atomic.StoreInt64(&h.lastOff, anchor)
+		logger.Printf("[ResumeAnchor] Seeding pump start from persisted resume position: %.1fMB",
+			float64(anchor)/(1<<20))
+		return true
+	}
+	if zeroed {
+		// Self-heal: a value in the tail zone (or beyond EOF) is a poisoned tail probe,
+		// never a real resume position (a genuine near-end resume is served by the SSD
+		// tail warmup, see shouldServeTailFromSSD, so it needs no pump anchor). Zero it
+		// in memory + DB so it stops poisoning future pump starts.
+		if ps != nil {
+			ps.mu.Lock()
+			ps.LastSeekOff = 0
+			ps.mu.Unlock()
+		}
+		if stateDB != nil {
+			if err := stateDB.UpdatePlaybackSeekOff(h.path, 0); err != nil {
+				logger.Printf("[ResumeAnchor] Failed to zero poisoned last_seek_off for %s: %v", filepath.Base(h.path), err)
+			} else {
+				logger.Printf("[ResumeAnchor] Zeroed poisoned last_seek_off (%.1fMB in tail zone) for %s",
+					float64(lastSeekOff)/(1<<20), filepath.Base(h.path))
+			}
+		}
+	}
+	return false
 }
 
 // forceTorrentWarmupActive marks hash/fileID as warmup-active unconditionally. Used at Open() for
@@ -1755,30 +1821,13 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		}
 	}
 
-	// Detect pre-confirmation tail probe (5% of file, 64MB–2GB) to suppress pump interrupt.
-	dynamicThreshold := tailProbeZoneSize(h.size)
-
-	// Transition WARMUP→TAIL_PROBE on first tail region read during discovery phase.
-	if h.state.Load() == stateWarmup && h.hash != "" && h.size > dynamicThreshold && off >= h.size-dynamicThreshold {
-		isUnconfirmed := true
-		if val, ok := playbackRegistry.Load(h.path); ok {
-			ps := val.(*PlaybackState)
-			ps.mu.RLock()
-			isUnconfirmed = ps.ConfirmedAt.IsZero()
-			ps.mu.RUnlock()
-		}
-		if isUnconfirmed {
-			h.state.Store(stateTailProbe)
-		}
-	}
-	isTailProbe := h.state.Load() == stateTailProbe
-
-	// Interrupt pump on genuine seeks; skip for SSD tail reads (pump must stay alive).
+	// Interrupt pump on genuine seeks; skip reads served from the SSD tail warmup (the
+	// pump must stay alive for the rest of the file, and the tail read is already served).
 	// V286b: interruptPending prevents cascade — when multiple handles share a pump,
 	// only the first to detect the seek fires Interrupt(); others skip until the pump
 	// restarts and resets the flag (preventing the thrash loop seen in the logs).
 	budget := int64(gc().ReadAheadBudget)
-	if h.nativeReader != nil && !isTailProbe && shouldInterruptForSeek(prevOff, off, budget) {
+	if h.nativeReader != nil && shouldInterruptPump(prevOff, off, budget, shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize)) {
 		// Promote to primary on a genuine seek once playback is confirmed/inferred - mirrors the
 		// refCount 0->1 "primary reconnect" promotion at attach time (main.go:1030): a secondary
 		// (attached) handle doing a real seek during confirmed playback IS the player, and needs
@@ -1869,8 +1918,13 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		}
 	}
 
-	// Serve tail from SSD only during discovery (pre-confirmation); post-confirmation uses pump.
-	if isTailProbe && warmup.DiskWarmup != nil {
+	// Serve tail from SSD whenever the read lands in the tail warmup coverage, regardless
+	// of handle state: the WARMUP→STREAMING seek/resume transition above runs before any
+	// state-gated tail check could - a resume in the last 16MB was served by network
+	// FetchBlock instead of the complete SSD tail file (~16s TTFF on a 36.6GB remux,
+	// 2026-08-06). ReadTail is range-safe: returns (0,nil) when the tail file's coverage
+	// doesn't include the offset.
+	if warmup.DiskWarmup != nil && shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize) {
 		n, _ := warmup.DiskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
 		if n > 0 {
 			timing.UsedCache = true

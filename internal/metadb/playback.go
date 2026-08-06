@@ -89,6 +89,48 @@ func (d *DB) DeletePlaybackState(path string) error {
 	return err
 }
 
+// LoadPlaybackStateByPath returns a single playback state row regardless of age.
+// The boot-time restore (restorePlaybackStates) keeps only IsHealthy rows, so a
+// cleanly-stopped session's resume position is still available here for pump
+// anchoring on the next open. Returns (nil, nil) when no row exists.
+func (d *DB) LoadPlaybackStateByPath(path string) (*PlaybackRecord, error) {
+	row := d.db.QueryRow(`
+		SELECT path, hash, imdb_id, opened_at, confirmed_at, is_healthy, is_stopped, last_read_at, read_count, last_seek_off
+		FROM playback_states
+		WHERE path = ?`, path)
+
+	rec := &PlaybackRecord{}
+	var openedAt, confirmedAt, lastReadAt sql.NullString
+	var isHealthy, isStopped int
+	err := row.Scan(&rec.Path, &rec.Hash, &rec.ImdbID, &openedAt, &confirmedAt, &isHealthy, &isStopped, &lastReadAt, &rec.ReadCount, &rec.LastSeekOff)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if openedAt.Valid {
+		rec.OpenedAt, _ = time.Parse(time.RFC3339Nano, openedAt.String)
+	}
+	if confirmedAt.Valid {
+		rec.ConfirmedAt, _ = time.Parse(time.RFC3339Nano, confirmedAt.String)
+	}
+	rec.IsHealthy = isHealthy == 1
+	rec.IsStopped = isStopped == 1
+	if lastReadAt.Valid {
+		rec.LastReadAt, _ = time.Parse(time.RFC3339Nano, lastReadAt.String)
+	}
+	return rec, nil
+}
+
+// UpdatePlaybackSeekOff updates only the last_seek_off column. Used to self-heal a
+// poisoned tail-probe value without clobbering the rest of the row (a full
+// SavePlaybackState would wipe the timestamps/flags of the previous session).
+func (d *DB) UpdatePlaybackSeekOff(path string, off int64) error {
+	_, err := d.db.Exec("UPDATE playback_states SET last_seek_off = ? WHERE path = ?", off, path)
+	return err
+}
+
 // CleanupPlaybackStates removes entries older than maxAge.
 func (d *DB) CleanupPlaybackStates(maxAge time.Duration) (int, error) {
 	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
