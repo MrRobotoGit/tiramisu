@@ -933,6 +933,14 @@ const (
 	stateStreaming uint32 = 1 // Pump-only streaming; no SSD warmup
 )
 
+// watchSample is a V752 starvation-watchdog observation: pump offset and player
+// offset at time t, used to compute both rates over a sliding 10s window.
+type watchSample struct {
+	t         time.Time
+	offset    int64
+	playerOff int64
+}
+
 func stateName(s uint32) string {
 	switch s {
 	case stateWarmup:
@@ -1244,6 +1252,10 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		logger.Printf("[V239] Native Pump Goroutine Ended: %s", filepath.Base(h.path))
 	}()
 
+	// V752: starvation watchdog state — sliding 10s window + last revival time.
+	var watchSamples []watchSample
+	lastRevival := time.Now().Add(-time.Hour)
+
 	chunkSize := raCache.ChunkSize(h.path)
 
 	// Track bytes pumped in this session for the Grace Period Boost
@@ -1405,7 +1417,8 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				offset/(1024*1024), jumpTo/(1024*1024), playerOff/(1024*1024),
 				(playerOff-offset)/(1024*1024))
 			offset = jumpTo
-			pumpedBytes = 0 // reset grace period so throttle doesn't fire immediately
+			pumpedBytes = 0                 // reset grace period so throttle doesn't fire immediately
+			watchSamples = watchSamples[:0] // V752: fresh window after jump — rates across a jump are meaningless
 		} else if playerOff > 0 && offset > playerOff+2*jumpThreshold {
 			jumpBack := (playerOff / chunkSize) * chunkSize
 			if jumpBack < 0 {
@@ -1415,7 +1428,38 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 				offset/(1024*1024), jumpBack/(1024*1024), playerOff/(1024*1024),
 				(offset-playerOff)/(1024*1024))
 			offset = jumpBack
-			pumpedBytes = 0 // reset grace period so throttle doesn't fire immediately
+			pumpedBytes = 0                 // reset grace period so throttle doesn't fire immediately
+			watchSamples = watchSamples[:0] // V752: fresh window after re-anchor — rates across a jump are meaningless
+		}
+
+		// V752: starvation watchdog — revive a pump that crawls below the player's
+		// consumption rate while its lead is thin, without waiting for a player seek.
+		// A blocked read inside nativePumpChunk cannot evaluate here; fetch timeouts
+		// (p95/hedge scale) return control to the loop and the next iteration fires.
+		watchSamples = append(watchSamples, watchSample{t: now, offset: offset, playerOff: playerOff})
+		if len(watchSamples) > 16 {
+			watchSamples = watchSamples[len(watchSamples)-16:] // V752: size-bounded ring — sparse crawls must survive in the window
+		}
+		if len(watchSamples) >= 2 {
+			first, lastS := watchSamples[0], watchSamples[len(watchSamples)-1]
+			elapsed := lastS.t.Sub(first.t).Seconds()
+			if elapsed >= 9 {
+				pumpRate := float64(lastS.offset-first.offset) / elapsed
+				playerRate := float64(lastS.playerOff-first.playerOff) / elapsed
+				if shouldFireStarvationRevival(playbackConfirmedOrInferred, offset-playerOff, pumpRate, playerRate, now.Sub(lastRevival)) {
+					// Same core as V286b: Interrupt unblocks the in-flight chunk read and
+					// the retry path re-issues it with fresh peer selection; ResetShield
+					// clears adaptive state. interruptPending prevents cascade with seeks.
+					if ps := sharedState; !ps.interruptPending.Swap(true) {
+						h.nativeReader.Interrupt()
+						torrstor.ResetShield()
+						lastRevival = now
+						watchSamples = watchSamples[:0]
+						logger.Printf("[StarvationWatchdog] Revival: pump %dMB vs player %dMB (rates %.1f/%.1f MB/s) — interrupt+shield reset",
+							offset/(1<<20), playerOff/(1<<20), pumpRate/(1<<20), playerRate/(1<<20))
+					}
+				}
+			}
 		}
 
 		// Throttle background pump after 64MB grace period.
@@ -1616,6 +1660,26 @@ func shouldInterruptPump(prevOff, off, budget int64, tailServed bool) bool {
 		return false
 	}
 	return shouldInterruptForSeek(prevOff, off, budget)
+}
+
+// shouldFireStarvationRevival decides whether the pump loop must self-revive: the
+// pump is confirmed playback, its lead over the player is thin (< 16MB), and it is
+// advancing below 75% of the player's consumption rate for the observation window.
+// This replicates what a manual player seek does via V286b (Interrupt + ResetShield +
+// fresh peer selection) without moving the player. Rates are bytes/second averaged
+// over the 10s window by the caller. The lead gate protects the healthy hard-limit
+// idle (lead = ReadAheadBudget): a pump with a thick lead is deliberately stopped,
+// not starved (coincidentally the same 16MB as warmup.TailWarmupSize, but a
+// different purpose: the watchdog lead, not the SSD tail coverage). Cooldown
+// prevents revival storms.
+func shouldFireStarvationRevival(confirmed bool, leadBytes int64, pumpRate, playerRate float64, cooldownAge time.Duration) bool {
+	if !confirmed || cooldownAge < 60*time.Second {
+		return false
+	}
+	if playerRate <= 0 || leadBytes >= 16*1024*1024 {
+		return false
+	}
+	return pumpRate < playerRate*0.75
 }
 
 // seedResumeAnchor applies the tail-probe guard to a persisted resume position and,
