@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/cespare/xxhash/v2"
+	"golang.org/x/sys/cpu"
 	"io"
 	"log"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -3411,7 +3413,28 @@ func restorePlaybackStates(db *metadb.DB) {
 //go:embed settings.html
 var settingsHTML []byte
 
+// checkHardwareSupport refuses to start on hardware below the Raspberry Pi 4's effective floor.
+// On amd64 that means AVX2: any x86_64 CPU without it (everything before ~2013, Haswell/
+// Excavator) forces Go's crypto/sha1 onto its slowest pure-scalar path, and full-swarm piece
+// verification can't keep up with real playback bitrates on such a CPU - the exact failure mode
+// diagnosed on a 2008 Core2Quad (100% CPU, stutter, no hardware acceleration of any kind
+// available to fall back on). arm64 needs no equivalent gate: NEON is mandatory in every ARMv8-A
+// chip, so any real arm64 CPU - including the Pi4's own Cortex-A72 - already clears this floor.
+// Runs at process start, before FUSE/torrent engine init, on every code path that reaches
+// main() - native builds and binaries extracted from a prebuilt Docker image alike.
+func checkHardwareSupport() {
+	if runtime.GOARCH == "amd64" && !cpu.X86.HasAVX2 {
+		fmt.Fprintln(os.Stderr, "FATAL: this CPU does not support AVX2.")
+		fmt.Fprintln(os.Stderr, "Tiramisu requires AVX2 on amd64 (any x86_64 CPU from ~2013 onward - Intel Haswell or AMD Excavator and later).")
+		fmt.Fprintln(os.Stderr, "Without it, SHA1 piece verification falls back to the slowest available path and cannot sustain real playback bitrates.")
+		fmt.Fprintln(os.Stderr, "See the README's Hardware Requirements section.")
+		os.Exit(1)
+	}
+}
+
 func main() {
+	checkHardwareSupport()
+
 	var dbPath string
 	flag.StringVar(&dbPath, "path", "", "path to database and config")
 	flag.Parse()

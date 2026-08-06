@@ -361,7 +361,7 @@ GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrSe
 
 | Component | Details |
 |-----------|---------|
-| **Hardware** | Any `linux/amd64` or `linux/arm64` device, **Raspberry Pi 4 is the minimum tested baseline** (4 GB RAM recommended). Runs on NAS, VPS, mini-PC, or any always-on Linux box. |
+| **Hardware** | Any `linux/amd64` or `linux/arm64` device, **Raspberry Pi 4 is the minimum tested baseline** (4 GB RAM recommended). Runs on NAS, VPS, mini-PC, or any always-on Linux box. **On amd64, the CPU must support AVX2** (any x86_64 CPU from ~2013 onward — Intel Haswell or AMD Excavator and later). Without it, Go's SHA1 piece verification falls back to its slowest scalar path and can't sustain real playback bitrates — Tiramisu refuses to start rather than run unusably slow. arm64 has no equivalent requirement: NEON is mandatory on every ARMv8-A chip, so any real arm64 device (including the Pi 4 itself) already clears the floor. |
 | **Go** | 1.24+ (`linux/amd64` or `linux/arm64`), do **not** use the 32-bit `linux/arm` toolchain |
 | **FUSE 3** | `sudo apt install fuse3 libfuse3-dev` |
 | **systemd** | For service management |
