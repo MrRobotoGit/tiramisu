@@ -383,6 +383,28 @@ func (d *DiskWarmupCache) GetAvailableRange(hash string, fileID int) int64 {
 	return fi.Size()
 }
 
+// TailReady reports whether the tail warmup file for hash/fileID is fully
+// covered (>= TailWarmupSize), i.e. Open can serve end-of-file probes from
+// SSD. Mirrors the coverage logic of ReadTail: when a coverage entry exists
+// its highWatermark is authoritative; otherwise the file size decides
+// (after a process restart the in-memory coverage map is gone but the file
+// persists on disk).
+func (d *DiskWarmupCache) TailReady(hash string, fileID int) bool {
+	if d == nil {
+		return false
+	}
+	path := d.tailPath(hash, fileID)
+	if val, ok := d.tailCoverage.Load(path); ok {
+		tr := val.(*tailRange)
+		tr.mu.Lock()
+		done := tr.highWatermark >= TailWarmupSize
+		tr.mu.Unlock()
+		return done
+	}
+	fi, err := os.Stat(path)
+	return err == nil && fi.Size() >= TailWarmupSize
+}
+
 func (d *DiskWarmupCache) ReadAt(hash string, fileID int, buf []byte, off int64) (int, error) {
 	if off > FileSize {
 		return 0, nil

@@ -819,9 +819,12 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	// hasFullWarmup: Open returns instantly only if both head and tail warmup files are ready.
 	// headReady: Allows async Wake and direct ID injection for instant start.
 	headReady := false
+	tailReady := false
 	if warmup.DiskWarmup != nil && hashStr != "" {
 		headReady = warmup.DiskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
+		tailReady = warmup.DiskWarmup.TailReady(hashStr, urlFileIdx)
 	}
+	ttffRegister(n.vMeta.Path, n.vMeta.Size, hashStr, headReady, tailReady)
 
 	magnetCandidate := n.vMeta.URL
 	if hashStr != "" && (strings.HasPrefix(n.vMeta.URL, "http://") || strings.HasPrefix(n.vMeta.URL, "https://")) {
@@ -1977,6 +1980,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 				h.lastLen = n
 				h.lastTime = now
 				h.mu.Unlock()
+				ttffRead(h.path, srcWarmupHead, time.Since(now), n, off)
 				return fuse.ReadResultData(dest[:n]), 0
 			}
 		}
@@ -1996,6 +2000,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			h.mu.Lock()
 			h.lastLen, h.lastTime = n, now
 			h.mu.Unlock()
+			ttffRead(h.path, srcWarmupTail, time.Since(now), n, off)
 			return fuse.ReadResultData(dest[:n]), 0
 		}
 
@@ -2011,6 +2016,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			h.mu.Lock()
 			h.lastLen, h.lastTime = nFetch, now
 			h.mu.Unlock()
+			ttffRead(h.path, srcFetchBlock, time.Since(now), nFetch, off)
 			return fuse.ReadResultData(dest[:nFetch]), 0
 		}
 	}
@@ -2076,6 +2082,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		h.lastTime = now
 		h.mu.Unlock()
 
+		ttffRead(h.path, srcRACacheHit, time.Since(cacheStart), n, off)
 		return fuse.ReadResultData(dest[:n]), 0
 	}
 
@@ -2189,12 +2196,15 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		}
 	}
 
+	// Queueing (semaphore/rate-limiter) is not cache service time — re-stamp.
+	cacheStart = time.Now()
 	if n := raCache.CopyTo(h.path, off, end, dest); n > 0 {
 		atomic.StoreInt64(&h.lastOff, off)
 		h.mu.Lock()
 		h.lastLen = n
 		h.lastTime = now
 		h.mu.Unlock()
+		ttffRead(h.path, srcRACacheHit, time.Since(cacheStart), n, off)
 		return fuse.ReadResultData(dest[:n]), 0
 	}
 
@@ -2215,6 +2225,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			case <-fuseCtx.Done():
 				return nil, syscall.EINTR
 			}
+			copyStart := time.Now()
 			if nCopy := raCache.CopyTo(h.path, off, end, dest); nCopy > 0 {
 				fetchFlightDedupCount.Add(1)
 				timing.UsedCache = true
@@ -2224,6 +2235,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 				h.lastLen = nCopy
 				h.lastTime = now
 				h.mu.Unlock()
+				ttffRead(h.path, srcRACacheHit, time.Since(copyStart), nCopy, off)
 				return fuse.ReadResultData(dest[:nCopy]), 0
 			}
 			// Leader failed or missed our range — fetch directly, don't re-register.
@@ -2236,6 +2248,21 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	}
 
 	if h.hash != "" {
+		// V753: the very first read of a session can miss raCache/warmup even when
+		// headReady was already true at Open() (partial coverage from a prior open),
+		// which skips forceTorrentWarmupActive there (main.go ~916, gated on
+		// !headReady). That leaves hedgeWatchdog not running yet - playback-pressure
+		// hasn't engaged either, since the pump has barely started - so this exact
+		// fetch has zero hedge protection. Force it here instead, bounded to the
+		// warmup head window: forcing it for a post-idle resume deep in the file
+		// (isFirstBlock is also true after WarmStartIdleSeconds) would set
+		// warmupActive with no way back to false, since processWrite's off>FileSize
+		// early return (warmup.go) means COMPLETED - the only call site that clears
+		// it - never fires for writes past the head window.
+		if isFirstBlock && off <= warmup.FileSize {
+			forceTorrentWarmupActive(h.hash, h.fileID)
+		}
+		fetchStart := time.Now()
 		bufPtr := readBufferPool.Get().(*[]byte)
 		defer readBufferPool.Put(bufPtr)
 
@@ -2250,7 +2277,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			nFetch, err := nativeBridge.FetchBlock(h.hash, h.fileID, off, buf)
 			if err == nil && nFetch > 0 {
 				n = nFetch
-				timing.HTTPFetchTime = 0
+				timing.HTTPFetchTime = time.Since(fetchStart)
 				goto DATA_READY
 			}
 			if attempt < 2 {
@@ -2272,6 +2299,8 @@ DATA_READY:
 
 	if n > 0 {
 		raCache.Put(h.path, off, off+int64(n)-1, buf[:n])
+
+		ttffRead(h.path, srcFetchBlock, timing.HTTPFetchTime, n, off)
 
 		if warmup.DiskWarmup != nil && h.hash != "" {
 			if off <= warmup.FileSize {
@@ -2379,6 +2408,7 @@ DATA_READY:
 }
 
 func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
+	ttffReleaseClose(h.path)
 	logger.Printf("=== RELEASE VIRTUAL === path=%s", h.path)
 
 	if val, ok := activePumps.Load(h.path); ok {
@@ -3876,6 +3906,18 @@ func main() {
 			gc().MaxConnsPerHost)
 	})
 
+	http.HandleFunc("/metrics/ttff", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"sessions_completed":%d,"sessions_filtered":%d,`+
+			`"open_to_header_ms":%s,"open_to_8mb_ms":%s,"seek_latency_ms":%s,`+
+			`"read_latency_ms":{"warmup_head":%s,"warmup_tail":%s,"racache_hit":%s,"fetch_block":%s},`+
+			`"stalls":{"count":%d,"max_ms":%d}}`,
+			ttffStats.sessionsCompleted.Load(), ttffStats.sessionsFiltered.Load(),
+			histJSON(&ttffStats.openToHeader), histJSON(&ttffStats.openTo8MB), histJSON(&ttffStats.seekLatency),
+			histJSON(&ttffStats.warmupHead), histJSON(&ttffStats.warmupTail),
+			histJSON(&ttffStats.raCacheHit), histJSON(&ttffStats.fetchBlock),
+			ttffStats.stallCount.Load(), ttffStats.maxStallMS.Load())
+	})
+
 	http.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write(settingsHTML)
@@ -4189,6 +4231,7 @@ func main() {
 	logger.Printf("FUSE mounted at %s with VirtualMkvRoot, all systems active", mount)
 
 	go smbdWatchdog()
+	go ttffCleanupLoop()
 
 	server.Wait()
 }
