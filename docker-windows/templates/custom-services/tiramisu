@@ -1,0 +1,7 @@
+#!/usr/bin/with-contenv bash
+set -e
+
+exec /usr/local/bin/tiramisu \
+    --path "$TIRAMISU_ROOT_PATH" \
+    "$TIRAMISU_SOURCE_PATH" \
+    "$TIRAMISU_MOUNT_PATH"

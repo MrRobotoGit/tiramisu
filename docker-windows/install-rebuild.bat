@@ -730,16 +730,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "%REPO_ROOT%\requirements.txt" (
-  echo ERROR: Missing required source file %REPO_ROOT%\requirements.txt
-  exit /b 1
-)
-copy /y "%REPO_ROOT%\requirements.txt" "%_stackDir%\src\requirements.txt" >nul
-if errorlevel 1 (
-  echo ERROR: Failed to copy requirements.txt
-  exit /b 1
-)
-
 if exist "%REPO_ROOT%\settings.html" (
   copy /y "%REPO_ROOT%\settings.html" "%_stackDir%\src\settings.html" >nul
   if errorlevel 1 (

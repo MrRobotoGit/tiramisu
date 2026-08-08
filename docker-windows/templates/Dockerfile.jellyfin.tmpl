@@ -1,4 +1,4 @@
-# Template Dockerfile: Jellyfin (LinuxServer) + Tiramisu + Python scripts.
+# Template Dockerfile: Jellyfin (LinuxServer) + Tiramisu.
 # Build context must contain a ./src folder with this repo's contents.
 
 FROM golang:1.24-bookworm AS build
@@ -34,22 +34,11 @@ RUN apt-get update \
       curl \
       fuse3 \
       iptables \
-      python3 \
-      python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY ./src/requirements.txt /tmp/requirements.txt
-RUN python3 -m venv /app/venv \
-    && /app/venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /app/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
-    && rm -f /tmp/requirements.txt
-
 COPY --from=build /out/tiramisu /usr/local/bin/tiramisu
-COPY ./src/scripts /app/scripts
-
-ENV PATH=/app/venv/bin:$PATH
 
 # Windows bind mounts can drop execute bits, so bake the custom hook scripts in.
 COPY ./custom-services /custom-services.d
