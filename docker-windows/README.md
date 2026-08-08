@@ -1,10 +1,10 @@
-# Docker-Windows (planned): Tiramisu + Plex/Jellyfin single-container stack
+# Docker-Windows: Tiramisu + Plex/Jellyfin single-container stack
 
-This folder documents the **Windows-only** installer plan for generating an **auto-contained Dockge stack** that runs **one container**:
+This folder contains the **Windows-only** installer (`install-rebuild.bat`) that generates an **auto-contained Dockge stack** and runs **one container**:
 
 - `tiramisu-plex` **or** `tiramisu-jellyfin` (you choose during install)
 
-The installer itself (`install-rebuild.bat`) and templates will live under `docker-windows/` in later tasks. **This task only adds documentation.**
+The installer and templates live under `docker-windows/`.
 
 ---
 
@@ -42,16 +42,16 @@ Common failures:
 
 ## What this does
 
-When implemented, `docker-windows\install-rebuild.bat` will:
+`docker-windows\install-rebuild.bat`:
 
-1. Prompt for **flavor**: Plex vs Jellyfin
-2. Prompt for **paths** (no hardcoded `B:\...`):
+1. Prompts for **flavor**: Plex vs Jellyfin
+2. Prompts for **paths** (no hardcoded `B:\...`):
    - Base data directory (default suggestion: `%USERPROFILE%\Documents\Docker Stuff`)
    - Dockge stacks root (default suggestion: `%USERPROFILE%\Documents\Docker Stuff\Dockge\stacks`)
-3. Create/repair the expected base folder structure **idempotently** (never delete)
-4. Generate an **auto-contained** Dockge stack folder at:
+3. Creates/repairs the expected base folder structure **idempotently** (never delete)
+4. Generates an **auto-contained** Dockge stack folder at:
    - `{stacksRoot}\tiramisu-plex\` or `{stacksRoot}\tiramisu-jellyfin\`
-5. Optionally (Mode A) recreate the target container **without wiping media/config**
+5. Optionally (Mode A) recreates the target container **without wiping media/config**
 
 `install-rebuild.bat` now always pauses before closing, so you can read success/errors even when launched by double click.
 
@@ -68,7 +68,7 @@ The Tiramisu config file is expected at:
 
 `{base}\tiramisu-mkv-real\config\config.json`
 
-The installer must create it from `config.json.example` if missing.
+The installer creates it from `config.json.example` if missing.
 
 ### Rebuild semantics (Mode A)
 
@@ -88,9 +88,9 @@ The installer must create it from `config.json.example` if missing.
 
 ---
 
-## Interactive flow (planned)
+## Interactive flow
 
-The installer will ask (in this order):
+The installer asks (in this order):
 
 1. **my-deploy quick choice** (if files exist):
    - Use `docker-windows/my-deploy/my-deploy.compose.yaml` + `my-deploy.Dockerfile` (default **No**)
@@ -113,7 +113,7 @@ Container names:
 
 ---
 
-## Non-interactive flags (planned)
+## Non-interactive flags
 
 Used for deterministic verification and CI-like runs:
 
@@ -152,19 +152,18 @@ In **my-deploy mode**, before `docker compose up`, the installer:
 2. generates a temporary `*.autoports.yaml` next to it if any published host port is already in use
 3. deploys with that auto-adjusted compose file
 
-Planned host port bases (first choice; if taken, increment within a safe range):
+Host port bases (first choice; if taken, increment within a safe range):
 
 - Plex: `32400`
 - Jellyfin: `8096` (+ optional `8920`)
 - GoStorm API: `8090`
-- Health monitor: `8095`
-- Metrics/control/webhook: derived from Tiramisu `metrics_port` (prefer same host port)
+- Metrics/Control Panel: `9080` (Tiramisu's `metrics_port` in `config.json`; the installer resets it to `9080` if left at the old default)
 
 ---
 
 ## Plex import feature (Windows Plex → Linux container)
 
-If you already run Plex on Windows, the installer (Plex flavor) will offer an **optional import**.
+If you already run Plex on Windows, the installer (Plex flavor) offers an **optional import**.
 
 Defaults/suggestions:
 
@@ -174,12 +173,12 @@ Defaults/suggestions:
 
 Critical rules:
 
-- **Stop Plex on Windows first**. If files are locked, the import must abort with a clear message.
+- **Stop Plex on Windows first**. If files are locked, the import aborts with a clear message.
 - **Windows-only Plex plugins/scanners may not work on Linux**. Expect that some plug-ins, scanners, or binary components won’t load.
 
 ---
 
-## Troubleshooting notes (planned)
+## Troubleshooting notes
 
 - If FUSE preflight fails, the stack cannot run Tiramisu inside Docker Desktop reliably in this environment.
 - If Plex import completes but Plex behaves oddly, re-test with a clean container config (no imported plugins) to isolate Windows-to-Linux incompatibilities.
