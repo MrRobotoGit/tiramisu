@@ -1265,9 +1265,6 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 	pumpedBytes := int64(0)
 	// Align startOffset to chunk boundary
 	offset := (startOffset / chunkSize) * chunkSize
-	// Sticky player position across loop iterations - see the sync block below for why this
-	// can't just be recomputed as a plain MAX every tick.
-	lastKnownPlayerOff := int64(0)
 
 	for {
 		select {
@@ -1325,91 +1322,20 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 			return
 		}
 
-		// Sync from primary handles (while still fresh) plus secondary (attached) handles once
-		// playback is confirmed/inferred - the false-10GB+-jump risk that motivated primary-only
-		// sync comes from pre-confirmation metadata probes; once the webhook (or inferred
-		// heuristic) has fired, a secondary handle reading like real streaming (isStreaming-
-		// equivalent: lastLen >= StreamingThreshold) and fresh (<30s) is the actual player, just
-		// attached to a pump someone else created (see Read()'s on-the-fly upgrade gate on
-		// !h.hasSlot, which an attached handle never re-enters). Without this, the pump never
-		// follows a player that attached to an existing pump instead of creating it - it just
-		// idles at its own offset while the real playback position races ahead, served entirely
-		// by FetchBlock.
-		//
-		// The primary handle's OWN freshness now matters too: once a real player attaches as
-		// secondary (the exact scenario above), the original primary handle - often just Plex's
-		// initial header probe - goes dormant with a frozen, near-zero lastOff. Treating primary
-		// as unconditionally relevant (as before) meant that on any tick where the secondary's
-		// 30s/5s freshness check happened to narrowly miss (client-side buffering, scheduling
-		// jitter - normal, not rare), the MAX fell back to that stale frozen value, snapping the
-		// pump - correctly per the code, wrongly per reality - all the way back, then immediately
-		// forward again next tick. 6517 forward+backward jump pairs in ~19h of production, most
-		// within the same second: this was thrashing, not occasional resync.
-		//
-		// Fix: track the last tick that found ANY fresh handle (primary now gated too, 60s -
-		// generous vs. the 30s/5s below since a genuinely active primary reads far more often)
-		// and keep that value across ticks where nothing currently qualifies, instead of
-		// collapsing to 0 and firing a bogus reset. The independent idle-timeout check above
-		// still kills the pump outright if the path goes truly dead for longer than that.
-		currentPlayerOff := int64(0)
-		foundFreshHandle := false
+		// Sync to primary handles only; secondary metadata probes cause false 10GB+ jumps.
 		now := time.Now()
+		playerOff := int64(0)
 		activeHandles.Range(func(key, value interface{}) bool {
 			handle := key.(*MkvHandle)
-			if handle.path != h.path {
-				return true
-			}
-			handle.mu.Lock()
-			lastLen, lastTime, lastActivity := handle.lastLen, handle.lastTime, handle.lastActivityTime
-			handle.mu.Unlock()
-
-			var relevant bool
-			switch {
-			case handle.isPrimaryHandle:
-				relevant = now.Sub(lastActivity) < 60*time.Second
-			case playbackConfirmedOrInferred:
-				// Post-confirmation the freshness window is the real discriminator (the
-				// 30s window can only be satisfied by a handle that keeps reading, i.e.
-				// actual playback); the size gate only needs to exclude metadata crumbs.
-				// StreamingThreshold/4 (32KB) still catches the 64KB reads Synology's
-				// CIFS client makes, which the 128KB gate silently dropped - a far
-				// resume stayed FetchBlock-served with no pump jump at all. False
-				// positives are self-healed by the V284 re-anchor below.
-				relevant = lastLen >= int(gc().StreamingThreshold)/4 && now.Sub(lastTime) < 30*time.Second
-			default:
-				// V284 pre-confirmation adaptive threshold: before the webhook fires (first
-				// 0-5s), a big streaming-sized read from an attached handle already looks like
-				// the real player, not the small metadata probe the primary-only gate exists to
-				// exclude. Tighter freshness (5s vs. 30s post-confirmation) and this only feeds
-				// the one-shot V284 jump below, not sustained sync - the jump is self-limiting
-				// (pump stops itself once within budget), so a wrong guess costs at most one
-				// ReadAheadBudget-sized wasted jump, not a permanently mis-synced pump.
-				relevant = lastLen >= int(gc().StreamingThreshold) && now.Sub(lastTime) < 5*time.Second
-			}
-			if relevant {
-				foundFreshHandle = true
-				if off := atomic.LoadInt64(&handle.lastOff); off > currentPlayerOff {
-					currentPlayerOff = off
+			if handle.path == h.path && handle.isPrimaryHandle {
+				if off := atomic.LoadInt64(&handle.lastOff); off > playerOff {
+					playerOff = off
 				}
 			}
 			return true
 		})
-		if foundFreshHandle {
-			lastKnownPlayerOff = currentPlayerOff
-		}
-		playerOff := lastKnownPlayerOff
 
 		// Snap pump to player position when seek gap exceeds budget, aligned to chunk boundary.
-		// Bidirectional: a wrong guess (e.g. the pre-confirmation V284 threshold firing on a
-		// metadata probe at a far offset) leaves the pump stranded AHEAD of the player for the
-		// whole session, since the forward jump below only fires when playerOff > offset. The
-		// mirrored backward clause re-anchors the pump to the player when it has run away by
-		// more than twice the budget. 2x, not 1x: the pump is DESIGNED to lead the player by
-		// up to one budget and then idle at its hard limit (nativePumpChunk sleeps past
-		// diff>budget) - re-anchoring at 1x made every idle pump bounce 0 -> budget -> 0
-		// forever, re-climbing through already-cached head chunks at microsecond speed
-		// (5+ re-anchors per second in production, 3217 in 20 minutes, pump effectively dead).
-		// Only leads beyond 2x budget are pathological (a stranded pump) and worth a reset.
 		jumpThreshold := int64(gc().ReadAheadBudget)
 		if playerOff > offset+jumpThreshold {
 			jumpTo := (playerOff / chunkSize) * chunkSize
@@ -1422,17 +1348,6 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 			offset = jumpTo
 			pumpedBytes = 0                 // reset grace period so throttle doesn't fire immediately
 			watchSamples = watchSamples[:0] // V752: fresh window after jump — rates across a jump are meaningless
-		} else if playerOff > 0 && offset > playerOff+2*jumpThreshold {
-			jumpBack := (playerOff / chunkSize) * chunkSize
-			if jumpBack < 0 {
-				jumpBack = 0
-			}
-			logger.Printf("[V284] Pump re-anchor: %dMB → %dMB (player at %dMB, lead %dMB)",
-				offset/(1024*1024), jumpBack/(1024*1024), playerOff/(1024*1024),
-				(offset-playerOff)/(1024*1024))
-			offset = jumpBack
-			pumpedBytes = 0                 // reset grace period so throttle doesn't fire immediately
-			watchSamples = watchSamples[:0] // V752: fresh window after re-anchor — rates across a jump are meaningless
 		}
 
 		// V752: starvation watchdog — revive a pump that crawls below the player's
@@ -1790,13 +1705,9 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			ps.mu.Lock()
 			ps.ReadCount++
 			ps.LastReadAt = now
-			// Exclude the tail-probe zone: Plex reads near the end of every file for MKV Cues
-			// before confirming playback, even on a cold library scan the user never watches.
-			// LastSeekOff is monotonically increasing (off > ps.LastSeekOff), so recording a tail
-			// probe here is permanent - no real playback position is ever bigger than the file's
-			// own tail, so it can never overwrite a corrupted value. See ResumeAnchor's seed-site
-			// guard below for the matching read-side fix (this one only stops new corruption).
-			if off > 2*1024*1024 && off < h.size-tailProbeZoneSize(h.size) && off > ps.LastSeekOff {
+			// Tail-zone reads (MKV Cues probes) and unconfirmed reads (Plex background scans)
+			// must never count as real playback progress here.
+			if ps.IsHealthy && off > 2*1024*1024 && off < h.size-tailProbeZoneSize(h.size) && off > ps.LastSeekOff {
 				ps.LastSeekOff = off
 			}
 			ps.mu.Unlock()

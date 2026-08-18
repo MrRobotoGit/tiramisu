@@ -102,11 +102,55 @@ type sizeEntry struct {
 	updatedAt time.Time
 }
 
-// V265: tailRange tracks contiguous bytes written from relOffset=0 in a tail warmup file.
+// tailSpan is a half-open [start,end) byte range within a tail warmup file.
+type tailSpan struct{ start, end int64 }
+
+// V265: tailRange tracks which ranges of a tail warmup file were actually written.
+// Writes land at whatever offsets the client probes, so the file is sparse: a single
+// watermark would mark unwritten holes as covered, and reading a hole returns zeros
+// with err==nil - served to the player as if it were real MKV data.
 type tailRange struct {
-	mu            sync.Mutex // protects highWatermark against concurrent WriteTail/ReadTail
-	highWatermark int64      // contiguous bytes written from relOffset=0
+	mu     sync.Mutex
+	ranges []tailSpan // disjoint, merged, sorted by start
 }
+
+// add merges [start,end) into the covered set.
+func (tr *tailRange) add(start, end int64) {
+	if end <= start {
+		return
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.ranges = append(tr.ranges, tailSpan{start, end})
+	sort.Slice(tr.ranges, func(i, j int) bool { return tr.ranges[i].start < tr.ranges[j].start })
+	merged := tr.ranges[:1]
+	for _, s := range tr.ranges[1:] {
+		last := &merged[len(merged)-1]
+		if s.start <= last.end {
+			if s.end > last.end {
+				last.end = s.end
+			}
+			continue
+		}
+		merged = append(merged, s)
+	}
+	tr.ranges = merged
+}
+
+// covers reports whether all of [start,end) was written. Spans are disjoint and merged,
+// so a covered request always falls inside a single span.
+func (tr *tailRange) covers(start, end int64) bool {
+	if end <= start {
+		return false
+	}
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	i := sort.Search(len(tr.ranges), func(i int) bool { return tr.ranges[i].end > start })
+	return i < len(tr.ranges) && tr.ranges[i].start <= start && tr.ranges[i].end >= end
+}
+
+// complete reports full coverage of the tail window.
+func (tr *tailRange) complete() bool { return tr.covers(0, TailWarmupSize) }
 
 // DiskWarmupCache persists the first 128MB of each streamed file to SSD.
 type DiskWarmupCache struct {
@@ -153,16 +197,25 @@ func InitDiskWarmup(quotaGB int64) {
 
 	if entries, err := os.ReadDir(dir); err == nil {
 		var initialTotal int64
+		var dropped int
 		for _, e := range entries {
 			name := e.Name()
-			if strings.HasSuffix(name, warmupSuffix) || strings.HasSuffix(name, tailSuffix) {
+			// Tail files are sparse and their coverage lives in memory only, so a file
+			// left by a previous run has no way to prove which ranges hold real data.
+			if strings.HasSuffix(name, tailSuffix) {
+				if os.Remove(filepath.Join(dir, name)) == nil {
+					dropped++
+				}
+				continue
+			}
+			if strings.HasSuffix(name, warmupSuffix) {
 				if info, err := e.Info(); err == nil {
 					initialTotal += info.Size()
 				}
 			}
 		}
 		atomic.StoreInt64(&DiskWarmup.totalSize, initialTotal)
-		logf.Printf("[DiskWarmup] Initial size: %.1fGB", float64(initialTotal)/(1<<30))
+		logf.Printf("[DiskWarmup] Initial size: %.1fGB (dropped %d stale tail files)", float64(initialTotal)/(1<<30), dropped)
 	}
 
 	go DiskWarmup.writeWorker()
@@ -383,26 +436,24 @@ func (d *DiskWarmupCache) GetAvailableRange(hash string, fileID int) int64 {
 	return fi.Size()
 }
 
-// TailReady reports whether the tail warmup file for hash/fileID is fully
-// covered (>= TailWarmupSize), i.e. Open can serve end-of-file probes from
-// SSD. Mirrors the coverage logic of ReadTail: when a coverage entry exists
-// its highWatermark is authoritative; otherwise the file size decides
-// (after a process restart the in-memory coverage map is gone but the file
-// persists on disk).
+// TailReady reports whether the whole tail window for hash/fileID is on SSD, i.e. Open
+// can serve end-of-file probes without the network. Coverage is tracked in memory only:
+// the on-disk size of a sparse file says nothing about which ranges hold real data.
 func (d *DiskWarmupCache) TailReady(hash string, fileID int) bool {
 	if d == nil {
 		return false
 	}
-	path := d.tailPath(hash, fileID)
+	val, ok := d.tailCoverage.Load(d.tailPath(hash, fileID))
+	return ok && val.(*tailRange).complete()
+}
+
+// tailRangeFor returns the coverage tracker for path, creating it if absent.
+func (d *DiskWarmupCache) tailRangeFor(path string) *tailRange {
 	if val, ok := d.tailCoverage.Load(path); ok {
-		tr := val.(*tailRange)
-		tr.mu.Lock()
-		done := tr.highWatermark >= TailWarmupSize
-		tr.mu.Unlock()
-		return done
+		return val.(*tailRange)
 	}
-	fi, err := os.Stat(path)
-	return err == nil && fi.Size() >= TailWarmupSize
+	val, _ := d.tailCoverage.LoadOrStore(path, &tailRange{})
+	return val.(*tailRange)
 }
 
 func (d *DiskWarmupCache) ReadAt(hash string, fileID int, buf []byte, off int64) (int, error) {
@@ -440,24 +491,20 @@ func (d *DiskWarmupCache) WriteTail(hash string, fileID int, data []byte, absolu
 		return
 	}
 
+	tailLen := fileSize - tailStart
 	relOffset := absoluteOffset - tailStart
-	if relOffset+int64(len(data)) > TailWarmupSize {
-		data = data[:TailWarmupSize-relOffset]
+	if relOffset >= tailLen {
+		return
+	}
+	if relOffset+int64(len(data)) > tailLen {
+		data = data[:tailLen-relOffset]
 	}
 	if len(data) == 0 {
 		return
 	}
 
-	if val, ok := d.tailCoverage.Load(path); ok {
-		tr := val.(*tailRange)
-		tr.mu.Lock()
-		done := tr.highWatermark >= TailWarmupSize
-		tr.mu.Unlock()
-		if done {
-			return
-		}
-	} else if fi, err := os.Stat(path); err == nil && fi.Size() >= TailWarmupSize {
-		d.tailCoverage.Store(path, &tailRange{highWatermark: fi.Size()})
+	tr := d.tailRangeFor(path)
+	if tr.complete() {
 		return
 	}
 
@@ -485,19 +532,11 @@ func (d *DiskWarmupCache) WriteTail(hash string, fileID int, data []byte, absolu
 	}
 
 	n, _ := ch.f.WriteAt(data, relOffset)
-	d.sizeCache.Store(path, sizeEntry{size: relOffset + int64(n), updatedAt: time.Now()})
-
-	endOff := relOffset + int64(n)
-	if val, ok := d.tailCoverage.Load(path); ok {
-		tr := val.(*tailRange)
-		tr.mu.Lock()
-		if endOff > tr.highWatermark {
-			tr.highWatermark = endOff
-		}
-		tr.mu.Unlock()
-	} else {
-		d.tailCoverage.Store(path, &tailRange{highWatermark: endOff})
+	if n <= 0 {
+		return
 	}
+	d.sizeCache.Store(path, sizeEntry{size: relOffset + int64(n), updatedAt: time.Now()})
+	tr.add(relOffset, relOffset+int64(n))
 }
 
 func (d *DiskWarmupCache) ReadTail(hash string, fileID int, buf []byte, absoluteOffset, fileSize int64) (int, error) {
@@ -509,27 +548,22 @@ func (d *DiskWarmupCache) ReadTail(hash string, fileID int, buf []byte, absolute
 		return 0, nil
 	}
 
+	tailLen := fileSize - tailStart
 	relOffset := absoluteOffset - tailStart
 	path := d.tailPath(hash, fileID)
 
+	// Clamp to the tail window: a buffer overhanging EOF still hits if the bytes it can
+	// actually return were written.
 	readEnd := relOffset + int64(len(buf))
-	if val, ok := d.tailCoverage.Load(path); ok {
-		tr := val.(*tailRange)
-		tr.mu.Lock()
-		miss := readEnd > tr.highWatermark
-		tr.mu.Unlock()
-		if miss {
-			fi, err := os.Stat(path)
-			if err != nil || fi.Size() < readEnd {
-				return 0, nil
-			}
-		}
-	} else {
-		fi, err := os.Stat(path)
-		if err != nil || fi.Size() < readEnd {
-			return 0, nil
-		}
-		d.tailCoverage.Store(path, &tailRange{highWatermark: fi.Size()})
+	if readEnd > tailLen {
+		readEnd = tailLen
+	}
+
+	// Miss unless this exact range was written. No fallback on the file's on-disk size:
+	// the file is sparse, and an unwritten hole reads back as zeros, not as a short read.
+	val, ok := d.tailCoverage.Load(path)
+	if !ok || !val.(*tailRange).covers(relOffset, readEnd) {
+		return 0, nil
 	}
 
 	ch, err := d.getHandle(path)
