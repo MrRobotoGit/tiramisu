@@ -50,31 +50,93 @@ type EngineConfig struct {
 	LogsDir    string
 }
 
-// QualityWeights defines scoring weights for movie selection.
-type QualityWeights struct {
-	Res4K           int `json:"res_4k"`
-	Res1080p        int `json:"res_1080p"`
-	HDR             int `json:"hdr"`
-	DolbyVision     int `json:"dolby_vision"`
-	HDR10Plus       int `json:"hdr10_plus"`
-	Atmos           int `json:"atmos"`
-	Audio51         int `json:"audio_5_1"`
-	Stereo          int `json:"stereo"`
-	BluRay          int `json:"bluray"`
-	SeederBonus     int `json:"seeder_bonus"`
-	SeederThreshold int `json:"seeder_threshold"`
+// MovieWeights holds the scoring weights and size gates used by the movie engine
+// (and by the watchlist, which is movies-only). Defaults are the values that were
+// compiled into internal/syncer/engines/movie_go.go before they became configurable.
+type MovieWeights struct {
+	Res4K                int `json:"res_4k"`
+	Res1080p             int `json:"res_1080p"`
+	HDR                  int `json:"hdr"`
+	DolbyVision          int `json:"dolby_vision"`
+	Atmos                int `json:"atmos"`
+	Audio51              int `json:"audio_5_1"`
+	StereoPenalty        int `json:"stereo_penalty"`
+	Remux                int `json:"remux"`
+	PreferredLanguage    int `json:"preferred_language"`
+	UnknownSize4KPenalty int `json:"unknown_size_4k_penalty"`
+	SeederCap            int `json:"seeder_cap"`
+	MinSeeders           int `json:"min_seeders"`
+	Min4KGB              int `json:"min_4k_gb"`
+	Max4KGB              int `json:"max_4k_gb"`
+	Min1080pGB           int `json:"min_1080p_gb"`
+	Max1080pGB           int `json:"max_1080p_gb"`
 }
 
-// TVQualityWeights extends QualityWeights with TV-specific bonuses.
-type TVQualityWeights struct {
-	QualityWeights
-	FullpackBonus int `json:"fullpack_bonus"`
+// TVWeights holds the scoring weights and gates used by the TV engine. The seeder
+// bonus is tiered rather than proportional, which is why it does not share a struct
+// with MovieWeights.
+type TVWeights struct {
+	Res4K             int `json:"res_4k"`
+	Res1080p          int `json:"res_1080p"`
+	HDR               int `json:"hdr"`
+	Atmos             int `json:"atmos"`
+	Audio51           int `json:"audio_5_1"`
+	PreferredLanguage int `json:"preferred_language"`
+	Fullpack          int `json:"fullpack"`
+	SeederTier100     int `json:"seeder_tier_100"`
+	SeederTier50      int `json:"seeder_tier_50"`
+	SeederTier20      int `json:"seeder_tier_20"`
+	MinSeeders        int `json:"min_seeders"`
+	MinSeeders4K      int `json:"min_seeders_4k"`
+	// SeasonSkipScore is measured against averages of QualityScore, so it must move
+	// with the weights that build that score - a fixed number would drift off the scale.
+	SeasonSkipScore int `json:"season_skip_score"`
 }
 
-// QualityScoringConfig holds optional quality scoring profiles.
+// QualityScoringConfig carries optional per-profile overrides. A nil profile means
+// "use the defaults" - that is what keeps existing installs on their current picks
+// without writing anything into their config.json.
 type QualityScoringConfig struct {
-	Movies *QualityWeights   `json:"movies,omitempty"`
-	TV     *TVQualityWeights `json:"tv,omitempty"`
+	Movies *MovieWeights `json:"movies,omitempty"`
+	TV     *TVWeights    `json:"tv,omitempty"`
+}
+
+// DefaultMovieWeights returns the shipped movie scoring profile.
+func DefaultMovieWeights() MovieWeights {
+	return MovieWeights{
+		Res4K: 1000, Res1080p: 200, HDR: 60, DolbyVision: 100,
+		Atmos: 50, Audio51: 25, StereoPenalty: -50, Remux: 30,
+		PreferredLanguage: 60, UnknownSize4KPenalty: -5,
+		SeederCap: 50, MinSeeders: 15,
+		Min4KGB: 10, Max4KGB: 40, Min1080pGB: 4, Max1080pGB: 20,
+	}
+}
+
+// DefaultTVWeights returns the shipped TV scoring profile.
+func DefaultTVWeights() TVWeights {
+	return TVWeights{
+		Res4K: 1000, Res1080p: 200, HDR: 100, Atmos: 50, Audio51: 25,
+		PreferredLanguage: 40, Fullpack: 500,
+		SeederTier100: 100, SeederTier50: 50, SeederTier20: 10, MinSeeders: 5,
+		MinSeeders4K: 5, SeasonSkipScore: 1000,
+	}
+}
+
+// MovieWeights resolves the profile to use: the configured one when present, the
+// defaults otherwise. A present profile is taken verbatim, so an explicit 0 stays 0.
+func (q QualityScoringConfig) MovieWeights() MovieWeights {
+	if q.Movies == nil {
+		return DefaultMovieWeights()
+	}
+	return *q.Movies
+}
+
+// TVWeights resolves the TV profile the same way.
+func (q QualityScoringConfig) TVWeights() TVWeights {
+	if q.TV == nil {
+		return DefaultTVWeights()
+	}
+	return *q.TV
 }
 
 // LanguageConfig controls preferred/excluded audio-language matching used

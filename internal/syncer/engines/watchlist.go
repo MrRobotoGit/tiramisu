@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"tiramisu/internal/config"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -26,6 +27,8 @@ type WatchlistSyncerConfig struct {
 	MediaServerType string
 	LogsDir         string
 	ProwlarrCfg     prowlarr.ConfigProwlarr
+	QualityScoring  config.QualityScoringConfig
+	Language        config.LanguageConfig
 }
 
 // NewWatchlistSyncer creates a new Go-based watchlist syncer.
@@ -53,6 +56,8 @@ func NewWatchlistSyncer(cfg WatchlistSyncerConfig) *WatchlistSyncer {
 		MediaServerType: cfg.MediaServerType,
 		LogsDir:         logsDir,
 		ProwlarrCfg:     cfg.ProwlarrCfg,
+		Weights:         cfg.QualityScoring.MovieWeights(),
+		Language:        cfg.Language,
 	}
 
 	return &WatchlistSyncer{

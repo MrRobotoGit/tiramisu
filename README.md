@@ -744,6 +744,60 @@ nano /home/pi/Tiramisu/config.json
 | `natpmp.enabled` | `false` | Enable NAT-PMP |
 | `natpmp.gateway` | *(none)* | VPN gateway IP |
 | `natpmp.vpn_interface` | `wg0` | WireGuard interface |
+| `quality_scoring` | *(omitted)* | Optional overrides for the release-scoring weights, see below |
+
+### Quality Scoring
+
+Tiramisu scores every candidate release (movie or episode) to pick which one to download — resolution, HDR/Dolby Vision, audio track, remux, preferred language, seeder count, and file-size gates all add up to one number, and the highest score wins. Those weights used to be fixed in code; they are now an optional `quality_scoring` block in `config.json`, editable live from the **Release Selection** card in the Control Panel.
+
+**Omitting the block keeps the shipped defaults** — nothing changes for an existing install until you deliberately add it. `movies` and `tv` are independent and can be set one without the other; any field you leave out of a profile you do set falls back to that profile's default.
+
+```json
+{
+  "quality_scoring": {
+    "movies": {
+      "res_4k": 1000,
+      "res_1080p": 200,
+      "hdr": 60,
+      "dolby_vision": 100,
+      "atmos": 50,
+      "audio_5_1": 25,
+      "stereo_penalty": -50,
+      "remux": 30,
+      "preferred_language": 60,
+      "unknown_size_4k_penalty": -5,
+      "seeder_cap": 50,
+      "min_seeders": 15,
+      "min_4k_gb": 10,
+      "max_4k_gb": 40,
+      "min_1080p_gb": 4,
+      "max_1080p_gb": 20
+    },
+    "tv": {
+      "res_4k": 1000,
+      "res_1080p": 200,
+      "hdr": 100,
+      "atmos": 50,
+      "audio_5_1": 25,
+      "preferred_language": 40,
+      "fullpack": 500,
+      "seeder_tier_100": 100,
+      "seeder_tier_50": 50,
+      "seeder_tier_20": 10,
+      "min_seeders": 5,
+      "min_seeders_4k": 5,
+      "season_skip_score": 1000
+    }
+  }
+}
+```
+
+The Control Panel's **Release Selection** card ships four presets that fill in both profiles at once, then let you fine-tune individual fields:
+
+- **Best Quality (default)** — the values above; resolution and HDR/Atmos weighted highest, watchlist and library sync both use this scale unless you pick another preset.
+- **1080p** — for setups (like a NAS that can't transcode 4K) that should stop treating 4K as automatically better: `res_1080p` outweighs `res_4k`.
+- **Fast Swarms** — favors releases with more active seeders over marginal quality gains, useful if you stream while downloading and cold starts matter more than a Dolby Vision bump.
+- **Max Quality** — pushes resolution/HDR/Atmos/remux weights higher and tightens the seeder floor, for a library where quality always wins.
 
 ### Runtime Environment Variables
 

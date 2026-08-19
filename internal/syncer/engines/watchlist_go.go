@@ -21,8 +21,8 @@ import (
 	"tiramisu/internal/catalog/mediaserver"
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
+	"tiramisu/internal/config"
 	"tiramisu/internal/prowlarr"
-	"tiramisu/internal/syncer/quality"
 )
 
 // WatchlistGoEngine is the pure Go implementation of watchlist sync.
@@ -39,6 +39,9 @@ type WatchlistGoEngine struct {
 	sectionID  int
 	limiter    *rate.Limiter
 	logger     *log.Logger
+
+	weights       config.MovieWeights
+	preferredLang *regexp.Regexp
 }
 
 // WatchlistConfig holds all config needed for the engine.
@@ -53,6 +56,8 @@ type WatchlistConfig struct {
 	MediaServerType string
 	LogsDir         string
 	ProwlarrCfg     prowlarr.ConfigProwlarr
+	Weights         config.MovieWeights
+	Language        config.LanguageConfig
 }
 
 // NewWatchlistGoEngine creates a new Go watchlist sync engine.
@@ -79,6 +84,9 @@ func NewWatchlistGoEngine(cfg WatchlistConfig) *WatchlistGoEngine {
 		sectionID:  cfg.PlexSection,
 		limiter:    rate.NewLimiter(rate.Every(500*time.Millisecond), 1),
 		logger:     logger,
+
+		weights:       cfg.Weights,
+		preferredLang: CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
 	}
 }
 
@@ -388,14 +396,6 @@ func (e *WatchlistGoEngine) getStreams(ctx context.Context, imdbID, title string
 	return streams, nil
 }
 
-const (
-	movie4KMinGB    = 9.0
-	movie4KMaxGB    = 50.0
-	movie1080PMinGB = 4.0
-	movie1080PMaxGB = 20.0
-	minSeeders      = 10
-)
-
 var (
 	reExcludedLangs = regexp.MustCompile(`🇪🇸|🇫🇷|🇩🇪|🇷🇺|🇨🇳|🇯🇵|🇰🇷|🇹🇭|🇵🇹|🇧🇷|🇺🇦|🇵🇱|🇳🇱|🇹🇷|🇸🇦|🇮🇳|🇨🇿|🇭🇺|🇷🇴`)
 	reExcludedDubs  = regexp.MustCompile(`(?i)\b(Ukr|Ukrainian|Ger|German|Fra|French|Spa|Spanish|Por|Portuguese|Rus|Russian|Chi|Chinese|Pol|Polish|Tur|Turkish|Ara|Arabic|Hin|Hindi|Cze|Czech|Hun|Hungarian)\s+Dub\b`)
@@ -436,7 +436,8 @@ func (e *WatchlistGoEngine) pickBestStream(streams []prowlarr.Stream) []prowlarr
 	var candidates []scored
 	for _, s := range streams {
 		title := s.Title
-		if extractSeeders(title) < minSeeders {
+		seeders := extractSeeders(title)
+		if seeders < e.weights.MinSeeders {
 			continue
 		}
 		if reExcludedLangs.MatchString(title) {
@@ -453,16 +454,16 @@ func (e *WatchlistGoEngine) pickBestStream(streams []prowlarr.Stream) []prowlarr
 		is4K := re4K.MatchString(title)
 
 		if is4K {
-			if gb != 0 && (gb < movie4KMinGB || gb > movie4KMaxGB) {
+			if gb != 0 && (gb < float64(e.weights.Min4KGB) || gb > float64(e.weights.Max4KGB)) {
 				continue
 			}
 		} else {
-			if gb == 0 || gb < movie1080PMinGB || gb > movie1080PMaxGB {
+			if gb == 0 || gb < float64(e.weights.Min1080pGB) || gb > float64(e.weights.Max1080pGB) {
 				continue
 			}
 		}
 
-		sc := quality.Score(title, extractSeeders(title), quality.DefaultMovieProfile())
+		sc := scoreMovieRelease(title, seeders, gb, is4K, e.weights, e.preferredLang)
 		if sc <= 0 {
 			continue
 		}

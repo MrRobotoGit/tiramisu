@@ -4045,6 +4045,7 @@ func main() {
 				LogsDir:        logsDir,
 				ProwlarrCfg:    gc().Prowlarr,
 				Language:       gc().Language,
+				QualityScoring: gc().QualityScoringConfig,
 				InvalidatePath: invalidateSyncRemovedPath,
 			}),
 			"tv": engines.NewTVSyncer(engines.TVSyncerConfig{
@@ -4059,6 +4060,7 @@ func main() {
 				LogsDir:        logsDir,
 				ProwlarrCfg:    gc().Prowlarr,
 				Language:       gc().Language,
+				QualityScoring: gc().QualityScoringConfig,
 				DB:             stateDB,
 				InvalidatePath: invalidateSyncRemovedPath,
 			}),
@@ -4073,6 +4075,8 @@ func main() {
 				MediaServerType: gc().MediaServerType,
 				LogsDir:         logsDir,
 				ProwlarrCfg:     gc().Prowlarr,
+				QualityScoring:  gc().QualityScoringConfig,
+				Language:        gc().Language,
 			}),
 		}
 

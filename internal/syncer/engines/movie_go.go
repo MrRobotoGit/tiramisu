@@ -60,6 +60,8 @@ type MovieGoEngine struct {
 	reITA         *regexp.Regexp
 	reExclLang    *regexp.Regexp
 	exclLanguages map[string]bool
+
+	weights config.MovieWeights
 }
 
 // CacheEntry is a generic cache entry with timestamp.
@@ -95,6 +97,7 @@ type MovieEngineConfig struct {
 	LogsDir      string
 	ProwlarrCfg  prowlarr.ConfigProwlarr
 	Language     config.LanguageConfig
+	Weights      config.MovieWeights
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -102,21 +105,6 @@ type MovieEngineConfig struct {
 
 // Movie thresholds
 const (
-	mMovie4KBase         = 1000
-	mMovie1080pBase      = 200
-	mMovieHDRBonus       = 60
-	mMovieDVBonus        = 100
-	mMovieAtmosBonus     = 50
-	mMovie51Bonus        = 25
-	mMovieStereoPenalty  = -50
-	mMovieRemuxBonus     = 30
-	mMovieITABonus       = 60
-	mMovieUnknownPenalty = -5
-	mMovieMinSeeders     = 15
-	mMovie4KMinGB        = 10
-	mMovie4KMaxGB        = 40
-	mMovie1080PMinGB     = 4
-	mMovie1080PMaxGB     = 20
 	mMovieUpgradePct     = 1.1
 	mMovieProcessSleep   = 1 * time.Second
 	mMovieMetadataWait   = 12
@@ -186,6 +174,8 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 		reITA:         CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
 		reExclLang:    CompileLanguageRegex(ExcludedTitleTerms(cfg.Language.ExcludedFlags), cfg.Language.ExcludedFlags),
 		exclLanguages: ExcludedLanguageSet(cfg.Language.ExcludedFlags),
+
+		weights: cfg.Weights,
 	}
 
 	e.noMKVCache = e.loadCache(e.noMKVCFile)
@@ -331,6 +321,8 @@ type movieFile struct {
 	imdb  string
 	hash  string
 	score int
+	// is4K is stored, not inferred from score: the 4K weight is user-configurable.
+	is4K bool
 }
 
 func (e *MovieGoEngine) buildExistingMovieIndex() (map[string]movieFile, map[string]bool) {
@@ -382,9 +374,10 @@ func (e *MovieGoEngine) buildExistingMovieIndex() (map[string]movieFile, map[str
 		if m := reMHashURL.FindStringSubmatch(url); len(m) >= 2 {
 			hash = m[1]
 		}
-		score := e.calculateMovieScore(info.Name(), 0, 0, reM4K.MatchString(info.Name()))
+		is4K := reM4K.MatchString(info.Name())
+		score := e.calculateMovieScore(info.Name(), 0, 0, is4K, e.weights)
 		if existing, ok := index[imdb]; !ok || score > existing.score {
-			index[imdb] = movieFile{path: path, imdb: imdb, hash: hash, score: score}
+			index[imdb] = movieFile{path: path, imdb: imdb, hash: hash, score: score, is4K: is4K}
 		}
 		return nil
 	})
@@ -417,7 +410,7 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 	existing := existingIndex[imdbID]
 	recheckTTL := recheckNoFileTTL
 	if existing.path != "" {
-		if existing.score >= mMovie4KBase {
+		if existing.is4K {
 			recheckTTL = recheckCacheTTL
 		} else {
 			recheckTTL = recheck1080pTTL
@@ -627,7 +620,7 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) (*MovieStream, st
 	}
 
 	seeders := e.extractMovieSeeders(title)
-	if seeders < mMovieMinSeeders {
+	if seeders < e.weights.MinSeeders {
 		return nil, "low_seeders"
 	}
 
@@ -642,16 +635,16 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) (*MovieStream, st
 
 	// 4K: accept unknown size with penalty; 1080p: reject unknown
 	if is4K {
-		if sizeGB != 0 && (sizeGB < mMovie4KMinGB || sizeGB > mMovie4KMaxGB) {
+		if sizeGB != 0 && (sizeGB < float64(e.weights.Min4KGB) || sizeGB > float64(e.weights.Max4KGB)) {
 			return nil, "4k_size_oob"
 		}
 	} else {
-		if sizeGB == 0 || sizeGB < mMovie1080PMinGB || sizeGB > mMovie1080PMaxGB {
+		if sizeGB == 0 || sizeGB < float64(e.weights.Min1080pGB) || sizeGB > float64(e.weights.Max1080pGB) {
 			return nil, "1080p_size_oob"
 		}
 	}
 
-	score := e.calculateMovieScore(fullText, seeders, sizeGB, is4K)
+	score := e.calculateMovieScore(fullText, seeders, sizeGB, is4K, e.weights)
 	if score <= 0 {
 		return nil, "zero_score"
 	}
@@ -666,46 +659,50 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) (*MovieStream, st
 	}, ""
 }
 
-func (e *MovieGoEngine) calculateMovieScore(text string, seeders int, sizeGB float64, is4K bool) int {
+func (e *MovieGoEngine) calculateMovieScore(text string, seeders int, sizeGB float64, is4K bool, w config.MovieWeights) int {
+	return scoreMovieRelease(text, seeders, sizeGB, is4K, w, e.reITA)
+}
+
+// scoreMovieRelease scores a candidate with the movie profile. The watchlist handles movies
+// only, so a scale of its own would just be a third set of numbers to keep in sync.
+func scoreMovieRelease(text string, seeders int, sizeGB float64, is4K bool, w config.MovieWeights, preferredLang *regexp.Regexp) int {
 	score := 0
 
 	if is4K {
-		score += mMovie4KBase
+		score += w.Res4K
 	} else {
-		score += mMovie1080pBase
+		score += w.Res1080p
 	}
 
 	if reMDV.MatchString(text) {
-		score += mMovieDVBonus
+		score += w.DolbyVision
 	} else if reMHDR.MatchString(text) {
-		score += mMovieHDRBonus
+		score += w.HDR
 	}
 
 	if reMAtmos.MatchString(text) {
-		score += mMovieAtmosBonus
+		score += w.Atmos
 	} else if reM51.MatchString(text) {
-		score += mMovie51Bonus
+		score += w.Audio51
 	} else if reMStereo.MatchString(text) {
-		score += mMovieStereoPenalty
-	} else {
-		score += 5
+		score += w.StereoPenalty
 	}
 
 	if reMRemux.MatchString(text) {
-		score += mMovieRemuxBonus
+		score += w.Remux
 	}
 
-	if e.reITA.MatchString(text) {
-		score += mMovieITABonus
+	if preferredLang.MatchString(text) {
+		score += w.PreferredLanguage
 	}
 
 	if sizeGB == 0 && is4K {
-		score += mMovieUnknownPenalty
+		score += w.UnknownSize4KPenalty
 	}
 
 	seederBonus := seeders
-	if seederBonus > 50 {
-		seederBonus = 50
+	if seederBonus > w.SeederCap {
+		seederBonus = w.SeederCap
 	}
 	score += seederBonus
 
@@ -728,11 +725,11 @@ func (e *MovieGoEngine) filterVideoFiles(files []FileStat, is4K bool) []FileStat
 		if ext != ".mkv" && ext != ".mp4" && ext != ".avi" && ext != ".mov" && ext != ".m4v" {
 			continue
 		}
-		minSize := int64(mMovie4KMinGB * 1024 * 1024 * 1024)
-		maxSize := int64(mMovie4KMaxGB * 1024 * 1024 * 1024)
+		minSize := int64(e.weights.Min4KGB) * 1024 * 1024 * 1024
+		maxSize := int64(e.weights.Max4KGB) * 1024 * 1024 * 1024
 		if !is4K {
-			minSize = int64(mMovie1080PMinGB * 1024 * 1024 * 1024)
-			maxSize = int64(mMovie1080PMaxGB * 1024 * 1024 * 1024)
+			minSize = int64(e.weights.Min1080pGB) * 1024 * 1024 * 1024
+			maxSize = int64(e.weights.Max1080pGB) * 1024 * 1024 * 1024
 		}
 		if f.Length >= minSize && f.Length <= maxSize {
 			valid = append(valid, f)

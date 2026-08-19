@@ -54,6 +54,8 @@ type TVGoEngine struct {
 	reITA         *regexp.Regexp
 	reExclLang    *regexp.Regexp
 	exclLanguages map[string]bool
+
+	weights config.TVWeights
 }
 
 // TVEpisodeEntry is a single entry in the TV episode registry.
@@ -89,23 +91,14 @@ type TVEngineConfig struct {
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
 	Language       config.LanguageConfig
+	Weights        config.TVWeights
 }
 
 // TV thresholds
 const (
-	tv4KBase           = 1000
-	tv1080pBase        = 200
-	tvHDRBonus         = 100
-	tvAtmosBonus       = 50
-	tv51Bonus          = 25
-	tvITABonus         = 40
-	tvFullpackBonus    = 500
-	tvMinSeeders4K     = 5
-	tvMinSeeders       = 5
 	tvMinEpisodeSize   = 1073741824  // 1GB
 	tvMaxEpisodeSize   = 32212254720 // 30GB
 	tvUpgradeThreshold = 1.2
-	tvMinQualitySkip   = 1000
 	tvSinglesLimit     = 15
 	tvMaxShowAgeDays   = 180
 )
@@ -176,6 +169,7 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 		reITA:            CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
 		reExclLang:       CompileLanguageRegex(ExcludedTitleTerms(cfg.Language.ExcludedFlags), cfg.Language.ExcludedFlags),
 		exclLanguages:    ExcludedLanguageSet(cfg.Language.ExcludedFlags),
+		weights:          cfg.Weights,
 	}
 
 	e.registry = e.loadRegistry()
@@ -614,7 +608,7 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 
 	allTargetComplete := true
 	for s := startSeason; s <= endSeason; s++ {
-		if avgScore, ok := completeSeasons[s]; ok && avgScore >= tvMinQualitySkip {
+		if avgScore, ok := completeSeasons[s]; ok && avgScore >= float64(e.weights.SeasonSkipScore) {
 			skippedSeasons[s] = true
 		} else {
 			allTargetComplete = false
@@ -866,16 +860,16 @@ func (e *TVGoEngine) classifyStream(s prowlarr.Stream) *TVStream {
 	}
 
 	seeders := e.extractSeeders(title)
-	qualityScore := e.calculateQualityScore(fullText, seeders)
+	qualityScore := e.calculateQualityScore(fullText, seeders, e.weights)
 
 	if qualityScore == 0 {
 		return nil
 	}
 
 	is4K := reTV4K.MatchString(fullText)
-	minReq := tvMinSeeders4K
+	minReq := e.weights.MinSeeders4K
 	if !is4K {
-		minReq = tvMinSeeders
+		minReq = e.weights.MinSeeders
 	}
 	if seeders < minReq {
 		return nil
@@ -901,9 +895,9 @@ func (e *TVGoEngine) classifyStream(s prowlarr.Stream) *TVStream {
 	priorityBonus := 0
 	if isFullpack {
 		if isPartialPack {
-			priorityBonus = tvFullpackBonus / 2
+			priorityBonus = e.weights.Fullpack / 2
 		} else {
-			priorityBonus = tvFullpackBonus
+			priorityBonus = e.weights.Fullpack
 		}
 	}
 
@@ -921,38 +915,38 @@ func (e *TVGoEngine) classifyStream(s prowlarr.Stream) *TVStream {
 	}
 }
 
-func (e *TVGoEngine) calculateQualityScore(text string, seeders int) int {
+func (e *TVGoEngine) calculateQualityScore(text string, seeders int, w config.TVWeights) int {
 	t := strings.ToLower(text)
 	score := 0
 
 	if reTV4K.MatchString(t) {
-		score += tv4KBase
+		score += w.Res4K
 	} else if reTV1080p.MatchString(t) {
-		score += tv1080pBase
+		score += w.Res1080p
 	} else {
 		return 0
 	}
 
 	if reTVHDR.MatchString(t) {
-		score += tvHDRBonus
+		score += w.HDR
 	}
 
 	if reTVAtmos.MatchString(t) {
-		score += tvAtmosBonus
+		score += w.Atmos
 	} else if reTV51.MatchString(t) {
-		score += tv51Bonus
+		score += w.Audio51
 	}
 
 	if e.reITA.MatchString(t) {
-		score += tvITABonus
+		score += w.PreferredLanguage
 	}
 
 	if seeders >= 100 {
-		score += 100
+		score += w.SeederTier100
 	} else if seeders >= 50 {
-		score += 50
+		score += w.SeederTier50
 	} else if seeders >= 20 {
-		score += 10
+		score += w.SeederTier20
 	}
 
 	return score

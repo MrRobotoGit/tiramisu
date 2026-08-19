@@ -517,6 +517,91 @@
             color: var(--accent);
         }
 
+        .preset-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .quality-preset-btn {
+            border: 1.5px solid var(--border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+
+        .quality-preset-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .quality-preset-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .profile-switch {
+            display: flex;
+            gap: 6px;
+            background: var(--section-bg);
+            border: 1px solid var(--section-border);
+            border-radius: 8px;
+            padding: 4px;
+            margin-bottom: 16px;
+        }
+
+        .profile-switch-btn {
+            flex: 1;
+            border: none;
+            background: transparent;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 700;
+            padding: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: 0.15s;
+        }
+
+        .profile-switch-btn.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        .weight-group {
+            margin-bottom: 14px;
+        }
+
+        .weight-group-label {
+            font-size: 10.5px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--muted);
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .quality-filters summary {
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+
+        .quality-filters[open] summary {
+            margin-bottom: 12px;
+        }
+
         .picker-anchor {
             position: relative;
             display: inline-block;
@@ -889,47 +974,6 @@
                     </div>
 
                     <div class="form-section">
-                        <div class="form-section-title">Languages</div>
-
-                        <div class="form-group">
-                            <label>Preferred</label>
-                            <input type="text" name="language_preferred_terms" id="language_preferred_terms"
-                                placeholder="ita, multi, dual">
-                            <div class="hint">Comma-separated terms found in release naming — grants a scoring
-                                bonus</div>
-                        </div>
-                        <div class="chip-row" id="preferred-flags-row">
-                            <span class="picker-anchor">
-                                <button type="button" class="add-flag-btn"
-                                    onclick="toggleLangPicker('preferred')">+ Add flag</button>
-                                <div class="picker" id="picker-preferred">
-                                    <input type="text" placeholder="Search country or ISO code..."
-                                        aria-label="Search country or ISO code"
-                                        oninput="filterLangPicker(this, 'preferred')">
-                                    <div class="picker-list" id="picker-list-preferred"></div>
-                                </div>
-                            </span>
-                        </div>
-
-                        <div class="form-group" style="margin-top: 14px;">
-                            <label>Excluded</label>
-                            <div class="hint">Torrents matching these flags are filtered out entirely</div>
-                        </div>
-                        <div class="chip-row" id="excluded-flags-row">
-                            <span class="picker-anchor">
-                                <button type="button" class="add-flag-btn"
-                                    onclick="toggleLangPicker('excluded')">+ Add flag</button>
-                                <div class="picker" id="picker-excluded">
-                                    <input type="text" placeholder="Search country or ISO code..."
-                                        aria-label="Search country or ISO code"
-                                        oninput="filterLangPicker(this, 'excluded')">
-                                    <div class="picker-list" id="picker-list-excluded"></div>
-                                </div>
-                            </span>
-                        </div>
-                    </div>
-
-                    <div class="form-section">
                         <div class="form-section-title">Media Manager (Plex)</div>
                         <div class="form-grid">
                             <div class="form-group" style="grid-column: 1 / -1;">
@@ -1136,6 +1180,278 @@
                         <button type="submit" class="btn btn-primary">Apply Settings</button>
                         <div id="gostorm-status" class="status-msg"></div>
                     </form>
+                </div>
+
+                <!-- RELEASE SELECTION -->
+                <div class="card">
+                    <h2>🎯 Release Selection</h2>
+
+                    <div class="form-section">
+                        <div class="form-section-title">Languages</div>
+
+                        <div class="form-group">
+                            <label>Preferred</label>
+                            <input type="text" name="language_preferred_terms" id="language_preferred_terms"
+                                form="tiramisu-form" placeholder="ita, multi, dual">
+                            <div class="hint">Comma-separated terms found in release naming — grants a scoring
+                                bonus</div>
+                        </div>
+                        <div class="chip-row" id="preferred-flags-row">
+                            <span class="picker-anchor">
+                                <button type="button" class="add-flag-btn"
+                                    onclick="toggleLangPicker('preferred')">+ Add flag</button>
+                                <div class="picker" id="picker-preferred">
+                                    <input type="text" placeholder="Search country or ISO code..."
+                                        aria-label="Search country or ISO code"
+                                        oninput="filterLangPicker(this, 'preferred')">
+                                    <div class="picker-list" id="picker-list-preferred"></div>
+                                </div>
+                            </span>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 14px;">
+                            <label>Excluded</label>
+                            <div class="hint">Torrents matching these flags are filtered out entirely</div>
+                        </div>
+                        <div class="chip-row" id="excluded-flags-row">
+                            <span class="picker-anchor">
+                                <button type="button" class="add-flag-btn"
+                                    onclick="toggleLangPicker('excluded')">+ Add flag</button>
+                                <div class="picker" id="picker-excluded">
+                                    <input type="text" placeholder="Search country or ISO code..."
+                                        aria-label="Search country or ISO code"
+                                        oninput="filterLangPicker(this, 'excluded')">
+                                    <div class="picker-list" id="picker-list-excluded"></div>
+                                </div>
+                            </span>
+                        </div>
+
+                        <div class="form-grid" style="margin-top: 14px;">
+                            <div class="form-group">
+                                <label>Bonus for a preferred match — Movies</label>
+                                <input type="number" id="quality_movies_preferred_language">
+                            </div>
+                            <div class="form-group">
+                                <label>Bonus — TV Series</label>
+                                <input type="number" id="quality_tv_preferred_language">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-section">
+                        <div class="form-section-title">Quality Scoring</div>
+
+                        <div class="preset-row">
+                            <button type="button" class="quality-preset-btn" data-preset="best"
+                                onclick="applyQualityPreset('best')">Best Quality (default)</button>
+                            <button type="button" class="quality-preset-btn" data-preset="1080p"
+                                onclick="applyQualityPreset('1080p')">1080p</button>
+                            <button type="button" class="quality-preset-btn" data-preset="fast"
+                                onclick="applyQualityPreset('fast')">Fast Swarms</button>
+                            <button type="button" class="quality-preset-btn" data-preset="max"
+                                onclick="applyQualityPreset('max')">Max Quality</button>
+                        </div>
+                        <div class="hint" style="margin-bottom: 14px;">Presets fill in both profiles. Edit any
+                            value afterwards to fine-tune.</div>
+
+                        <div class="profile-switch">
+                            <button type="button" class="profile-switch-btn active" id="quality-switch-movies"
+                                onclick="setQualityProfile('movies')">Movies</button>
+                            <button type="button" class="profile-switch-btn" id="quality-switch-tv"
+                                onclick="setQualityProfile('tv')">TV Series</button>
+                        </div>
+
+                        <div id="quality-profile-movies">
+                            <div class="weight-group">
+                                <div class="weight-group-label">Resolution</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>4K</label>
+                                        <input type="number" id="quality_movies_res_4k">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>1080p</label>
+                                        <input type="number" id="quality_movies_res_1080p">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="weight-group">
+                                <div class="weight-group-label">Video</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Dolby Vision</label>
+                                        <input type="number" id="quality_movies_dolby_vision">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>HDR</label>
+                                        <input type="number" id="quality_movies_hdr">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="weight-group">
+                                <div class="weight-group-label">Audio</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Atmos</label>
+                                        <input type="number" id="quality_movies_atmos">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>5.1</label>
+                                        <input type="number" id="quality_movies_audio_5_1">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Stereo penalty</label>
+                                        <input type="number" id="quality_movies_stereo_penalty">
+                                        <div class="hint">Negative on purpose: an explicitly stereo release ranks
+                                            below one with 5.1 or Atmos.</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="weight-group">
+                                <div class="weight-group-label">Source</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Remux</label>
+                                        <input type="number" id="quality_movies_remux">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="weight-group">
+                                <div class="weight-group-label">Swarm</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Seeder cap</label>
+                                        <input type="number" id="quality_movies_seeder_cap">
+                                        <div class="hint">Upper limit on the seeder contribution. A release with
+                                            300 seeders counts the same as one with 50.</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <details class="quality-filters">
+                                <summary>Filters</summary>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Min seeders</label>
+                                        <input type="number" id="quality_movies_min_seeders">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Min size — 4K (GB)</label>
+                                        <input type="number" id="quality_movies_min_4k_gb">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Max size — 4K (GB)</label>
+                                        <input type="number" id="quality_movies_max_4k_gb">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Min size — 1080p (GB)</label>
+                                        <input type="number" id="quality_movies_min_1080p_gb">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Max size — 1080p (GB)</label>
+                                        <input type="number" id="quality_movies_max_1080p_gb">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Unknown-size penalty — 4K</label>
+                                        <input type="number" id="quality_movies_unknown_size_4k_penalty">
+                                        <div class="hint">Negative on purpose: applies to a 4K release whose size
+                                            is unknown, so it loses to one with a verified size.</div>
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+
+                        <div id="quality-profile-tv" style="display:none;">
+                            <div class="weight-group">
+                                <div class="weight-group-label">Resolution</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>4K</label>
+                                        <input type="number" id="quality_tv_res_4k">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>1080p</label>
+                                        <input type="number" id="quality_tv_res_1080p">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="weight-group">
+                                <div class="weight-group-label">Video</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>HDR</label>
+                                        <input type="number" id="quality_tv_hdr">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="weight-group">
+                                <div class="weight-group-label">Audio</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Atmos</label>
+                                        <input type="number" id="quality_tv_atmos">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>5.1</label>
+                                        <input type="number" id="quality_tv_audio_5_1">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="weight-group">
+                                <div class="weight-group-label">Preference</div>
+                                <div class="form-grid">
+                                    <div class="form-group" style="grid-column: 1 / -1;">
+                                        <label>Full season pack</label>
+                                        <input type="number" id="quality_tv_fullpack">
+                                        <div class="hint">Ranks a full season ahead of single episodes. It does not
+                                            enter the quality score, so it never makes a pack outrank a
+                                            better-quality release.</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="weight-group">
+                                <div class="weight-group-label">Swarm</div>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Seeder tier ≥ 100</label>
+                                        <input type="number" id="quality_tv_seeder_tier_100">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Seeder tier ≥ 50</label>
+                                        <input type="number" id="quality_tv_seeder_tier_50">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Seeder tier ≥ 20</label>
+                                        <input type="number" id="quality_tv_seeder_tier_20">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <details class="quality-filters">
+                                <summary>Filters</summary>
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label>Min seeders</label>
+                                        <input type="number" id="quality_tv_min_seeders">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Min seeders — 4K</label>
+                                        <input type="number" id="quality_tv_min_seeders_4k">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Season skip score</label>
+                                        <input type="number" id="quality_tv_season_skip_score">
+                                        <div class="hint">A season whose average score reaches this is considered
+                                            good enough, and the sync stops looking for upgrades. Raise it if you
+                                            raise the weights.</div>
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+
+                    <button type="submit" form="tiramisu-form" class="btn btn-primary">Save</button>
+                    <div id="quality-status" class="status-msg"></div>
                 </div>
 
                 <!-- SYNC SCHEDULER -->
@@ -1511,6 +1827,111 @@
         rebuildLangPicker('preferred');
         rebuildLangPicker('excluded');
 
+        // --- Quality Scoring (Release Selection) ---
+        const QUALITY_MOVIE_DEFAULTS = {
+            res_4k: 1000, res_1080p: 200, hdr: 60, dolby_vision: 100,
+            atmos: 50, audio_5_1: 25, stereo_penalty: -50, remux: 30,
+            preferred_language: 60, unknown_size_4k_penalty: -5,
+            seeder_cap: 50, min_seeders: 15,
+            min_4k_gb: 10, max_4k_gb: 40, min_1080p_gb: 4, max_1080p_gb: 20,
+        };
+        const QUALITY_TV_DEFAULTS = {
+            res_4k: 1000, res_1080p: 200, hdr: 100, atmos: 50, audio_5_1: 25,
+            preferred_language: 40, fullpack: 500,
+            seeder_tier_100: 100, seeder_tier_50: 50, seeder_tier_20: 10,
+            min_seeders: 5, min_seeders_4k: 5, season_skip_score: 1000,
+        };
+
+        function readQualityWeights(prefix, defaults) {
+            const out = {};
+            Object.keys(defaults).forEach(f => {
+                const el = document.getElementById(prefix + f);
+                const v = el ? parseInt(el.value) : NaN;
+                out[f] = isNaN(v) ? defaults[f] : v;
+            });
+            return out;
+        }
+
+        function setQualityProfile(profile) {
+            document.getElementById('quality-profile-movies').style.display = profile === 'movies' ? '' : 'none';
+            document.getElementById('quality-profile-tv').style.display = profile === 'tv' ? '' : 'none';
+            document.getElementById('quality-switch-movies').classList.toggle('active', profile === 'movies');
+            document.getElementById('quality-switch-tv').classList.toggle('active', profile === 'tv');
+        }
+
+        // Presets express an intent ("prefer 1080p", "slow swarm") that is not
+        // per-media-type, so each one rewrites movies AND tv together. Fields not
+        // listed here fall back to the shipped defaults (Object.assign below).
+        const QUALITY_PRESETS = {
+            best: { movies: {}, tv: {} },
+            '1080p': {
+                movies: { res_4k: 200, res_1080p: 1000 },
+                tv: { res_4k: 200, res_1080p: 1000 },
+            },
+            fast: {
+                movies: { res_4k: 400, res_1080p: 300, seeder_cap: 400 },
+                tv: {
+                    res_4k: 400, res_1080p: 300,
+                    seeder_tier_100: 500, seeder_tier_50: 250, seeder_tier_20: 80,
+                    season_skip_score: 600,
+                },
+            },
+            max: {
+                movies: { res_4k: 1500, dolby_vision: 200, hdr: 120, atmos: 80, remux: 60, seeder_cap: 25 },
+                tv: {
+                    res_4k: 1500, hdr: 160, atmos: 80,
+                    seeder_tier_100: 40, seeder_tier_50: 20, seeder_tier_20: 5,
+                    season_skip_score: 1500,
+                },
+            },
+        };
+
+        function applyQualityPreset(name) {
+            const preset = QUALITY_PRESETS[name];
+            if (!preset) return;
+            const mw = Object.assign({}, QUALITY_MOVIE_DEFAULTS, preset.movies);
+            const tw = Object.assign({}, QUALITY_TV_DEFAULTS, preset.tv);
+            Object.keys(QUALITY_MOVIE_DEFAULTS).forEach(f => {
+                const el = document.getElementById('quality_movies_' + f);
+                if (el) el.value = mw[f];
+            });
+            Object.keys(QUALITY_TV_DEFAULTS).forEach(f => {
+                const el = document.getElementById('quality_tv_' + f);
+                if (el) el.value = tw[f];
+            });
+            document.querySelectorAll('.quality-preset-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.preset === name);
+            });
+        }
+
+        function clearActiveQualityPreset() {
+            document.querySelectorAll('.quality-preset-btn').forEach(b => b.classList.remove('active'));
+        }
+
+        // Which preset do the current values correspond to? Called after load so the chip
+        // reflects what is actually configured, not merely what was last clicked.
+        function syncActiveQualityPreset() {
+            const current = f => document.getElementById(f) ? parseInt(document.getElementById(f).value, 10) : NaN;
+            const match = Object.keys(QUALITY_PRESETS).find(name => {
+                const mw = Object.assign({}, QUALITY_MOVIE_DEFAULTS, QUALITY_PRESETS[name].movies);
+                const tw = Object.assign({}, QUALITY_TV_DEFAULTS, QUALITY_PRESETS[name].tv);
+                return Object.keys(QUALITY_MOVIE_DEFAULTS).every(f => current('quality_movies_' + f) === mw[f])
+                    && Object.keys(QUALITY_TV_DEFAULTS).every(f => current('quality_tv_' + f) === tw[f]);
+            });
+            document.querySelectorAll('.quality-preset-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.preset === match);
+            });
+        }
+
+        // Any manual edit to a weight (movies or tv) invalidates the preset badge -
+        // the saved numbers are always what's in the inputs, presets are just a shortcut.
+        [...Object.keys(QUALITY_MOVIE_DEFAULTS).map(f => 'quality_movies_' + f),
+         ...Object.keys(QUALITY_TV_DEFAULTS).map(f => 'quality_tv_' + f)]
+            .forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', clearActiveQualityPreset);
+            });
+
         const ENGINE_ROOT_KEYS = [
             'physical_source_path', 'fuse_mount_path',
             'master_concurrency_limit', 'read_ahead_budget_mb',
@@ -1577,6 +1998,18 @@
                     rebuildLangPicker('preferred');
                     rebuildLangPicker('excluded');
                 }
+                const qs = originalEngine.quality_scoring || originalEngine.QualityScoring || {};
+                const mw = Object.assign({}, QUALITY_MOVIE_DEFAULTS, qs.movies || qs.Movies || {});
+                const tw = Object.assign({}, QUALITY_TV_DEFAULTS, qs.tv || qs.TV || {});
+                Object.keys(QUALITY_MOVIE_DEFAULTS).forEach(f => {
+                    const el = document.getElementById('quality_movies_' + f);
+                    if (el) el.value = mw[f];
+                });
+                Object.keys(QUALITY_TV_DEFAULTS).forEach(f => {
+                    const el = document.getElementById('quality_tv_' + f);
+                    if (el) el.value = tw[f];
+                });
+                syncActiveQualityPreset();
                 markCouplingLoaded();
             } catch (e) { console.error("Engine load error", e); }
         }
@@ -1652,14 +2085,26 @@
                 excluded_flags: currentLangCodes('excluded-flags-row'),
             };
 
+            data.quality_scoring = {
+                movies: readQualityWeights('quality_movies_', QUALITY_MOVIE_DEFAULTS),
+                tv: readQualityWeights('quality_tv_', QUALITY_TV_DEFAULTS),
+            };
+
             const res = await fetch('/api/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
-            status.textContent = res.ok ? "✓ Config saved — restart tiramisu to apply" : "✗ Save error";
-            status.className = "status-msg " + (res.ok ? "status-success" : "status-error");
-            setTimeout(() => { status.className = "status-msg"; }, 5000);
+            const msg = res.ok ? "✓ Config saved — restart tiramisu to apply" : "✗ Save error";
+            const cls = "status-msg " + (res.ok ? "status-success" : "status-error");
+            const qualityStatus = document.getElementById('quality-status');
+            // One save path, two places a user might be looking - always update both.
+            [status, qualityStatus].forEach(el => {
+                if (!el) return;
+                el.textContent = msg;
+                el.className = cls;
+                setTimeout(() => { el.className = "status-msg"; }, 5000);
+            });
         };
 
         // --- TorrServer Logic ---
