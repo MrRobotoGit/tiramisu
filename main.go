@@ -988,7 +988,8 @@ type MkvHandle struct {
 	hasWarmup       bool          // true if both head+tail warmup available at Open time
 	state           atomic.Uint32 // handleState: stateWarmup | stateStreaming
 	pumpOnce        sync.Once
-	isPrimaryHandle bool // true for pump creator and primary reconnects (refCount 0→1)
+	isPrimaryHandle atomic.Bool  // pump creator, primary reconnects (refCount 0→1), proven readers
+	seqAdvances     atomic.Int32 // consecutive sequential streaming reads, feeds the promotion below
 }
 
 // startNativePump acquires a slot and starts the background pump.
@@ -1050,12 +1051,12 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		// Primary reconnect (refCount 0→1): inherit player position.
 		// Secondary handles (Plex probes at arbitrary offsets): no inheritance.
 		if newRefs == 1 {
-			h.isPrimaryHandle = true
+			h.isPrimaryHandle.Store(true)
 			if curPos := atomic.LoadInt64(&ps.playerOff); curPos > 0 {
 				atomic.StoreInt64(&h.lastOff, curPos)
 			}
 		}
-		logger.Printf("[V264] Attached to existing pump (Refs: %d, primary=%v): %s", newRefs, h.isPrimaryHandle, filepath.Base(h.path))
+		logger.Printf("[V264] Attached to existing pump (Refs: %d, primary=%v): %s", newRefs, h.isPrimaryHandle.Load(), filepath.Base(h.path))
 		pumpCreationMu.Unlock()
 		return
 	}
@@ -1079,7 +1080,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			h.mu.Unlock()
 			globalOpenTracker.Inc(h.hash, h.path)
 			if newRefs == 1 {
-				h.isPrimaryHandle = true
+				h.isPrimaryHandle.Store(true)
 				if curPos := atomic.LoadInt64(&ps.playerOff); curPos > 0 {
 					atomic.StoreInt64(&h.lastOff, curPos)
 				}
@@ -1089,7 +1090,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		}
 
 		h.hasSlot = true
-		h.isPrimaryHandle = true // pump creator is always primary
+		h.isPrimaryHandle.Store(true) // pump creator is always primary
 		h.nativeReader = nativeBridge.NewStreamReader(finalHash, fileIdx, h.size)
 		if tr := torr.PeekTorrent(finalHash); tr != nil && tr.Torrent != nil {
 			if info := tr.Torrent.Info(); info != nil && info.PieceLength > 0 {
@@ -1339,7 +1340,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 		playerOff := int64(0)
 		activeHandles.Range(func(key, value interface{}) bool {
 			handle := key.(*MkvHandle)
-			if handle.path == h.path && handle.isPrimaryHandle {
+			if handle.path == h.path && handle.isPrimaryHandle.Load() {
 				if off := atomic.LoadInt64(&handle.lastOff); off > playerOff {
 					playerOff = off
 				}
@@ -1533,6 +1534,62 @@ func shouldInterruptForSeek(prevOff, off, budget int64) bool {
 // 5%, clamped to [64MB, 2GB]. Shared by the LastSeekOff
 // write-site guard, and the ResumeAnchor seed-site guard - a single scanner probe reading MKV
 // Cues near the end of a file must never look like a real playback position to any of them.
+// promoteIfStreaming marks a handle primary once it has proven it is the player: several
+// consecutive sequential reads of streaming size. The pump syncs to primary handles only, and
+// during steady playback the real reader is usually an attached (secondary) handle - the
+// nominal primary can be an idle probe holding the first reference, so the pump follows the
+// wrong offset and the player is served by FetchBlock (Soulm8te, 2026-08-19: 29 attaches, all
+// primary=false, only a seek recovered it by forcing a refCount 0->1 reconnect).
+//
+// Promotion is monotonic and never recomputed per tick, unlike the freshness heuristic reverted
+// in 6ae20c9: the pump takes the MAX of the primaries' offsets, so a promotion can only raise
+// that value, never drag it backwards - which is what produced the jump/re-anchor thrashing.
+// Tail-zone reads never count: an EOF probe must not be able to pull the pump to the end.
+// advanceProvesStreaming reports whether one read looks like the player moving forward through
+// the file: streaming-sized, sequential from the previous read, and outside the tail probe zone.
+// The size floor is a quarter of StreamingThreshold so Synology's 64KB CIFS reads still count.
+func advanceProvesStreaming(prevOff, off, readLen, size, tolerance, streamingThreshold int64) bool {
+	if prevOff < 0 || off <= prevOff || readLen <= 0 {
+		return false
+	}
+	if off-prevOff > readLen+tolerance {
+		return false
+	}
+	if readLen < streamingThreshold/4 {
+		return false
+	}
+	return off < size-tailProbeZoneSize(size)
+}
+
+const primaryProofReads = 3 // consecutive sequential reads before a handle drives the pump
+
+func (h *MkvHandle) promoteIfStreaming(prevOff, off int64, readLen int) {
+	if h.isPrimaryHandle.Load() || h.hash == "" || prevOff < 0 {
+		return
+	}
+	if !advanceProvesStreaming(prevOff, off, int64(readLen), h.size, gc().SequentialTolerance, gc().StreamingThreshold) {
+		h.seqAdvances.Store(0)
+		return
+	}
+	if h.seqAdvances.Add(1) < primaryProofReads {
+		return
+	}
+	// Only during real playback: a background scan reads sequentially too, and outside a
+	// confirmed session there is no player for the pump to follow anyway.
+	val, ok := playbackRegistry.Load(h.path)
+	if !ok {
+		return
+	}
+	ps, ok := val.(*PlaybackState)
+	if !ok || !(ps.GetStatus() || ps.IsInferredPlayback()) {
+		return
+	}
+	if h.isPrimaryHandle.CompareAndSwap(false, true) {
+		logger.Printf("[V284] Handle promoted to primary after %d sequential reads at %dMB: %s",
+			primaryProofReads, off/(1024*1024), filepath.Base(h.path))
+	}
+}
+
 func tailProbeZoneSize(size int64) int64 {
 	zone := size / 20 // 5%
 	if zone < 64*1024*1024 {
@@ -1735,6 +1792,8 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	prevOff := atomic.LoadInt64(&h.lastOff)
 	atomic.StoreInt64(&h.lastOff, off)
 
+	h.promoteIfStreaming(prevOff, off, len(dest))
+
 	// Transition WARMUP→STREAMING on resume (first read >= warmup.FileSize), seek (jump > budget),
 	// or plain sequential progression past the warmup zone (no seek ever happens during linear
 	// playback from offset 0 - without this case, h.state stayed stuck in stateWarmup for the
@@ -1824,10 +1883,10 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		// isPrimaryHandle so the pump loop's playerOff sync and Release's ps.playerOff
 		// persistence (see nativePump) pick it up instead of only the original primary handle,
 		// which may be an idle stale probe by now.
-		if !h.isPrimaryHandle {
+		if !h.isPrimaryHandle.Load() {
 			if val, ok := playbackRegistry.Load(h.path); ok {
 				if pbs, ok := val.(*PlaybackState); ok && (pbs.GetStatus() || pbs.IsInferredPlayback()) {
-					h.isPrimaryHandle = true
+					h.isPrimaryHandle.Store(true)
 				}
 			}
 		}
@@ -2337,7 +2396,7 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	if val, ok := activePumps.Load(h.path); ok {
 		ps := val.(*NativePumpState)
 		// Only primary handles persist position; secondary probes have arbitrary offsets.
-		if h.isPrimaryHandle {
+		if h.isPrimaryHandle.Load() {
 			if pos := atomic.LoadInt64(&h.lastOff); pos > 0 {
 				atomic.StoreInt64(&ps.playerOff, pos)
 			}
