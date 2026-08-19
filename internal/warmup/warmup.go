@@ -25,6 +25,7 @@ const (
 	denseMarker          = ".dense-migrated" // one-shot marker: head cache rebuilt for the density invariant
 	warmupWriteBuf       = 16 * 1024 * 1024  // 16 MB — matches pump chunk size
 	handleIdleMax        = 30 * time.Second  // close idle file handles after 30s
+	missingTTL           = 10 * time.Second  // negative-cache lifetime, matches sizeCache
 )
 
 var diskQuotaGB int64
@@ -399,6 +400,9 @@ func (d *DiskWarmupCache) processWrite(hash string, fileID int, data []byte, off
 		return
 	}
 
+	// The file demonstrably exists now, so no stale negative-cache entry may outlive it.
+	d.missing.Delete(path)
+
 	// A write overlapping already-covered bytes must not shrink the recorded coverage.
 	currentSize := off + int64(n)
 	if currentSize > prevSize {
@@ -433,8 +437,19 @@ func (d *DiskWarmupCache) tailPath(hash string, fileID int) string {
 // because processWrite refuses writes that would leave a hole.
 func (d *DiskWarmupCache) GetAvailableRange(hash string, fileID int) int64 {
 	path := d.filePath(hash, fileID)
-	if _, ok := d.missing.Load(path); ok {
-		return 0
+	if val, ok := d.missing.Load(path); ok {
+		// The negative cache must expire: a file absent at one Open is routinely created
+		// moments later, and a permanent entry hides a complete warmup file for the rest
+		// of the process lifetime (headReady false -> slow resolve path on every Open).
+		since := time.Since(val.(time.Time))
+		if since < missingTTL {
+			return 0
+		}
+		d.missing.Delete(path)
+		if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
+			logf.Printf("[DiskWarmup] Negative cache hid an existing warmup file (%.1fMB, %s) for %s",
+				float64(fi.Size())/(1<<20), since.Truncate(time.Second), filepath.Base(path))
+		}
 	}
 
 	if val, ok := d.sizeCache.Load(path); ok {
