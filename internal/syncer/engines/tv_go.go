@@ -107,7 +107,8 @@ var (
 	reTV4K    = regexp.MustCompile(`(?i)2160p|4k|uhd`)
 	reTV1080p = regexp.MustCompile(`(?i)1080p`)
 	// \b treats "_" as a word char, so "\bhdr\b" misses "_HDR_" - use a custom boundary.
-	reTVHDR          = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?|(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
+	reTVHDR          = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?`)
+	reTVDV           = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
 	reTVAtmos        = regexp.MustCompile(`(?i)atmos`)
 	reTV51           = regexp.MustCompile(`(?i)5\.1|dd5|ddp5|dts|truehd`)
 	reTVSeeders      = regexp.MustCompile(`👤\s*(\d+)`)
@@ -927,7 +928,9 @@ func (e *TVGoEngine) calculateQualityScore(text string, seeders int, w config.TV
 		return 0
 	}
 
-	if reTVHDR.MatchString(t) {
+	if reTVDV.MatchString(t) {
+		score += w.DolbyVision
+	} else if reTVHDR.MatchString(t) {
 		score += w.HDR
 	}
 

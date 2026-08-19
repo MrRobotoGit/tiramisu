@@ -777,6 +777,7 @@ Tiramisu scores every candidate release (movie or episode) to pick which one to 
       "res_4k": 1000,
       "res_1080p": 200,
       "hdr": 100,
+      "dolby_vision": 150,
       "atmos": 50,
       "audio_5_1": 25,
       "preferred_language": 40,

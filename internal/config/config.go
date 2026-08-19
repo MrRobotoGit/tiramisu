@@ -79,6 +79,7 @@ type TVWeights struct {
 	Res4K             int `json:"res_4k"`
 	Res1080p          int `json:"res_1080p"`
 	HDR               int `json:"hdr"`
+	DolbyVision       int `json:"dolby_vision"`
 	Atmos             int `json:"atmos"`
 	Audio51           int `json:"audio_5_1"`
 	PreferredLanguage int `json:"preferred_language"`
@@ -115,7 +116,7 @@ func DefaultMovieWeights() MovieWeights {
 // DefaultTVWeights returns the shipped TV scoring profile.
 func DefaultTVWeights() TVWeights {
 	return TVWeights{
-		Res4K: 1000, Res1080p: 200, HDR: 100, Atmos: 50, Audio51: 25,
+		Res4K: 1000, Res1080p: 200, HDR: 100, DolbyVision: 150, Atmos: 50, Audio51: 25,
 		PreferredLanguage: 40, Fullpack: 500,
 		SeederTier100: 100, SeederTier50: 50, SeederTier20: 10, MinSeeders: 5,
 		MinSeeders4K: 5, SeasonSkipScore: 1000,
