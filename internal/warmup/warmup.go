@@ -163,6 +163,7 @@ type DiskWarmupCache struct {
 	handles      sync.Map   // path -> *cachedHandle (cached file descriptors)
 	sizeCache    sync.Map   // V264: path -> sizeEntry (cached file sizes with TTL)
 	tailCoverage sync.Map   // V265: path -> *tailRange (written range tracking)
+	tailFills    sync.Map   // path -> true while a sequential tail fill is running
 	warmupStarts sync.Map   // path -> time.Time (STARTING timestamp, for duration histogram)
 	writeCh      chan warmupWrite
 }
@@ -695,4 +696,79 @@ func (d *DiskWarmupCache) enforceQuotaLocked(needed int64) {
 		diskTotal -= fi.size
 	}
 	atomic.StoreInt64(&d.totalSize, diskTotal)
+}
+
+// TailFetch fetches bytes from the torrent. Wired at startup to the native bridge: the
+// warmup package cannot import it, so the dependency is injected like OnWarmupStateChange.
+var TailFetch func(hash string, fileID int, off int64, buf []byte) (int, error)
+
+const tailFillChunk = 1024 * 1024 // per-request size of the sequential fill
+
+// tailFillPacing spaces out the fill so it stays a background trickle; a var so tests
+// don't have to wait it out.
+var tailFillPacing = 250 * time.Millisecond
+
+// EnsureTail fills the whole tail window sequentially in the background so TailReady can
+// actually become true. Opportunistic WriteTail only records the ranges a client happened
+// to probe, which leaves the MKV Cues index one network round trip away on every open.
+//
+// Call this only while the file is idle (playback stopped): piece requests at the end of a
+// partially downloaded file compete with the sequential download front and stall the
+// playhead (observed 2026-08-12).
+func (d *DiskWarmupCache) EnsureTail(hash string, fileID int, fileSize int64) {
+	if d == nil || TailFetch == nil || hash == "" || fileSize <= 0 {
+		return
+	}
+	if d.TailReady(hash, fileID) {
+		return
+	}
+	path := d.tailPath(hash, fileID)
+	if _, busy := d.tailFills.LoadOrStore(path, true); busy {
+		return
+	}
+
+	go func() {
+		defer d.tailFills.Delete(path)
+
+		tailStart := fileSize - TailWarmupSize
+		if tailStart < 0 {
+			tailStart = 0
+		}
+		tailLen := fileSize - tailStart
+		tr := d.tailRangeFor(path)
+
+		started := time.Now()
+		var fetched int64
+		buf := make([]byte, tailFillChunk)
+		for rel := int64(0); rel < tailLen; {
+			end := rel + tailFillChunk
+			if end > tailLen {
+				end = tailLen
+			}
+			if tr.covers(rel, end) {
+				rel = end
+				continue
+			}
+			n, err := TailFetch(hash, fileID, tailStart+rel, buf[:end-rel])
+			if err != nil || n <= 0 {
+				logf.Printf("[DiskWarmup] Tail fill stopped at %.1f/%.1fMB for %s: %v",
+					float64(rel)/(1<<20), float64(tailLen)/(1<<20), filepath.Base(path), err)
+				return
+			}
+			d.WriteTail(hash, fileID, buf[:n], tailStart+rel, fileSize)
+			fetched += int64(n)
+			rel += int64(n)
+			time.Sleep(tailFillPacing)
+		}
+		if d.TailReady(hash, fileID) {
+			logf.Printf("[DiskWarmup] TAIL COMPLETE %s (%.1fMB fetched in %s)",
+				filepath.Base(path), float64(fetched)/(1<<20), time.Since(started).Truncate(time.Second))
+		}
+	}()
+}
+
+// tailFillRunning reports whether a sequential fill is in flight (test helper).
+func (d *DiskWarmupCache) tailFillRunning(hash string, fileID int) bool {
+	_, busy := d.tailFills.Load(d.tailPath(hash, fileID))
+	return busy
 }

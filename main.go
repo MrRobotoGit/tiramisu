@@ -102,6 +102,15 @@ func GetEffectiveConcurrencyLimit() int {
 	return gc().MasterConcurrencyLimit
 }
 
+// tailFillTarget carries what EnsureTail needs, resolved at Open and read on media.stop.
+type tailFillTarget struct {
+	hash   string
+	fileID int
+	size   int64
+}
+
+var tailFillTargets sync.Map // path -> tailFillTarget
+
 // PlaybackState traccia lo stato di una sessione di visione reale
 type PlaybackState struct {
 	mu          sync.RWMutex
@@ -757,6 +766,7 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	fullPath := filepath.Join(d.physicalPath, name)
 
 	forceCloseVirtualFile(fullPath)
+	tailFillTargets.Delete(fullPath)
 
 	// Extract hash and remove torrent from GoStorm
 	success, err := globalTorrentRemover.RemoveTorrentFromFile(fullPath)
@@ -908,6 +918,8 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	if isNative {
 		h.hash = finalHash
 		h.fileID = fileIdx
+		// media.stop only knows the path; keep what EnsureTail needs to reach the file.
+		tailFillTargets.Store(n.vMeta.Path, tailFillTarget{hash: finalHash, fileID: fileIdx, size: n.vMeta.Size})
 		// Gillian: proactive pump start at Open() — pump ready before first Read().
 		// pumpOnce ensures single start; late rescue path in Read() handles hash=='' case.
 		h.pumpOnce.Do(func() {
@@ -3391,6 +3403,16 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			torrstor.ResetShield()
 			logger.Printf("[AdaptiveShield] Shield reset on media.stop")
 
+			// Pull the rest of the tail window now that the pump is gone: piece requests at
+			// the file end would otherwise compete with the sequential download front. Ready
+			// for the next open, which is when the MKV Cues probe needs it.
+			if warmup.DiskWarmup != nil {
+				if v, ok := tailFillTargets.Load(stopMatch); ok {
+					t := v.(tailFillTarget)
+					warmup.DiskWarmup.EnsureTail(t.hash, t.fileID, t.size)
+				}
+			}
+
 			// Deactivate Core Priority
 			if stopState.Hash != "" {
 				h := metainfo.NewHashFromHex(stopState.Hash)
@@ -3472,22 +3494,21 @@ func restorePlaybackStates(db *metadb.DB) {
 //go:embed settings.html
 var settingsHTML []byte
 
-// checkHardwareSupport refuses to start on hardware below the Raspberry Pi 4's effective floor.
+// checkHardwareSupport warns when the CPU sits below the Raspberry Pi 4's effective floor.
 // On amd64 that means AVX2: any x86_64 CPU without it (everything before ~2013, Haswell/
 // Excavator) forces Go's crypto/sha1 onto its slowest pure-scalar path, and full-swarm piece
-// verification can't keep up with real playback bitrates on such a CPU - the exact failure mode
-// diagnosed on a 2008 Core2Quad (100% CPU, stutter, no hardware acceleration of any kind
-// available to fall back on). arm64 needs no equivalent gate: NEON is mandatory in every ARMv8-A
-// chip, so any real arm64 CPU - including the Pi4's own Cortex-A72 - already clears this floor.
-// Runs at process start, before FUSE/torrent engine init, on every code path that reaches
-// main() - native builds and binaries extracted from a prebuilt Docker image alike.
+// verification struggles to keep up with real playback bitrates - the failure mode diagnosed
+// on a 2008 Core2Quad (100% CPU, stutter, no hardware acceleration to fall back on). It is a
+// warning, not a gate: the operator decides whether the machine is good enough for their
+// bitrates, and a logged reason beats an unexplained stutter. arm64 needs no equivalent check:
+// NEON is mandatory in every ARMv8-A chip, so any real arm64 CPU - including the Pi4's own
+// Cortex-A72 - already clears this floor. Writes to stderr because it runs before the loggers
+// exist; systemd captures it into the service log either way.
 func checkHardwareSupport() {
 	if runtime.GOARCH == "amd64" && !cpu.X86.HasAVX2 {
-		fmt.Fprintln(os.Stderr, "FATAL: this CPU does not support AVX2.")
-		fmt.Fprintln(os.Stderr, "Tiramisu requires AVX2 on amd64 (any x86_64 CPU from ~2013 onward - Intel Haswell or AMD Excavator and later).")
-		fmt.Fprintln(os.Stderr, "Without it, SHA1 piece verification falls back to the slowest available path and cannot sustain real playback bitrates.")
-		fmt.Fprintln(os.Stderr, "See the README's Hardware Requirements section.")
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "WARNING: this CPU does not support AVX2 (pre-2013 x86_64: before Intel Haswell / AMD Excavator).")
+		fmt.Fprintln(os.Stderr, "WARNING: SHA1 piece verification falls back to its slowest path, which may not sustain real playback bitrates.")
+		fmt.Fprintln(os.Stderr, "WARNING: expect high CPU and stuttering on high-bitrate files. Starting anyway.")
 	}
 }
 
@@ -3565,6 +3586,14 @@ func main() {
 		if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
 			tr.Torrent.SetWarmupActive(active, fileID)
 		}
+	}
+	// Lets the warmup package pull the tail window itself (EnsureTail); it cannot import
+	// the bridge, so the dependency is injected the same way as the callback above.
+	warmup.TailFetch = func(hash string, fileID int, off int64, buf []byte) (int, error) {
+		if nativeBridge == nil {
+			return 0, fmt.Errorf("native bridge unavailable")
+		}
+		return nativeBridge.FetchBlock(hash, fileID, off, buf)
 	}
 	go registry.StartRegistryWatchdog(backgroundStopChan)
 	go natpmp.NatpmpLoop(backgroundStopChan, gc().NatPMP, logger)
