@@ -602,6 +602,82 @@
             margin-bottom: 12px;
         }
 
+        .quality-preview-title {
+            font-size: 10.5px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--muted);
+            letter-spacing: 0.5px;
+            margin: 18px 0 10px;
+        }
+
+        .quality-preview-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+
+        .quality-preview-row.winner {
+            border-color: var(--success);
+            background: color-mix(in srgb, var(--success) 10%, transparent);
+        }
+
+        .quality-preview-rank {
+            flex: 0 0 20px;
+            text-align: center;
+            font-weight: 800;
+            color: var(--muted);
+        }
+
+        .quality-preview-row.winner .quality-preview-rank {
+            color: var(--success);
+        }
+
+        .quality-preview-body {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .quality-preview-title-text {
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .quality-preview-components {
+            color: var(--muted);
+            font-size: 11px;
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .quality-preview-meta {
+            flex: 0 0 auto;
+            text-align: right;
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .quality-preview-score {
+            flex: 0 0 auto;
+            font-weight: 800;
+            font-size: 14px;
+            min-width: 56px;
+            text-align: right;
+        }
+
+        .quality-preview-row.winner .quality-preview-score {
+            color: var(--success);
+        }
+
         .picker-anchor {
             position: relative;
             display: inline-block;
@@ -1454,6 +1530,9 @@
                         </div>
                     </div>
 
+                    <div class="quality-preview-title">Preview — what wins right now</div>
+                    <div id="quality-preview-rows"></div>
+
                     <button type="submit" form="tiramisu-form" class="btn btn-primary">Save</button>
                     <div id="quality-status" class="status-msg"></div>
                 </div>
@@ -1861,6 +1940,7 @@
             document.getElementById('quality-profile-tv').style.display = profile === 'tv' ? '' : 'none';
             document.getElementById('quality-switch-movies').classList.toggle('active', profile === 'movies');
             document.getElementById('quality-switch-tv').classList.toggle('active', profile === 'tv');
+            renderQualityPreview();
         }
 
         // Presets express an intent ("prefer 1080p", "slow swarm") that is not
@@ -1906,6 +1986,7 @@
             document.querySelectorAll('.quality-preset-btn').forEach(b => {
                 b.classList.toggle('active', b.dataset.preset === name);
             });
+            renderQualityPreview();
         }
 
         function clearActiveQualityPreset() {
@@ -1935,6 +2016,144 @@
                 const el = document.getElementById(id);
                 if (el) el.addEventListener('input', clearActiveQualityPreset);
             });
+
+        // --- Preview: what wins right now ---
+        // Mirrors calculateMovieScore/calculateQualityScore in internal/syncer/engines
+        // (movie_go.go, tv_go.go) for illustration only. Fixed sample releases, not a
+        // prediction of a real download - if those Go scorers change, update this too.
+        // Traits are encoded directly on each sample rather than re-derived from the
+        // title with regexes at runtime: the titles are fixed and known, so matching
+        // them again here would just be a second place the regexes could disagree.
+        const QUALITY_PREVIEW_MOVIES = [
+            { title: 'The.Invite.2026.2160p.WEB-DL.DV.HDR10+.Atmos-CMRG', seeders: 18, sizeGB: 17.2, is4K: true,
+              dv: true, hdr: false, atmos: true, audio51: false, stereo: false, remux: false, langTags: [] },
+            { title: 'The.Invite.2026.2160p.WEB-DL.HDR.DDP5.1-FLUX', seeders: 95, sizeGB: 14.8, is4K: true,
+              dv: false, hdr: true, atmos: false, audio51: true, stereo: false, remux: false, langTags: [] },
+            { title: 'The.Invite.2026.1080p.BluRay.REMUX.ITA.ENG.DDP5.1-BEN', seeders: 340, sizeGB: 9.4, is4K: false,
+              dv: false, hdr: false, atmos: false, audio51: true, stereo: false, remux: true, langTags: ['ita'] },
+            { title: 'The.Invite.2026.1080p.WEB.h264.AAC-RARBG', seeders: 1250, sizeGB: 3.1, is4K: false,
+              dv: false, hdr: false, atmos: false, audio51: false, stereo: true, remux: false, langTags: [] },
+        ];
+        const QUALITY_PREVIEW_TV = [
+            { title: 'Silo.S03E04.2160p.ATVP.WEB-DL.DV.Atmos-FLUX', seeders: 22, is4K: true,
+              dv: true, hdr: false, atmos: true, audio51: false, langTags: [] },
+            { title: 'Silo.S03E04.2160p.ATVP.WEB-DL.HDR.Atmos-NTb', seeders: 140, is4K: true,
+              dv: false, hdr: true, atmos: true, audio51: false, langTags: [] },
+            { title: 'Silo.S03.COMPLETE.1080p.WEB-DL.ITA.ENG.DDP5.1-NTb', seeders: 180, is4K: false,
+              dv: false, hdr: false, atmos: false, audio51: true, langTags: ['ita'] },
+            { title: 'Silo.S03E04.1080p.WEB.h264-ELEANOR', seeders: 890, is4K: false,
+              dv: false, hdr: false, atmos: false, audio51: false, langTags: [] },
+        ];
+
+        function qualityPreviewLanguageMatch(sample, terms) {
+            return terms.length > 0 && sample.langTags.some(tag => terms.includes(tag));
+        }
+
+        function scoreQualityPreviewMovie(s, w, terms) {
+            const comps = [];
+            if (s.is4K) comps.push({ label: '4K', value: w.res_4k });
+            else comps.push({ label: '1080p', value: w.res_1080p });
+
+            if (s.dv) comps.push({ label: 'Dolby Vision', value: w.dolby_vision });
+            else if (s.hdr) comps.push({ label: 'HDR', value: w.hdr });
+
+            if (s.atmos) comps.push({ label: 'Atmos', value: w.atmos });
+            else if (s.audio51) comps.push({ label: '5.1', value: w.audio_5_1 });
+            else if (s.stereo) comps.push({ label: 'stereo', value: w.stereo_penalty });
+
+            if (s.remux) comps.push({ label: 'remux', value: w.remux });
+
+            if (qualityPreviewLanguageMatch(s, terms)) comps.push({ label: 'preferred language', value: w.preferred_language });
+
+            if (s.sizeGB === 0 && s.is4K) comps.push({ label: 'unknown 4K size', value: w.unknown_size_4k_penalty });
+
+            const seederBonus = Math.min(s.seeders, w.seeder_cap);
+            comps.push({ label: `${seederBonus} seeders`, value: seederBonus });
+
+            return comps;
+        }
+
+        function scoreQualityPreviewTV(s, w, terms) {
+            const comps = [];
+            if (s.is4K) comps.push({ label: '4K', value: w.res_4k });
+            else comps.push({ label: '1080p', value: w.res_1080p });
+
+            if (s.dv) comps.push({ label: 'Dolby Vision', value: w.dolby_vision });
+            else if (s.hdr) comps.push({ label: 'HDR', value: w.hdr });
+
+            if (s.atmos) comps.push({ label: 'Atmos', value: w.atmos });
+            else if (s.audio51) comps.push({ label: '5.1', value: w.audio_5_1 });
+
+            if (qualityPreviewLanguageMatch(s, terms)) comps.push({ label: 'preferred language', value: w.preferred_language });
+
+            // Fullpack is not part of the quality score in the Go engine (it's a
+            // separate priority bonus applied afterwards), so it is deliberately
+            // absent here even though one sample is a season COMPLETE pack.
+            if (s.seeders >= 100) comps.push({ label: `${s.seeders} seeders`, value: w.seeder_tier_100 });
+            else if (s.seeders >= 50) comps.push({ label: `${s.seeders} seeders`, value: w.seeder_tier_50 });
+            else if (s.seeders >= 20) comps.push({ label: `${s.seeders} seeders`, value: w.seeder_tier_20 });
+
+            return comps;
+        }
+
+        function renderQualityPreview() {
+            const container = document.getElementById('quality-preview-rows');
+            if (!container) return;
+            try {
+                const profile = document.getElementById('quality-switch-tv').classList.contains('active') ? 'tv' : 'movies';
+                const termsRaw = document.getElementById('language_preferred_terms')?.value || '';
+                const terms = termsRaw.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+
+                let rows;
+                if (profile === 'tv') {
+                    const w = readQualityWeights('quality_tv_', QUALITY_TV_DEFAULTS);
+                    rows = QUALITY_PREVIEW_TV.map(s => {
+                        const comps = scoreQualityPreviewTV(s, w, terms);
+                        return { title: s.title, seeders: s.seeders, sizeGB: null, comps, score: comps.reduce((a, c) => a + c.value, 0) };
+                    });
+                } else {
+                    const w = readQualityWeights('quality_movies_', QUALITY_MOVIE_DEFAULTS);
+                    rows = QUALITY_PREVIEW_MOVIES.map(s => {
+                        const comps = scoreQualityPreviewMovie(s, w, terms);
+                        return { title: s.title, seeders: s.seeders, sizeGB: s.sizeGB, comps, score: comps.reduce((a, c) => a + c.value, 0) };
+                    });
+                }
+                rows.sort((a, b) => b.score - a.score);
+
+                container.innerHTML = rows.map((r, i) => {
+                    const rank = i === 0 ? '★' : String(i + 1);
+                    const compText = r.comps.map(c => `${c.label} ${c.value >= 0 ? '+' : ''}${c.value}`).join(' · ');
+                    const sizeText = r.sizeGB != null ? `${r.sizeGB.toFixed(1)} GB` : '';
+                    return `<div class="quality-preview-row${i === 0 ? ' winner' : ''}">
+                        <div class="quality-preview-rank">${rank}</div>
+                        <div class="quality-preview-body">
+                            <div class="quality-preview-title-text">${r.title}</div>
+                            <div class="quality-preview-components">${compText}</div>
+                        </div>
+                        <div class="quality-preview-meta">${sizeText}</div>
+                        <div class="quality-preview-score">${r.score}</div>
+                    </div>`;
+                }).join('');
+            } catch (e) {
+                // Convenience feature - never let a preview bug block the form. Leave
+                // whatever rows were already rendered rather than clearing them.
+                console.error('Quality preview render error', e);
+            }
+        }
+
+        let _qualityPreviewDebounce = null;
+        function scheduleQualityPreview() {
+            clearTimeout(_qualityPreviewDebounce);
+            _qualityPreviewDebounce = setTimeout(renderQualityPreview, 300);
+        }
+
+        [...Object.keys(QUALITY_MOVIE_DEFAULTS).map(f => 'quality_movies_' + f),
+         ...Object.keys(QUALITY_TV_DEFAULTS).map(f => 'quality_tv_' + f)]
+            .forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', scheduleQualityPreview);
+            });
+        document.getElementById('language_preferred_terms')?.addEventListener('input', scheduleQualityPreview);
 
         const ENGINE_ROOT_KEYS = [
             'physical_source_path', 'fuse_mount_path',
@@ -2014,6 +2233,7 @@
                     if (el) el.value = tw[f];
                 });
                 syncActiveQualityPreset();
+                renderQualityPreview();
                 markCouplingLoaded();
             } catch (e) { console.error("Engine load error", e); }
         }
