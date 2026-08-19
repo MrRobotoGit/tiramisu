@@ -21,9 +21,10 @@ const (
 	TailWarmupSize int64 = 16 * 1024 * 1024        // V265: 16 MB tail (Cues/seek index)
 	warmupQuota    int64 = 32 * 1024 * 1024 * 1024 // fallback default 32 GB (overridden by config)
 	warmupSuffix         = ".warmup"
-	tailSuffix           = ".warmup-tail"   // V265: separate file for tail
-	warmupWriteBuf       = 16 * 1024 * 1024 // 16 MB — matches pump chunk size
-	handleIdleMax        = 30 * time.Second // close idle file handles after 30s
+	tailSuffix           = ".warmup-tail"    // V265: separate file for tail
+	denseMarker          = ".dense-migrated" // one-shot marker: head cache rebuilt for the density invariant
+	warmupWriteBuf       = 16 * 1024 * 1024  // 16 MB — matches pump chunk size
+	handleIdleMax        = 30 * time.Second  // close idle file handles after 30s
 )
 
 var diskQuotaGB int64
@@ -195,14 +196,25 @@ func InitDiskWarmup(quotaGB int64) {
 		writeCh: make(chan warmupWrite, 32),
 	}
 
+	// One-shot migration: head files written before the density invariant may hold holes
+	// that read back as zeros, and nothing on disk can tell them apart from dense ones.
+	// Head warmup is the library-wide instant-start cache, so this must not repeat on
+	// every boot - the marker makes it a single cold start per file, once.
+	migrated := filepath.Join(dir, denseMarker)
+	dropHeads := false
+	if _, err := os.Stat(migrated); os.IsNotExist(err) {
+		dropHeads = true
+	}
+
 	if entries, err := os.ReadDir(dir); err == nil {
 		var initialTotal int64
 		var dropped int
 		for _, e := range entries {
 			name := e.Name()
-			// Tail files are sparse and their coverage lives in memory only, so a file
-			// left by a previous run has no way to prove which ranges hold real data.
-			if strings.HasSuffix(name, tailSuffix) {
+			// Tail coverage lives in memory only, so a tail file left by a previous run
+			// has no way to prove which of its ranges hold real data.
+			isTail := strings.HasSuffix(name, tailSuffix)
+			if isTail || (dropHeads && strings.HasSuffix(name, warmupSuffix)) {
 				if os.Remove(filepath.Join(dir, name)) == nil {
 					dropped++
 				}
@@ -215,7 +227,14 @@ func InitDiskWarmup(quotaGB int64) {
 			}
 		}
 		atomic.StoreInt64(&DiskWarmup.totalSize, initialTotal)
-		logf.Printf("[DiskWarmup] Initial size: %.1fGB (dropped %d stale tail files)", float64(initialTotal)/(1<<30), dropped)
+		logf.Printf("[DiskWarmup] Initial size: %.1fGB (dropped %d stale cache files)", float64(initialTotal)/(1<<30), dropped)
+	}
+
+	if dropHeads {
+		if f, err := os.Create(migrated); err == nil {
+			f.Close()
+			logf.Printf("[DiskWarmup] Head cache rebuilt for the write-density invariant (one-shot)")
+		}
 	}
 
 	go DiskWarmup.writeWorker()
@@ -333,6 +352,15 @@ func (d *DiskWarmupCache) processWrite(hash string, fileID int, data []byte, off
 		return
 	}
 
+	// Head files must stay dense: GetAvailableRange reports their on-disk size as
+	// contiguous coverage from 0 (pump start offset, warmup gates, ReadAt), and a hole
+	// below that size reads back as zeros, not as a short read. A write that would leave
+	// one is dropped - the sequential pump rewrites that range in order anyway.
+	prevSize := d.headSize(path)
+	if off > prevSize {
+		return
+	}
+
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		os.MkdirAll(d.dir, 0755)
 
@@ -365,22 +393,18 @@ func (d *DiskWarmupCache) processWrite(hash string, fileID int, data []byte, off
 		return
 	}
 
-	var prevSize int64
-	if val, ok := d.sizeCache.Load(path); ok {
-		prevSize = val.(sizeEntry).size
-	} else if fi, err := ch.f.Stat(); err == nil {
-		prevSize = fi.Size()
-	}
-
 	n, err := ch.f.WriteAt(data, off)
 	if err != nil {
 		logf.Printf("[DiskWarmup] WriteAt error for %s: %v", filepath.Base(path), err)
 		return
 	}
 
+	// A write overlapping already-covered bytes must not shrink the recorded coverage.
 	currentSize := off + int64(n)
 	if currentSize > prevSize {
 		atomic.AddInt64(&d.totalSize, currentSize-prevSize)
+	} else {
+		currentSize = prevSize
 	}
 
 	d.sizeCache.Store(path, sizeEntry{size: currentSize, updatedAt: time.Now()})
@@ -404,6 +428,9 @@ func (d *DiskWarmupCache) tailPath(hash string, fileID int) string {
 	return filepath.Join(d.dir, hash+"-"+strconv.Itoa(fileID)+tailSuffix)
 }
 
+// GetAvailableRange returns the contiguous bytes cached from offset 0. Callers treat the
+// result as coverage (pump start offset, warmup gates, ReadAt clamp), which holds only
+// because processWrite refuses writes that would leave a hole.
 func (d *DiskWarmupCache) GetAvailableRange(hash string, fileID int) int64 {
 	path := d.filePath(hash, fileID)
 	if _, ok := d.missing.Load(path); ok {
@@ -454,6 +481,17 @@ func (d *DiskWarmupCache) tailRangeFor(path string) *tailRange {
 	}
 	val, _ := d.tailCoverage.LoadOrStore(path, &tailRange{})
 	return val.(*tailRange)
+}
+
+// headSize returns the bytes currently covered in a head warmup file, 0 when absent.
+func (d *DiskWarmupCache) headSize(path string) int64 {
+	if val, ok := d.sizeCache.Load(path); ok {
+		return val.(sizeEntry).size
+	}
+	if fi, err := os.Stat(path); err == nil {
+		return fi.Size()
+	}
+	return 0
 }
 
 func (d *DiskWarmupCache) ReadAt(hash string, fileID int, buf []byte, off int64) (int, error) {
