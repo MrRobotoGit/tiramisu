@@ -630,7 +630,7 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 		return
 	}
 
-	sort.Slice(streams, func(i, j int) bool {
+	sort.SliceStable(streams, func(i, j int) bool {
 		return streams[i].Priority > streams[j].Priority
 	})
 

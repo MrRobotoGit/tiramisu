@@ -471,20 +471,17 @@ func (e *WatchlistGoEngine) pickBestStream(streams []prowlarr.Stream) []prowlarr
 		candidates = append(candidates, scored{stream: s, score: sc, is4K: is4K})
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[j].score < candidates[i].score
+	// Same rule as the movie engine: score first, 4K only as tie-break.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].is4K && !candidates[j].is4K
 	})
 
-	var result []prowlarr.Stream
+	result := make([]prowlarr.Stream, 0, len(candidates))
 	for _, c := range candidates {
-		if c.is4K {
-			result = append(result, c.stream)
-		}
-	}
-	for _, c := range candidates {
-		if !c.is4K {
-			result = append(result, c.stream)
-		}
+		result = append(result, c.stream)
 	}
 
 	return result

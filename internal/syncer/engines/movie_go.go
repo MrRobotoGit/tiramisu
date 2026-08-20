@@ -571,7 +571,8 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 
 func (e *MovieGoEngine) filterMovieStreams(streams []prowlarr.Stream) []MovieStream {
 	rejectCounts := map[string]int{}
-	var pass4K, pass1080 []MovieStream
+	var passed []MovieStream
+	n4K := 0
 	for _, s := range streams {
 		c, reason := e.classifyMovieStream(s)
 		if c == nil {
@@ -579,27 +580,24 @@ func (e *MovieGoEngine) filterMovieStreams(streams []prowlarr.Stream) []MovieStr
 			continue
 		}
 		if c.Is4K {
-			pass4K = append(pass4K, *c)
-		} else {
-			pass1080 = append(pass1080, *c)
+			n4K++
 		}
+		passed = append(passed, *c)
 	}
 
 	if len(streams) > 0 {
 		e.logger.Printf("[filter] streams=%d 4K=%d 1080p=%d rejected=%v",
-			len(streams), len(pass4K), len(pass1080), rejectCounts)
+			len(streams), n4K, len(passed)-n4K, rejectCounts)
 	}
 
-	if len(pass4K) > 0 {
-		sort.Slice(pass4K, func(i, j int) bool {
-			return pass4K[i].QualityScore > pass4K[j].QualityScore
-		})
-		return pass4K
-	}
-	sort.Slice(pass1080, func(i, j int) bool {
-		return pass1080[i].QualityScore > pass1080[j].QualityScore
+	// QualityScore decides; 4K only breaks ties, so custom weights stay in control.
+	sort.SliceStable(passed, func(i, j int) bool {
+		if passed[i].QualityScore != passed[j].QualityScore {
+			return passed[i].QualityScore > passed[j].QualityScore
+		}
+		return passed[i].Is4K && !passed[j].Is4K
 	})
-	return pass1080
+	return passed
 }
 
 func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) (*MovieStream, string) {
