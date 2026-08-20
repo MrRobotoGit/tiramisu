@@ -3725,9 +3725,6 @@ func main() {
 	// Deterministic inode map ensures Plex doesn't see "new files" after restarts.
 	if err := InitGlobalInodeMap(GetStateDir(), logger); err != nil {
 		logger.Printf("WARNING: Failed to initialize inode map: %v (falling back to filename hash)", err)
-	} else {
-		files, dirs, _, _ := GetInodeMapStats()
-		logger.Printf("InodeMap: Initialized with %d files, %d dirs from %s", files, dirs, vfs.GetDefaultInodeMapPath(GetStateDir()))
 	}
 
 	// V1.7.1: Optional SQLite State DB for unified persistence.
@@ -3775,6 +3772,8 @@ func main() {
 			}
 		}
 	}
+
+	finishGlobalInodeMapInit(logger)
 
 	// Pre-populate cache at startup to improve Plex scan performance.
 	cacheBuilder := NewStartupCacheBuilder(source, metaCache, logger)
@@ -4481,11 +4480,24 @@ func InitGlobalInodeMap(stateDir string, logger *log.Logger) error {
 		return fmt.Errorf("create inode map directory: %w", err)
 	}
 	globalInodeMap = vfs.NewInodeMap(savePath, &vfsLogger{logger})
-	if err := globalInodeMap.LoadFromDisk(); err != nil {
-		return fmt.Errorf("load inode map: %w", err)
+	return nil
+}
+
+// finishGlobalInodeMapInit loads the map and starts the saver. Split from
+// InitGlobalInodeMap so the load runs once, after StateDB had a chance to attach:
+// loading JSON first would report an empty map on every migrated install.
+func finishGlobalInodeMapInit(logger *log.Logger) {
+	if globalInodeMap == nil {
+		return
+	}
+	if !globalInodeMap.HasDB() {
+		if err := globalInodeMap.LoadFromDisk(); err != nil {
+			logger.Printf("WARNING: Failed to load inode map: %v (falling back to filename hash)", err)
+		}
+		files, dirs, _, _ := GetInodeMapStats()
+		logger.Printf("InodeMap: Initialized with %d files, %d dirs from %s", files, dirs, vfs.GetDefaultInodeMapPath(GetStateDir()))
 	}
 	globalInodeMap.StartBackgroundSaver()
-	return nil
 }
 
 func ShutdownGlobalInodeMap() {

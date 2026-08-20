@@ -117,6 +117,11 @@ func (im *InodeMap) SetDB(db *metadb.DB) {
 	im.db = db
 }
 
+// HasDB reports whether SQLite persistence is attached.
+func (im *InodeMap) HasDB() bool {
+	return im.db != nil
+}
+
 func (im *InodeMap) getShard(key string) *inodeShard {
 	return im.shards[xxhash.Sum64String(key)&im.shardMask]
 }
