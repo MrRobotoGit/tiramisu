@@ -1483,9 +1483,10 @@
                                     <div class="form-group" style="grid-column: 1 / -1;">
                                         <label>Full season pack</label>
                                         <input type="number" id="quality_tv_fullpack">
-                                        <div class="hint">Ranks a full season ahead of single episodes. It does not
-                                            enter the quality score, so it never makes a pack outrank a
-                                            better-quality release.</div>
+                                        <div class="hint">Ranks a full season ahead of single episodes. Added on top
+                                            of the quality score when picking a release, so a high value can make a
+                                            pack win over a better-quality single episode. A partial range
+                                            (S03E01-E05) counts half.</div>
                                     </div>
                                 </div>
                             </div>
@@ -2035,14 +2036,14 @@
               dv: false, hdr: false, atmos: false, audio51: false, stereo: true, remux: false, langTags: [] },
         ];
         const QUALITY_PREVIEW_TV = [
-            { title: 'Silo.S03E04.2160p.ATVP.WEB-DL.DV.Atmos-FLUX', seeders: 22, is4K: true,
-              dv: true, hdr: false, atmos: true, audio51: false, langTags: [] },
-            { title: 'Silo.S03E04.2160p.ATVP.WEB-DL.HDR.Atmos-NTb', seeders: 140, is4K: true,
-              dv: false, hdr: true, atmos: true, audio51: false, langTags: [] },
-            { title: 'Silo.S03.COMPLETE.1080p.WEB-DL.ITA.ENG.DDP5.1-NTb', seeders: 180, is4K: false,
-              dv: false, hdr: false, atmos: false, audio51: true, langTags: ['ita'] },
-            { title: 'Silo.S03E04.1080p.WEB.h264-ELEANOR', seeders: 890, is4K: false,
-              dv: false, hdr: false, atmos: false, audio51: false, langTags: [] },
+            { title: 'Dummy.Serie.S03E04.2160p.ATVP.WEB-DL.DV.Atmos-FLUX', seeders: 22, is4K: true,
+              dv: true, hdr: false, atmos: true, audio51: false, langTags: [], pack: null },
+            { title: 'Dummy.Serie.S03E04.2160p.ATVP.WEB-DL.HDR.Atmos-NTb', seeders: 140, is4K: true,
+              dv: false, hdr: true, atmos: true, audio51: false, langTags: [], pack: null },
+            { title: 'Dummy.Serie.S03.COMPLETE.1080p.WEB-DL.ITA.ENG.DDP5.1-NTb', seeders: 180, is4K: false,
+              dv: false, hdr: false, atmos: false, audio51: true, langTags: ['ita'], pack: 'full' },
+            { title: 'Dummy.Serie.S03E01-E05.1080p.WEB-DL.DDP5.1-ELEANOR', seeders: 890, is4K: false,
+              dv: false, hdr: false, atmos: false, audio51: true, langTags: [], pack: 'partial' },
         ];
 
         function qualityPreviewLanguageMatch(sample, terms) {
@@ -2086,9 +2087,11 @@
 
             if (qualityPreviewLanguageMatch(s, terms)) comps.push({ label: 'preferred language', value: w.preferred_language });
 
-            // Fullpack is not part of the quality score in the Go engine (it's a
-            // separate priority bonus applied afterwards), so it is deliberately
-            // absent here even though one sample is a season COMPLETE pack.
+            // Not part of the quality score but added to Priority, which is what
+            // tv_go.go actually sorts by. A partial range (S03E01-E05) counts half.
+            if (s.pack === 'full') comps.push({ label: 'full season pack', value: w.fullpack });
+            else if (s.pack === 'partial') comps.push({ label: 'partial pack', value: Math.trunc(w.fullpack / 2) });
+
             if (s.seeders >= 100) comps.push({ label: `${s.seeders} seeders`, value: w.seeder_tier_100 });
             else if (s.seeders >= 50) comps.push({ label: `${s.seeders} seeders`, value: w.seeder_tier_50 });
             else if (s.seeders >= 20) comps.push({ label: `${s.seeders} seeders`, value: w.seeder_tier_20 });
