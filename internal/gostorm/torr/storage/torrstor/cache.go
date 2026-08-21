@@ -54,6 +54,7 @@ type Cache struct {
 	IsAggressive bool // V217: Aggressive download priority
 	MasterLimit  int  // V218: Master limit from config.json
 	lastClean    time.Time
+	lastEvictLog time.Time // rate-limits the starved-eviction warning
 	muRemove     sync.Mutex
 	torrent      *torrent.Torrent
 	cleanTrigger chan struct{} // V227: Rate-limited cleanup trigger (never closed — use cleanStop)
@@ -296,16 +297,20 @@ func (c *Cache) cleanPieces() {
 	remPieces := c.getRemPieces()
 	if c.filled > c.capacity {
 		rems := (c.filled-c.capacity)/c.pieceLength + 1
-		// Diagnostic: if removable stays at 0 while over capacity, the protected
-		// window is too wide for the configured cache and the reader will thrash.
-		readers := int64(c.activeReaders.Load())
-		if readers == 0 {
-			readers = 1
+		// Only the starved case is worth reporting: nothing evictable while over
+		// capacity means the protected window is too wide for the configured cache
+		// and the reader will thrash. Logging every cycle floods the log at several
+		// lines per second during playback.
+		if len(remPieces) == 0 && time.Since(c.lastEvictLog) > time.Minute {
+			c.lastEvictLog = time.Now()
+			readers := int64(c.activeReaders.Load())
+			if readers == 0 {
+				readers = 1
+			}
+			log.TLogln("[CacheEvict] nothing evictable — readers:", readers,
+				"window(MB):", c.capacity/readers*85/100>>20,
+				"filled(MB):", c.filled>>20, "capacity(MB):", c.capacity>>20)
 		}
-		log.TLogln("[CacheEvict] readers:", readers,
-			"window(MB):", c.capacity/readers*85/100>>20,
-			"filled(MB):", c.filled>>20, "capacity(MB):", c.capacity>>20,
-			"removable:", len(remPieces), "toRemove:", rems)
 		for _, p := range remPieces {
 			c.removePiece(p)
 			rems--
