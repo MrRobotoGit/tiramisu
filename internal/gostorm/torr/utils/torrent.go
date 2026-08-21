@@ -2,13 +2,17 @@ package utils
 
 import (
 	"encoding/base32"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
+	"tiramisu/internal/gostorm/log"
 	"tiramisu/internal/gostorm/settings"
 
 	"golang.org/x/time/rate"
@@ -36,7 +40,13 @@ var defTrackers = []string{
 	"https://tracker.tamersunion.org:443/announce",
 	"https://tracker.lilithraws.org:443/announce",
 }
-var loadedTrackers []string
+var (
+	loadedTrackers []string
+	trackersMu     sync.Mutex
+	trackersOnce   sync.Once
+)
+
+const trackersListURL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best_ip.txt"
 
 func GetTrackerFromFile() []string {
 	name := filepath.Join(settings.Path, "trackers.txt")
@@ -55,33 +65,65 @@ func GetTrackerFromFile() []string {
 }
 
 func GetDefTrackers() []string {
-	loadNewTracker()
+	trackersOnce.Do(func() { go retryLoadTrackers() })
+
+	trackersMu.Lock()
+	defer trackersMu.Unlock()
 	if len(loadedTrackers) == 0 {
 		return defTrackers
 	}
 	return loadedTrackers
 }
 
-func loadNewTracker() {
-	if len(loadedTrackers) > 0 {
-		return
-	}
-	resp, err := http.Get("https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best_ip.txt")
-	if err == nil {
-		defer resp.Body.Close()
-		buf, err := io.ReadAll(resp.Body)
-		if err == nil {
-			arr := strings.Split(string(buf), "\n")
-			var ret []string
-			for _, s := range arr {
-				s = strings.TrimSpace(s)
-				if len(s) > 0 {
-					ret = append(ret, s)
-				}
-			}
-			loadedTrackers = append(ret, defTrackers...)
+// retryLoadTrackers keeps trying until the list is in. A single failed fetch at
+// startup used to leave the client on the built-in trackers for the whole run,
+// silently: those cover far fewer swarms, so torrents look peerless and time out.
+func retryLoadTrackers() {
+	delay := 30 * time.Second
+	for attempt := 1; ; attempt++ {
+		if err := loadNewTracker(); err == nil {
+			trackersMu.Lock()
+			n := len(loadedTrackers)
+			trackersMu.Unlock()
+			log.TLogln("Tracker list loaded:", n, "trackers")
+			return
+		} else {
+			log.TLogln("Tracker list download failed (attempt", attempt, "):", err, "— using", len(defTrackers), "built-in trackers, retrying in", delay)
+		}
+		time.Sleep(delay)
+		if delay < 30*time.Minute {
+			delay *= 2
 		}
 	}
+}
+
+func loadNewTracker() error {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(trackersListURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	buf, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	var ret []string
+	for _, s := range strings.Split(string(buf), "\n") {
+		if s = strings.TrimSpace(s); s != "" {
+			ret = append(ret, s)
+		}
+	}
+	if len(ret) == 0 {
+		return fmt.Errorf("empty list")
+	}
+	trackersMu.Lock()
+	loadedTrackers = append(ret, defTrackers...)
+	trackersMu.Unlock()
+	return nil
 }
 
 func PeerIDRandom(peer string) string {
