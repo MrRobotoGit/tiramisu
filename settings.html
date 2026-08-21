@@ -2020,31 +2020,95 @@
 
         // --- Preview: what wins right now ---
         // Mirrors calculateMovieScore/calculateQualityScore in internal/syncer/engines
-        // (movie_go.go, tv_go.go) for illustration only. Fixed sample releases, not a
-        // prediction of a real download - if those Go scorers change, update this too.
-        // Traits are encoded directly on each sample rather than re-derived from the
-        // title with regexes at runtime: the titles are fixed and known, so matching
-        // them again here would just be a second place the regexes could disagree.
-        const QUALITY_PREVIEW_MOVIES = [
-            { title: 'Dummy.Movie.2026.2160p.WEB-DL.DV.HDR10+.Atmos-CMRG', seeders: 18, sizeGB: 17.2, is4K: true,
-              dv: true, hdr: false, atmos: true, audio51: false, stereo: false, remux: false, langTags: [] },
-            { title: 'Dummy.Movie.2026.2160p.WEB-DL.HDR.DDP5.1-FLUX', seeders: 95, sizeGB: 14.8, is4K: true,
-              dv: false, hdr: true, atmos: false, audio51: true, stereo: false, remux: false, langTags: [] },
-            { title: 'Dummy.Movie.2026.1080p.BluRay.REMUX.ITA.ENG.DDP5.1-BEN', seeders: 340, sizeGB: 9.4, is4K: false,
-              dv: false, hdr: false, atmos: false, audio51: true, stereo: false, remux: true, langTags: ['ita'] },
-            { title: 'Dummy.Movie.2026.1080p.WEB.h264.AAC-RARBG', seeders: 1250, sizeGB: 3.1, is4K: false,
-              dv: false, hdr: false, atmos: false, audio51: false, stereo: true, remux: false, langTags: [] },
-        ];
-        const QUALITY_PREVIEW_TV = [
-            { title: 'Dummy.Serie.S03E04.2160p.ATVP.WEB-DL.DV.Atmos-FLUX', seeders: 22, is4K: true,
-              dv: true, hdr: false, atmos: true, audio51: false, langTags: [], pack: null },
-            { title: 'Dummy.Serie.S03E04.2160p.ATVP.WEB-DL.HDR.Atmos-NTb', seeders: 140, is4K: true,
-              dv: false, hdr: true, atmos: true, audio51: false, langTags: [], pack: null },
-            { title: 'Dummy.Serie.S03.COMPLETE.1080p.WEB-DL.ITA.ENG.DDP5.1-NTb', seeders: 180, is4K: false,
-              dv: false, hdr: false, atmos: false, audio51: true, langTags: ['ita'], pack: 'full' },
-            { title: 'Dummy.Serie.S03E01-E05.1080p.WEB-DL.DDP5.1-ELEANOR', seeders: 890, is4K: false,
-              dv: false, hdr: false, atmos: false, audio51: true, langTags: [], pack: 'partial' },
-        ];
+        // (movie_go.go, tv_go.go) for illustration only - if those Go scorers change,
+        // update this too. Samples are built from the current weights, title included:
+        // a fixed title would keep describing a release the weights no longer favour.
+        const PREVIEW_GROUPS = ['NTb', 'FLUX', 'CMRG', 'ELEANOR'];
+
+        // Ranks an axis by weight so row 0 is always what the weights favour.
+        function byWeight(options) {
+            return options.slice().sort((a, b) => b.value - a.value);
+        }
+
+        function buildQualityPreviewTV(w, terms) {
+            const res = byWeight([
+                { tag: '2160p', value: w.res_4k, traits: { is4K: true } },
+                { tag: '1080p', value: w.res_1080p, traits: { is4K: false } },
+            ]);
+            const video = byWeight([
+                { tag: 'DV', value: w.dolby_vision, traits: { dv: true, hdr: false } },
+                { tag: 'HDR', value: w.hdr, traits: { dv: false, hdr: true } },
+            ]);
+            const audio = byWeight([
+                { tag: 'Atmos', value: w.atmos, traits: { atmos: true, audio51: false } },
+                { tag: 'DDP5.1', value: w.audio_5_1, traits: { atmos: false, audio51: true } },
+            ]);
+            // Plain option first: byWeight is stable, so at fullpack 0 the name falls
+            // back to a single episode instead of claiming a pack worth nothing.
+            const pack = byWeight([
+                { tag: 'S03E04', value: 0, traits: { pack: null } },
+                { tag: 'S03E01-E05', value: Math.trunc(w.fullpack / 2), traits: { pack: 'partial' } },
+                { tag: 'S03.COMPLETE', value: w.fullpack, traits: { pack: 'full' } },
+            ]);
+
+            // Each row drops one axis to its runner-up, so the ranking shows which
+            // weight is actually deciding instead of four unrelated releases.
+            const plan = [
+                { r: 0, v: 0, a: 0, p: 0, seeders: 140, lang: false },
+                { r: 1, v: 0, a: 0, p: 0, seeders: 180, lang: true },
+                { r: 0, v: 0, a: 0, p: 1, seeders: 890, lang: false },
+                { r: 0, v: 1, a: 1, p: 2, seeders: 22, lang: false },
+            ];
+
+            return plan.map((row, i) => {
+                const langPart = row.lang && terms.length > 0 ? '.ITA.ENG' : '';
+                return {
+                    title: `Dummy.Serie.${pack[row.p].tag}.${res[row.r].tag}.ATVP.WEB-DL.${video[row.v].tag}.${audio[row.a].tag}${langPart}-${PREVIEW_GROUPS[i]}`,
+                    seeders: row.seeders,
+                    langTags: langPart ? ['ita'] : [],
+                    ...res[row.r].traits, ...video[row.v].traits,
+                    ...audio[row.a].traits, ...pack[row.p].traits,
+                };
+            });
+        }
+
+        function buildQualityPreviewMovies(w, terms) {
+            const res = byWeight([
+                { tag: '2160p', value: w.res_4k, traits: { is4K: true }, sizeGB: 17.2 },
+                { tag: '1080p', value: w.res_1080p, traits: { is4K: false }, sizeGB: 9.4 },
+            ]);
+            const video = byWeight([
+                { tag: 'DV', value: w.dolby_vision, traits: { dv: true, hdr: false } },
+                { tag: 'HDR', value: w.hdr, traits: { dv: false, hdr: true } },
+            ]);
+            const audio = byWeight([
+                { tag: 'Atmos', value: w.atmos, traits: { atmos: true, audio51: false, stereo: false } },
+                { tag: 'DDP5.1', value: w.audio_5_1, traits: { atmos: false, audio51: true, stereo: false } },
+                { tag: 'AAC2.0', value: w.stereo_penalty, traits: { atmos: false, audio51: false, stereo: true } },
+            ]);
+            // Remux is a yes/no axis: only worth putting in the name when it pays.
+            const remuxWins = w.remux > 0;
+
+            const plan = [
+                { r: 0, v: 0, a: 0, remux: remuxWins, seeders: 18, lang: false },
+                { r: 1, v: 0, a: 0, remux: remuxWins, seeders: 340, lang: true },
+                { r: 0, v: 1, a: 1, remux: false, seeders: 95, lang: false },
+                { r: 1, v: 1, a: 2, remux: false, seeders: 1250, lang: false },
+            ];
+
+            return plan.map((row, i) => {
+                const langPart = row.lang && terms.length > 0 ? '.ITA.ENG' : '';
+                const source = row.remux ? 'BluRay.REMUX' : 'WEB-DL';
+                return {
+                    title: `Dummy.Movie.2026.${res[row.r].tag}.${source}.${video[row.v].tag}.${audio[row.a].tag}${langPart}-${PREVIEW_GROUPS[i]}`,
+                    seeders: row.seeders,
+                    sizeGB: res[row.r].sizeGB,
+                    remux: row.remux,
+                    langTags: langPart ? ['ita'] : [],
+                    ...res[row.r].traits, ...video[row.v].traits, ...audio[row.a].traits,
+                };
+            });
+        }
 
         function qualityPreviewLanguageMatch(sample, terms) {
             return terms.length > 0 && sample.langTags.some(tag => terms.includes(tag));
@@ -2089,8 +2153,8 @@
 
             // Not part of the quality score but added to Priority, which is what
             // tv_go.go actually sorts by. A partial range (S03E01-E05) counts half.
-            if (s.pack === 'full') comps.push({ label: 'full season pack', value: w.fullpack });
-            else if (s.pack === 'partial') comps.push({ label: 'partial pack', value: Math.trunc(w.fullpack / 2) });
+            if (s.pack === 'full' && w.fullpack !== 0) comps.push({ label: 'full season pack', value: w.fullpack });
+            else if (s.pack === 'partial' && w.fullpack !== 0) comps.push({ label: 'partial pack', value: Math.trunc(w.fullpack / 2) });
 
             if (s.seeders >= 100) comps.push({ label: `${s.seeders} seeders`, value: w.seeder_tier_100 });
             else if (s.seeders >= 50) comps.push({ label: `${s.seeders} seeders`, value: w.seeder_tier_50 });
@@ -2110,13 +2174,13 @@
                 let rows;
                 if (profile === 'tv') {
                     const w = readQualityWeights('quality_tv_', QUALITY_TV_DEFAULTS);
-                    rows = QUALITY_PREVIEW_TV.map(s => {
+                    rows = buildQualityPreviewTV(w, terms).map(s => {
                         const comps = scoreQualityPreviewTV(s, w, terms);
                         return { title: s.title, seeders: s.seeders, sizeGB: null, comps, score: comps.reduce((a, c) => a + c.value, 0) };
                     });
                 } else {
                     const w = readQualityWeights('quality_movies_', QUALITY_MOVIE_DEFAULTS);
-                    rows = QUALITY_PREVIEW_MOVIES.map(s => {
+                    rows = buildQualityPreviewMovies(w, terms).map(s => {
                         const comps = scoreQualityPreviewMovie(s, w, terms);
                         return { title: s.title, seeders: s.seeders, sizeGB: s.sizeGB, comps, score: comps.reduce((a, c) => a + c.value, 0) };
                     });
