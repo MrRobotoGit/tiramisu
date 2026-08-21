@@ -56,6 +56,11 @@ type TVGoEngine struct {
 	exclLanguages map[string]bool
 
 	weights config.TVWeights
+
+	// knownTitles caches a show's TMDB aliases for the process lifetime, not per
+	// run: aliases change rarely, and refetching ~100 shows every run would cost
+	// ~25s of rate-limited calls. A show met for the first time is always fetched.
+	knownTitles map[int][]string
 }
 
 // TVEpisodeEntry is a single entry in the TV episode registry.
@@ -96,8 +101,12 @@ type TVEngineConfig struct {
 
 // TV thresholds
 const (
-	tvMinEpisodeSize   = 1073741824  // 1GB
-	tvMaxEpisodeSize   = 32212254720 // 30GB
+	tvMinEpisodeSize = 1073741824  // 1GB
+	tvMaxEpisodeSize = 32212254720 // 30GB
+	// tvShowMatchEnforce turns the contents check from reporting into rejecting.
+	// Kept off until the logs show it only drops what it should.
+	tvShowMatchEnforce = false
+
 	tvUpgradeThreshold = 1.2
 	tvSinglesLimit     = 15
 	tvMaxShowAgeDays   = 180
@@ -165,6 +174,7 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 		registryFile:     regFile,
 		db:               db,
 		processedThisRun: make(map[string]bool),
+		knownTitles:      make(map[int][]string),
 		blacklistFile:    blFile,
 		invalidatePath:   cfg.InvalidatePath,
 		reITA:            CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
@@ -645,6 +655,8 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 		}
 	}
 
+	knownTitles := e.showKnownTitles(ctx, show.ID, details)
+
 	// Process fullpacks first
 	fpCount := 0
 	for _, s := range streams {
@@ -674,7 +686,7 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 		}
 
 		t2 := time.Now()
-		count := e.processFullpack(ctx, showName, stream, show.FirstAirDate)
+		count := e.processFullpack(ctx, showName, stream, show.FirstAirDate, knownTitles)
 		e.logger.Printf("    fullpack S%02d: %d created in %v (%s)", stream.Season, count, time.Since(t2).Round(time.Millisecond), stream.Title[:min(60, len(stream.Title))])
 		if count > 0 {
 			created += count
@@ -705,7 +717,7 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow) {
 			continue
 		}
 
-		count := e.processSingle(ctx, showName, stream, show.FirstAirDate)
+		count := e.processSingle(ctx, showName, stream, show.FirstAirDate, knownTitles)
 		created += count
 		singlesProcessed++
 	}
@@ -1030,7 +1042,7 @@ func (e *TVGoEngine) extractSeeders(title string) int {
 	return 0
 }
 
-func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, stream TVStream, firstAirDate string) int {
+func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, stream TVStream, firstAirDate string, knownTitles []string) int {
 	magnet := BuildMagnet(stream.Hash, stream.Title, DefaultTrackers())
 	hash, err := e.gostorm.AddTorrent(ctx, magnet, stream.Title)
 	if err != nil || hash == "" {
@@ -1053,6 +1065,11 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, strea
 	}
 
 	if len(videoFiles) == 0 {
+		e.gostorm.RemoveTorrent(ctx, hash)
+		return 0
+	}
+
+	if !e.contentsBelongToShow(videoFiles, knownTitles, showName, stream.Title) {
 		e.gostorm.RemoveTorrent(ctx, hash)
 		return 0
 	}
@@ -1111,7 +1128,7 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName string, strea
 	return created
 }
 
-func (e *TVGoEngine) processSingle(ctx context.Context, showName string, stream TVStream, firstAirDate string) int {
+func (e *TVGoEngine) processSingle(ctx context.Context, showName string, stream TVStream, firstAirDate string, knownTitles []string) int {
 	title := stream.Title
 	m := reTVEpNum.FindStringSubmatch(title)
 	if len(m) < 3 {
@@ -1158,6 +1175,11 @@ func (e *TVGoEngine) processSingle(ctx context.Context, showName string, stream 
 		}
 	}
 	if bestFile == nil {
+		e.gostorm.RemoveTorrent(ctx, hash)
+		return 0
+	}
+
+	if !e.contentsBelongToShow([]FileStat{*bestFile}, knownTitles, showName, title) {
 		e.gostorm.RemoveTorrent(ctx, hash)
 		return 0
 	}
@@ -1481,4 +1503,40 @@ func (e *TVGoEngine) createMKV(path, streamURL string, fileSize int64, magnet st
 		return false
 	}
 	return os.WriteFile(path, jsonData, 0644) == nil
+}
+
+// showKnownTitles returns every title the show is released under. Cached until
+// restart: see knownTitles.
+func (e *TVGoEngine) showKnownTitles(ctx context.Context, tmdbID int, details *tmdb.TVDetail) []string {
+	if t, ok := e.knownTitles[tmdbID]; ok {
+		return t
+	}
+	titles := []string{}
+	if details != nil {
+		titles = append(titles, details.Name, details.OriginalName)
+	}
+	if alts, err := e.tmdb.TVAlternativeTitles(ctx, tmdbID); err == nil {
+		titles = append(titles, alts...)
+	} else {
+		e.logger.Printf("    [ShowMatch] alternative titles unavailable for tmdb=%d: %v", tmdbID, err)
+	}
+	e.knownTitles[tmdbID] = titles
+	return titles
+}
+
+// contentsBelongToShow checks a torrent's real file names against the show we asked
+// for. tvShowMatchEnforce is off for now: the check only reports what it would drop,
+// so a false reject cannot silently empty a library before we have seen the logs.
+func (e *TVGoEngine) contentsBelongToShow(files []FileStat, knownTitles []string, showName, releaseTitle string) bool {
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		names = append(names, f.Path)
+	}
+	matched, decidable := filesMatchShow(names, knownTitles)
+	if matched || !decidable {
+		return true
+	}
+	e.logger.Printf("    [ShowMatch] %s: contents do not match (%q) — %s",
+		showName, showPrefixFromFilename(names[0]), releaseTitle[:min(70, len(releaseTitle))])
+	return !tvShowMatchEnforce
 }

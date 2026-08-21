@@ -202,6 +202,45 @@ func (c *Client) TVDetails(ctx context.Context, tmdbID int) (*TVDetail, error) {
 	return &detail, nil
 }
 
+// TVAlternativeTitles returns the titles a show is also released under. Release
+// names often use the local title ("L'amica geniale" for "My Brilliant Friend")
+// or the source novel ("Wool" for "Silo"), so matching on Name alone rejects
+// legitimate torrents.
+func (c *Client) TVAlternativeTitles(ctx context.Context, tmdbID int) ([]string, error) {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
+
+	urlStr := fmt.Sprintf("%s/tv/%d/alternative_titles?api_key=%s", baseURL, tmdbID, c.apiKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := catalog.Do(ctx, c.http, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		Results []struct {
+			Title string `json:"title"`
+		} `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+
+	titles := make([]string, 0, len(payload.Results))
+	for _, r := range payload.Results {
+		if r.Title != "" {
+			titles = append(titles, r.Title)
+		}
+	}
+	return titles, nil
+}
+
 // DiscoverTV returns TV shows from TMDB discover.
 func (c *Client) DiscoverTV(ctx context.Context, lang string, dateGTE, dateLTE string, pages int) ([]TVShow, error) {
 	var all []TVShow
@@ -394,6 +433,7 @@ type TVShow struct {
 type TVDetail struct {
 	ID               int         `json:"id"`
 	Name             string      `json:"name"`
+	OriginalName     string      `json:"original_name"`
 	FirstAirDate     string      `json:"first_air_date"`
 	LastAirDate      string      `json:"last_air_date"`
 	NextEpisodeToAir interface{} `json:"next_episode_to_air"`
