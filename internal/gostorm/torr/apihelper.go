@@ -2,6 +2,7 @@ package torr
 
 import (
 	"context"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"sort"
@@ -142,6 +143,22 @@ func saveTorrentToDB(torr *Torrent) {
 	AddTorrentDB(torr)
 }
 
+// parseHash validates before converting: metainfo.NewHashFromHex panics on
+// anything that is not 40 hex chars, and these values come straight from API
+// callers, so a truncated hash would take down the handler.
+func parseHash(hashHex string) (metainfo.Hash, bool) {
+	var h metainfo.Hash
+	if len(hashHex) != 2*len(h) {
+		return h, false
+	}
+	raw, err := hex.DecodeString(hashHex)
+	if err != nil {
+		return h, false
+	}
+	copy(h[:], raw)
+	return h, true
+}
+
 // PeekTorrent gets a torrent from RAM or DB WITHOUT resetting its expiration timer (V301)
 func PeekTorrent(hashHex string) *Torrent {
 	btsMu.RLock()
@@ -151,7 +168,10 @@ func PeekTorrent(hashHex string) *Torrent {
 		return nil
 	}
 
-	hash := metainfo.NewHashFromHex(hashHex)
+	hash, ok := parseHash(hashHex)
+	if !ok {
+		return nil
+	}
 	tor := bts.GetTorrent(hash)
 	if tor != nil {
 		// Found in RAM, return as is (no AddExpiredTime)
@@ -166,7 +186,10 @@ func GetTorrent(hashHex string) *Torrent {
 	btsMu.RLock()
 	defer btsMu.RUnlock()
 
-	hash := metainfo.NewHashFromHex(hashHex)
+	hash, ok := parseHash(hashHex)
+	if !ok {
+		return nil
+	}
 	timeout := time.Second * time.Duration(sets.BTsets.TorrentDisconnectTimeout)
 	if timeout > time.Minute {
 		timeout = time.Minute
@@ -212,7 +235,11 @@ func SetTorrent(hashHex, title, poster, category string, data string) *Torrent {
 	localBts := bts
 	btsMu.RUnlock()
 
-	hash := metainfo.NewHashFromHex(hashHex)
+	hash, ok := parseHash(hashHex)
+	if !ok {
+		log.TLogln("API SetTorrent: malformed hash:", hashHex)
+		return nil
+	}
 	torr := localBts.GetTorrent(hash)
 	torrDb := GetTorrentDB(hash)
 
@@ -272,7 +299,11 @@ func RemTorrent(hashHex string) {
 	btsMu.RLock()
 	defer btsMu.RUnlock()
 
-	hash := metainfo.NewHashFromHex(hashHex)
+	hash, ok := parseHash(hashHex)
+	if !ok {
+		log.TLogln("API RemTorrent: malformed hash:", hashHex)
+		return
+	}
 	if bts.RemoveTorrent(hash) {
 		if sets.BTsets.UseDisk && hashHex != "" && hashHex != "/" {
 			name := filepath.Join(sets.BTsets.TorrentsSavePath, hashHex)
@@ -357,7 +388,11 @@ func DropTorrent(hashHex string) {
 	btsMu.RLock()
 	defer btsMu.RUnlock()
 
-	hash := metainfo.NewHashFromHex(hashHex)
+	hash, ok := parseHash(hashHex)
+	if !ok {
+		log.TLogln("API DropTorrent: malformed hash:", hashHex)
+		return
+	}
 	bts.RemoveTorrent(hash)
 }
 

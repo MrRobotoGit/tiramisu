@@ -433,7 +433,7 @@ func runTuningCycle(provider AIProvider) {
 	prompt := fmt.Sprintf(
 		"BitTorrent Optimizer for Raspberry Pi 4. Default settings: 25 connections, 30s peer timeout. "+
 			"Output ONLY JSON: {\"connections_limit\": int, \"peer_timeout_seconds\": int}. "+
-			"Perform dynamic fine-tuning for BOTH values independently: lower timeout (<30s) to prune dead peers during stalls, higher timeout (>30s) to stabilize slow but steady peers. Adjust connections to balance CPU load (target <60%). If speed is below 3MB/s increase connections. If file size is circa 20GB tune to get 5MB/s or more\n"+
+			"Perform dynamic fine-tuning for BOTH values independently: lower timeout (<30s) to prune dead peers during stalls, higher timeout (>30s) to stabilize slow but steady peers. Adjust connections to balance CPU load (target <60%%). If speed is below 3MB/s increase connections. If file size is circa 20GB tune to get 5MB/s or more\n"+
 			"User context:\n"+
 			"Peers:%d, Total:%d, Size:%.1fGB, Speed:%.1fMB/s, CPU:%d%%, Buf:%d%%, History:%s, Trend:%s",
 		activeStats.ActivePeers, activeStats.TotalPeers, fileSizeGB, currSpeedMBs, int(currentCPU), buffer, historyStr, speedTrendStr,
