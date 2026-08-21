@@ -18,6 +18,34 @@ func inRanges(ranges []Range, ind int) bool {
 	return i < len(ranges) && ranges[i].Start <= ind
 }
 
+// fillPieceInRange resets dst and marks the pieces covered by the readers'
+// windows. Range.Start/End are absolute piece indices: marking the whole file
+// instead would protect every piece and stop eviction entirely.
+func fillPieceInRange(dst []bool, ranges []Range, pieceCount int) {
+	for i := range dst {
+		dst[i] = false
+	}
+	for _, rng := range ranges {
+		start, end := rng.Start, rng.End
+		if start < 0 {
+			start = 0
+		}
+		if end >= pieceCount {
+			end = pieceCount - 1
+		}
+		for i := start; i <= end; i++ {
+			dst[i] = true
+		}
+	}
+}
+
+// pieceEvictable reports whether a cached piece may be dropped. A partially
+// written piece must stay: anacrolix keeps its own chunk bookkeeping, so
+// dropping one fails the hash check and bans the peer that supplied it.
+func pieceEvictable(size int64, complete, inReaderWindow bool) bool {
+	return size > 0 && complete && !inReaderWindow
+}
+
 func mergeRange(ranges []Range) []Range {
 	if len(ranges) <= 1 {
 		return ranges

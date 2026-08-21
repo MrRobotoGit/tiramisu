@@ -296,6 +296,16 @@ func (c *Cache) cleanPieces() {
 	remPieces := c.getRemPieces()
 	if c.filled > c.capacity {
 		rems := (c.filled-c.capacity)/c.pieceLength + 1
+		// Diagnostic: if removable stays at 0 while over capacity, the protected
+		// window is too wide for the configured cache and the reader will thrash.
+		readers := int64(c.activeReaders.Load())
+		if readers == 0 {
+			readers = 1
+		}
+		log.TLogln("[CacheEvict] readers:", readers,
+			"window(MB):", c.capacity/readers*85/100>>20,
+			"filled(MB):", c.filled>>20, "capacity(MB):", c.capacity>>20,
+			"removable:", len(remPieces), "toRemove:", rems)
 		for _, p := range remPieces {
 			c.removePiece(p)
 			rems--
@@ -329,28 +339,16 @@ func (c *Cache) getRemPieces() []*Piece {
 	ranges = mergeRange(ranges)
 
 	// V305: Rebuild bitmap for O(1) piece-in-range checks
-	for i := range c.pieceInRange {
-		c.pieceInRange[i] = false
-	}
-	for _, rng := range ranges {
-		start := int(rng.File.Offset() / c.pieceLength)
-		end := int((rng.File.Offset() + rng.File.Length()) / c.pieceLength)
-		if end >= c.pieceCount {
-			end = c.pieceCount - 1
-		}
-		for i := start; i <= end; i++ {
-			c.pieceInRange[i] = true
-		}
-	}
+	fillPieceInRange(c.pieceInRange, ranges, c.pieceCount)
 
 	for id, p := range c.pieces {
 		if p.Size > 0 {
 			fill += p.Size
 		}
-		if c.pieceInRange[id] {
+		if !pieceEvictable(p.Size, p.Complete.Load(), c.pieceInRange[id]) {
 			continue
 		}
-		if p.Size > 0 && !c.isIdInFileBE(ranges, id) {
+		if !c.isIdInFileBE(ranges, id) {
 			piecesRemove = append(piecesRemove, p)
 		}
 	}
