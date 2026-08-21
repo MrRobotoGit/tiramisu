@@ -2337,7 +2337,7 @@
 
         async function loadCore() {
             try {
-                const res = await fetch('http://' + window.location.hostname + ':8090/settings', {
+                const res = await fetch('/api/gostorm/settings', {
                     method: 'POST',
                     body: JSON.stringify({ action: 'get' }),
                     headers: { 'Content-Type': 'application/json' }
@@ -2389,7 +2389,7 @@
                 const isUIOn = formData.has(formKey);
                 sets[k] = NEGATIVE_KEYS.includes(k) ? !isUIOn : isUIOn;
             });
-            const res = await fetch('http://' + window.location.hostname + ':8090/settings', {
+            const res = await fetch('/api/gostorm/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'set', sets: sets })

@@ -4013,6 +4013,43 @@ func main() {
 		json.NewEncoder(w).Encode(streams)
 	})
 
+	// Same-origin proxy to the GoStorm settings API. The Control Panel must not
+	// build an absolute URL of its own: behind a reverse proxy the GoStorm port is
+	// not exposed, and an http:// call from an https:// page is blocked as mixed
+	// content, which left the whole GoStorm section empty and unsaveable.
+	http.HandleFunc("/api/gostorm/settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		base := gc().GoStormBaseURL
+		if base == "" {
+			http.Error(w, "gostorm_url not configured", http.StatusServiceUnavailable)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		req, err := http.NewRequestWithContext(r.Context(), "POST",
+			strings.TrimRight(base, "/")+"/settings", bytes.NewReader(body))
+		if err != nil {
+			http.Error(w, "build request: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+		if err != nil {
+			http.Error(w, "gostorm unreachable: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})
+
 	http.HandleFunc("/api/restart", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			http.Error(w, "method not allowed", 405)
