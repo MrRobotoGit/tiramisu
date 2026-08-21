@@ -104,8 +104,10 @@ const (
 	tvMinEpisodeSize = 1073741824  // 1GB
 	tvMaxEpisodeSize = 32212254720 // 30GB
 	// tvShowMatchEnforce turns the contents check from reporting into rejecting.
-	// Kept off until the logs show it only drops what it should.
-	tvShowMatchEnforce = false
+	// Enabled 2026-08-21 after a full 100-show run: 19 torrents inspected, zero
+	// false rejects. A torrent that reaches here has already been downloaded, so
+	// rejecting costs nothing but the discard.
+	tvShowMatchEnforce = true
 
 	tvUpgradeThreshold = 1.2
 	tvSinglesLimit     = 15
@@ -1525,8 +1527,8 @@ func (e *TVGoEngine) showKnownTitles(ctx context.Context, tmdbID int, details *t
 }
 
 // contentsBelongToShow checks a torrent's real file names against the show we asked
-// for. tvShowMatchEnforce is off for now: the check only reports what it would drop,
-// so a false reject cannot silently empty a library before we have seen the logs.
+// for. A mismatch is always logged as [ShowMatch]; tvShowMatchEnforce decides
+// whether it is also discarded.
 func (e *TVGoEngine) contentsBelongToShow(files []FileStat, knownTitles []string, showName, releaseTitle string) bool {
 	names := make([]string, 0, len(files))
 	for _, f := range files {
