@@ -984,6 +984,10 @@ type MkvHandle struct {
 	mu              sync.Mutex
 	pumpCancel      context.CancelFunc
 	hasSlot         bool
+	// pumpState is the state this handle incremented. activePumps is keyed by path
+	// and the state is replaced wholesale, so Release must not decrement a pump it
+	// never counted.
+	pumpState *NativePumpState
 	isWatching      bool
 	hasWarmup       bool          // true if both head+tail warmup available at Open time
 	state           atomic.Uint32 // handleState: stateWarmup | stateStreaming
@@ -1043,6 +1047,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		newRefs := atomic.AddInt32(&ps.refCount, 1)
 		h.mu.Lock()
 		h.hasSlot = true
+		h.pumpState = ps
 		h.isWatching = true
 		h.nativeReader = ps.reader
 		h.pumpCancel = ps.cancel
@@ -1074,6 +1079,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			newRefs := atomic.AddInt32(&ps.refCount, 1)
 			h.mu.Lock()
 			h.hasSlot = true
+			h.pumpState = ps
 			h.isWatching = true
 			h.nativeReader = ps.reader
 			h.pumpCancel = ps.cancel
@@ -1110,6 +1116,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			refCount: 1,
 		}
 		activePumps.Store(h.path, sharedState)
+		h.pumpState = sharedState
 		globalOpenTracker.Inc(h.hash, h.path)
 		pumpCreationMu.Unlock() // SUCCESS: Shared state registered, global lock released
 
@@ -2102,6 +2109,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 			atomic.AddInt32(&ps.refCount, 1) // Increment reference count
 			h.mu.Lock()
 			h.hasSlot = true
+			h.pumpState = ps
 			h.isWatching = true
 			h.nativeReader = ps.reader
 			h.pumpCancel = ps.cancel
@@ -2131,6 +2139,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 								refCount: 1,
 							}
 							activePumps.Store(h.path, sharedState)
+							h.pumpState = sharedState
 							globalOpenTracker.Inc(h.hash, h.path)
 
 							logger.Printf("[Pump] Upgraded on-the-fly for confirmed playback: %s", filepath.Base(h.path))
@@ -2389,6 +2398,15 @@ DATA_READY:
 	return fuse.ReadResultData(dest[:nCopy]), 0
 }
 
+// ownsPumpState reports whether a releasing handle still owns the pump registered
+// for its path. activePumps is keyed by path and the state is replaced wholesale,
+// so a handle that outlived its pump would otherwise decrement a count it never
+// incremented, driving refCount negative and firing the "last handle closed"
+// teardown while a live handle is still reading.
+func ownsPumpState(handleState, registered *NativePumpState) bool {
+	return handleState != nil && handleState == registered
+}
+
 func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	ttffReleaseClose(h.path)
 	logger.Printf("=== RELEASE VIRTUAL === path=%s", h.path)
@@ -2405,8 +2423,12 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 		if !h.hasSlot {
 			return 0
 		}
-		newRefs := atomic.AddInt32(&ps.refCount, -1)
 		globalOpenTracker.Dec(h.hash, h.path)
+		if !ownsPumpState(h.pumpState, ps) {
+			logger.Printf("[Pump] Stale handle for %s: pump was replaced, refCount left alone", filepath.Base(h.path))
+			return 0
+		}
+		newRefs := atomic.AddInt32(&ps.refCount, -1)
 		logger.Printf("[Pump] Release handle for %s (Remaining Refs: %d)", filepath.Base(h.path), newRefs)
 
 		if newRefs <= 0 {
