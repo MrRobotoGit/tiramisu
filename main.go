@@ -1619,7 +1619,7 @@ func (h *MkvHandle) promoteIfStreaming(prevOff, off int64, readLen int) {
 		h.seqAdvances.Store(0)
 		return
 	}
-	if h.seqAdvances.Add(1) < primaryProofReads {
+	if h.seqAdvances.Add(1) < primaryProofFor(off, primaryOffsetFor(h.path, h), gc().ReadAheadBudget) {
 		return
 	}
 	// Only during real playback: a background scan reads sequentially too, and outside a
@@ -1634,7 +1634,7 @@ func (h *MkvHandle) promoteIfStreaming(prevOff, off int64, readLen int) {
 	}
 	if becomePrimary(h) {
 		logger.Printf("[V284] Handle promoted to primary after %d sequential reads at %dMB: %s",
-			primaryProofReads, off/(1024*1024), filepath.Base(h.path))
+			h.seqAdvances.Load(), off/(1024*1024), filepath.Base(h.path))
 	}
 }
 
@@ -1709,6 +1709,44 @@ func shouldInterruptPump(prevOff, off, budget int64, tailServed bool) bool {
 		return false
 	}
 	return shouldInterruptForSeek(prevOff, off, budget)
+}
+
+// primaryProofFor returns how many consecutive sequential reads a challenger must show before it
+// may take primary. One landing within the read-ahead budget of the incumbent is the player moving
+// normally (its own reopen lands right where it left off) and needs the base proof. One landing
+// further away would drag the pump across the file, so it must sustain the streak far longer than
+// a short-lived probe can: Lucky S01E04, 2026-08-22 saw handles attach at 5578/6069/6430MB, earn
+// primary within 2-3s and be released immediately, each yanking the pump away from a player
+// reading 2GB behind. A genuine seek by an open handle promotes through Read()'s seek path
+// instead, so it never pays this. The extended proof is also the escape hatch that stops a wrong
+// incumbent from wedging primary forever.
+func primaryProofFor(challengerOff, incumbentOff, budget int64) int32 {
+	if incumbentOff <= 0 || budget <= 0 {
+		return primaryProofReads // no incumbent to displace
+	}
+	d := challengerOff - incumbentOff
+	if d < 0 {
+		d = -d
+	}
+	if d <= budget {
+		return primaryProofReads
+	}
+	return primaryProofReads * 4
+}
+
+// primaryOffsetFor returns the offset of the current primary handle on path, or 0 if there is none.
+func primaryOffsetFor(path string, except *MkvHandle) int64 {
+	var off int64
+	activeHandles.Range(func(key, _ interface{}) bool {
+		other, ok := key.(*MkvHandle)
+		if ok && other != except && other.path == path && other.isPrimaryHandle.Load() {
+			if o := atomic.LoadInt64(&other.lastOff); o > off {
+				off = o
+			}
+		}
+		return true
+	})
+	return off
 }
 
 // becomePrimary makes h the only primary handle for its path, returning false if it already was.
