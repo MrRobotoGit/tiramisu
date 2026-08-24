@@ -191,6 +191,12 @@ var inFlightPrefetches sync.Map // key: "path:offset", value: bool
 var inFlightFetches sync.Map // key: "path:chunkAlignedOffset", value: *fetchFlight
 var fetchFlightDedupCount atomic.Int64
 
+// fuseShortReadCount counts reads served to FUSE with fewer bytes than requested, away from EOF.
+// FUSE runs on the kernel page cache here (no direct_io, see the mount options in main()), so the
+// kernel zero-fills the rest of the page and marks it uptodate: that region then serves zeros
+// silently. A short read is therefore data corruption, not a slow read, and must stay visible.
+var fuseShortReadCount atomic.Int64
+
 type fetchFlight struct {
 	done chan struct{} // closed by the leader once its result is in raCache
 }
@@ -2418,6 +2424,9 @@ DATA_READY:
 		raCache.Put(h.path, off, off+int64(n)-1, buf[:n])
 
 		ttffRead(h.path, srcFetchBlock, timing.HTTPFetchTime, n, off)
+		if n < len(dest) && off+int64(n) < h.size {
+			fuseShortReadCount.Add(1)
+		}
 
 		if warmup.DiskWarmup != nil && h.hash != "" {
 			if off <= warmup.FileSize {
@@ -4013,7 +4022,9 @@ func main() {
 			}
 		}
 
-		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d}`,
+		shortStream, shortFetch := native.ShortReadCounts()
+
+		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "fuse_short_reads":%d, "short_read_stream":%d, "short_read_fetch":%d}`,
 			AppVersion,
 			gc().ConfigPath,
 			time.Since(startTime),
@@ -4031,7 +4042,8 @@ func main() {
 			natPort,
 			updater.LatestVersion(), updater.UpdateAvailable(),
 			warmupBucketsJSON,
-			hedgeTriggerTotal, hedgeCircuitOpenAny, fetchFlightDedupCount.Load(), peerEjectTotal, torr.V304BannedCount())
+			hedgeTriggerTotal, hedgeCircuitOpenAny, fetchFlightDedupCount.Load(), peerEjectTotal, torr.V304BannedCount(),
+			fuseShortReadCount.Load(), shortStream, shortFetch)
 	})
 
 	http.HandleFunc("/webhook", handlePlexWebhook)

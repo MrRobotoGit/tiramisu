@@ -6,14 +6,14 @@ import (
 	"io"
 	"net/http"
 
-	"tiramisu/internal/gostorm/torr"
-	"tiramisu/internal/gostorm/torr/state"
-	apiUtils "tiramisu/internal/gostorm/web/api/utils"
-	"tiramisu/internal/warmup"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
+	"tiramisu/internal/gostorm/torr"
+	"tiramisu/internal/gostorm/torr/state"
+	apiUtils "tiramisu/internal/gostorm/web/api/utils"
+	"tiramisu/internal/warmup"
 )
 
 // TorrentStats is used by NativeClient methods to report torrent status.
@@ -169,6 +169,19 @@ func (r *NativeReader) SetPieceLen(n int64) { r.pieceLen.Store(n) }
 // ErrInterrupted is returned by ReadAt when the pipe was closed by Interrupt().
 var ErrInterrupted = fmt.Errorf("interrupted by seek")
 
+// Short reads reported as success. io.ReadFull returns ErrUnexpectedEOF when the stream ends
+// early — a stalled pipe closed by FetchBlock's 8s timeout, or a hiccup mid-stream — and every
+// site below maps that to (n, nil). The caller cannot tell a partial read from a complete one,
+// and with FUSE on the kernel page cache (no direct_io) a short read makes the kernel zero-fill
+// the rest of the page and mark it uptodate: that region then serves zeros for good.
+var shortReadStream atomic.Int64 // ReadAt: sequential, smart-seek and hard-seek paths
+var shortReadFetch atomic.Int64  // FetchBlock: the stateless path behind the FUSE fallback
+
+// ShortReadCounts returns the number of short reads reported as success, by path.
+func ShortReadCounts() (stream, fetch int64) {
+	return shortReadStream.Load(), shortReadFetch.Load()
+}
+
 // ReadAt implements io.ReaderAt.
 func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 	r.mu.Lock()
@@ -200,6 +213,9 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 		}
 
 		if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
+			if err != nil && n < len(p) {
+				shortReadStream.Add(1)
+			}
 			return n, nil
 		}
 
@@ -216,6 +232,9 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 			n, err = io.ReadFull(r.pipeReader, p)
 			r.offset += int64(n)
 			if err == nil || err == io.EOF || err == io.ErrUnexpectedEOF {
+				if err != nil && n < len(p) {
+					shortReadStream.Add(1)
+				}
 				return n, nil
 			}
 			log.Printf("[NativeReader] Smart Seek Read Error: %v - Attempting Transparent Reconnect at offset %d", err, off)
@@ -247,6 +266,9 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 	n, err = io.ReadFull(r.pipeReader, p)
 	r.offset += int64(n)
 	if err == io.ErrUnexpectedEOF {
+		if n < len(p) {
+			shortReadStream.Add(1)
+		}
 		return n, nil
 	}
 	return n, err
@@ -375,6 +397,9 @@ func (c *NativeClient) FetchBlock(hash string, fileID int, offset int64, p []byt
 	pr.Close()
 
 	if err == io.ErrUnexpectedEOF {
+		if n < len(p) {
+			shortReadFetch.Add(1)
+		}
 		return n, nil
 	}
 
