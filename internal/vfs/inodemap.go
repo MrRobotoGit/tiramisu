@@ -317,21 +317,25 @@ func (im *InodeMap) SaveToDisk() error {
 }
 
 // saveToDB writes all shard entries to SQLite in a single transaction.
+// The shards are snapshotted first: the transaction must not run while holding a
+// shard lock (SQL under RLock stalls AddFile), and taking a second shard RLock
+// inside the first deadlocks when a path and its key land on the same shard.
 func (im *InodeMap) saveToDB() error {
-	// Build full paths from nameMap: fullPath -> "infohash:fileIdx"
-	nameMap := make(map[string]string)
+	nameMap := make(map[string]string) // fullPath -> "infohash:fileIdx"
+	fileMap := make(map[string]uint64) // "infohash:fileIdx" -> inode
+	dirMap := make(map[string]uint64)  // relPath -> inode
 	for _, s := range im.shards {
 		s.mu.RLock()
 		for k, v := range s.nameMap {
 			nameMap[k] = v
 		}
+		for k, v := range s.fileMap {
+			fileMap[k] = v
+		}
+		for k, v := range s.dirMap {
+			dirMap[k] = v
+		}
 		s.mu.RUnlock()
-	}
-
-	// Build reverse map: "infohash:fileIdx" -> fullPath
-	keyToPath := make(map[string]string)
-	for fullPath, key := range nameMap {
-		keyToPath[key] = fullPath
 	}
 
 	tx, err := im.db.SQL().Begin()
@@ -362,33 +366,25 @@ func (im *InodeMap) saveToDB() error {
 	fileCount := 0
 	dirCount := 0
 
-	for _, s := range im.shards {
-		s.mu.RLock()
-		for key, inode := range s.fileMap {
-			fullPath := keyToPath[key]
-			parts := strings.SplitN(key, ":", 2)
-			infohash := key
-			fileIdx := 0
-			if len(parts) == 2 {
-				infohash = parts[0]
-				if idx, err := strconv.Atoi(parts[1]); err == nil {
-					fileIdx = idx
-				}
-			}
-			if _, err := stmtFile.Exec("file", infohash, fileIdx, fullPath, pathBase(fullPath), int64(inode)); err != nil {
-				s.mu.RUnlock()
-				return fmt.Errorf("inodemap: save file %s: %w", fullPath, err)
-			}
-			fileCount++
+	// One row per path, not per content key: several paths can map to the same
+	// "infohash:fileIdx", and keying the rewrite by content dropped all but one.
+	for fullPath, key := range nameMap {
+		infohash, fileIdx := splitInodeKey(key)
+		inode, ok := fileMap[key]
+		if !ok {
+			inode = GenerateFileInode(infohash, fileIdx) // pure function of the key
 		}
-		for relPath, inode := range s.dirMap {
-			if _, err := stmtDir.Exec("dir", relPath, relPath, pathBase(relPath), int64(inode)); err != nil {
-				s.mu.RUnlock()
-				return fmt.Errorf("inodemap: save dir %s: %w", relPath, err)
-			}
-			dirCount++
+		if _, err := stmtFile.Exec("file", infohash, fileIdx, fullPath, pathBase(fullPath), int64(inode)); err != nil {
+			return fmt.Errorf("inodemap: save file %s: %w", fullPath, err)
 		}
-		s.mu.RUnlock()
+		fileCount++
+	}
+
+	for relPath, inode := range dirMap {
+		if _, err := stmtDir.Exec("dir", relPath, relPath, pathBase(relPath), int64(inode)); err != nil {
+			return fmt.Errorf("inodemap: save dir %s: %w", relPath, err)
+		}
+		dirCount++
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -398,6 +394,20 @@ func (im *InodeMap) saveToDB() error {
 	im.setDirty(false)
 	im.logger.Printf("InodeMap: Saved %d files, %d dirs to StateDB", fileCount, dirCount)
 	return nil
+}
+
+// splitInodeKey splits an "infohash:index" map key. A key without a valid index
+// degrades to 0 rather than being dropped.
+func splitInodeKey(key string) (string, int) {
+	parts := strings.SplitN(key, ":", 2)
+	if len(parts) != 2 {
+		return key, 0
+	}
+	idx, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return parts[0], 0
+	}
+	return parts[0], idx
 }
 
 // saveToJSON persists to the legacy JSON file (fallback when StateDB is disabled).
