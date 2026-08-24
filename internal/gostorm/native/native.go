@@ -182,8 +182,74 @@ func ShortReadCounts() (stream, fetch int64) {
 	return shortReadStream.Load(), shortReadFetch.Load()
 }
 
-// ReadAt implements io.ReaderAt.
-func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
+// Outcome of ReadAt's fill loop, per call that needed it: repaired = p was filled after a
+// reconnect, unfilled = it stayed short and the caller sees a gap.
+var shortReadRepaired atomic.Int64
+var shortReadUnfilled atomic.Int64
+
+// ShortReadRepairCounts returns the fill-loop outcomes.
+func ShortReadRepairCounts() (repaired, unfilled int64) {
+	return shortReadRepaired.Load(), shortReadUnfilled.Load()
+}
+
+// readAtFillAttempts bounds the reconnects behind one ReadAt. Each readAtOnce that has to
+// hard-seek pays a stream restart, so this trades a bounded stall against a short chunk.
+const readAtFillAttempts = 4
+
+// ReadAt implements io.ReaderAt. It fills p completely: a partial read leaves the pump
+// caching a chunk shorter than the reader asked for, and every later read spanning the
+// missing tail misses the read-ahead cache and pays a blocking FetchBlock (seconds, against
+// ~1ms for a cache hit). Stopping short is what turns a dead pipe into a stall downstream.
+func (r *NativeReader) ReadAt(p []byte, off int64) (int, error) {
+	total, resets := 0, 0
+	var err error
+	for total < len(p) {
+		var n int
+		n, err = r.readAtOnce(p[total:], off+int64(total))
+		total += n
+		// End of file is not a failure: the pump's caller treats any error as "retry this
+		// same offset", which at the last chunk would spin forever instead of finishing.
+		if err == io.EOF && total > 0 {
+			err = nil
+			break
+		}
+		if err != nil || total >= len(p) {
+			break
+		}
+		// The stream ended before p was full. On the sequential path a dead pipe keeps
+		// returning (0, nil), so it has to be dropped explicitly to force a reconnect.
+		if resets >= readAtFillAttempts {
+			break
+		}
+		if n == 0 && resets > 0 {
+			break // a freshly started stream produced nothing: genuine end of file
+		}
+		resets++
+		r.resetStream()
+	}
+
+	// A seek aborts the fill deliberately; counting it as unfilled would poison the very
+	// metric used to judge whether the reconnect works.
+	if resets > 0 && err != ErrInterrupted {
+		if total == len(p) {
+			shortReadRepaired.Add(1)
+		} else {
+			shortReadUnfilled.Add(1)
+		}
+	}
+	return total, err
+}
+
+// resetStream drops the current pipe so the next readAtOnce takes the hard-seek path.
+func (r *NativeReader) resetStream() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pipeReader != nil {
+		r.closeStream()
+	}
+}
+
+func (r *NativeReader) readAtOnce(p []byte, off int64) (n int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -259,7 +325,7 @@ func (r *NativeReader) ReadAt(p []byte, off int64) (n int, err error) {
 		r.closeStream()
 	}
 
-	if err := r.startStream(off); err != nil {
+	if err := startStreamFn(r, off); err != nil {
 		return 0, err
 	}
 
@@ -282,6 +348,10 @@ func (r *NativeReader) Interrupt() {
 		pr.Close() // Reader side close is enough to unblock ReadFull
 	}
 }
+
+// startStreamFn opens the stream; a var so the reconnect path can be exercised without a
+// live torrent, the same injection seam used for warmup.TailFetch.
+var startStreamFn = (*NativeReader).startStream
 
 func (r *NativeReader) startStream(off int64) error {
 	// V255: Use PeekTorrent to avoid extending expiry timer on every Hard Seek.

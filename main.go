@@ -197,6 +197,18 @@ var fetchFlightDedupCount atomic.Int64
 // silently. A short read is therefore data corruption, not a slow read, and must stay visible.
 var fuseShortReadCount atomic.Int64
 
+// Outcome of the refill in Read: repaired = the gap was filled and the read served whole,
+// failed = it could not be, and EIO was returned rather than caching a zero-filled page.
+var fuseShortReadRepaired atomic.Int64
+var fuseShortReadFailed atomic.Int64
+
+// A blocked FUSE read puts smbd in D-state, which is why fetch timeouts were cut to 8s in
+// V283; the refill must stay well inside that budget rather than stacking another 8s on top.
+const (
+	shortReadRefillAttempts = 2
+	shortReadRefillBudget   = 4 * time.Second
+)
+
 type fetchFlight struct {
 	done chan struct{} // closed by the leader once its result is in raCache
 }
@@ -1878,7 +1890,64 @@ func safeGo(fn func()) {
 var _ fs.FileReader = (*MkvHandle)(nil)
 var _ fs.FileReleaser = (*MkvHandle)(nil)
 
+// shortAwayFromEOF reports whether a read of n bytes into a want-sized buffer at off leaves a
+// gap before end of file. Short AT eof is normal; short before it is what the kernel turns
+// into a cached zero-filled page.
+func shortAwayFromEOF(n, want int, off, size int64) bool {
+	return n < want && off+int64(n) < size
+}
+
+// Read never hands the kernel a short read away from EOF. FUSE here runs on the kernel page
+// cache (no direct_io), and Linux zero-fills the tail of a short read and marks the page
+// uptodate — that region would then serve zeros for the life of the mount. Missing bytes are
+// refetched; if they still cannot be produced, EIO is returned, which the kernel does not
+// cache, so the read is retried instead of a hole being made permanent.
 func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	res, errno := h.readInner(fuseCtx, dest, off)
+	if errno != 0 || res == nil {
+		return res, errno
+	}
+
+	total := res.Size()
+	if !shortAwayFromEOF(total, len(dest), off, h.size) {
+		return res, 0
+	}
+
+	// Short away from EOF: every readInner return site writes into dest, so the bytes
+	// already gathered stay valid and only the tail needs filling.
+	fuseShortReadCount.Add(1)
+	deadline := time.Now().Add(shortReadRefillBudget)
+
+	for attempt := 0; attempt < shortReadRefillAttempts && shortAwayFromEOF(total, len(dest), off, h.size); attempt++ {
+		if fuseCtx.Err() != nil {
+			return nil, syscall.EINTR
+		}
+		if time.Now().After(deadline) {
+			break // a blocked FUSE read puts smbd in D-state; bail out rather than hang
+		}
+		sub, subErrno := h.readInner(fuseCtx, dest[total:], off+int64(total))
+		if subErrno != 0 || sub == nil {
+			break
+		}
+		m := sub.Size()
+		if m == 0 {
+			break
+		}
+		total += m
+	}
+
+	if shortAwayFromEOF(total, len(dest), off, h.size) {
+		fuseShortReadFailed.Add(1)
+		logger.Printf("[ShortRead] Unfillable %d/%d bytes at offset %d for %s - EIO (a partial read would cache zeros)",
+			total, len(dest), off, filepath.Base(h.path))
+		return nil, syscall.EIO
+	}
+
+	fuseShortReadRepaired.Add(1)
+	return fuse.ReadResultData(dest[:total]), 0
+}
+
+func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	now := time.Now()
 	timing := &ReadTiming{StartTime: now}
 	defer func() {
@@ -2424,9 +2493,6 @@ DATA_READY:
 		raCache.Put(h.path, off, off+int64(n)-1, buf[:n])
 
 		ttffRead(h.path, srcFetchBlock, timing.HTTPFetchTime, n, off)
-		if n < len(dest) && off+int64(n) < h.size {
-			fuseShortReadCount.Add(1)
-		}
 
 		if warmup.DiskWarmup != nil && h.hash != "" {
 			if off <= warmup.FileSize {
@@ -4023,8 +4089,9 @@ func main() {
 		}
 
 		shortStream, shortFetch := native.ShortReadCounts()
+		repairedStream, unfilledStream := native.ShortReadRepairCounts()
 
-		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "fuse_short_reads":%d, "short_read_stream":%d, "short_read_fetch":%d}`,
+		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d}`,
 			AppVersion,
 			gc().ConfigPath,
 			time.Since(startTime),
@@ -4043,7 +4110,7 @@ func main() {
 			updater.LatestVersion(), updater.UpdateAvailable(),
 			warmupBucketsJSON,
 			hedgeTriggerTotal, hedgeCircuitOpenAny, fetchFlightDedupCount.Load(), peerEjectTotal, torr.V304BannedCount(),
-			fuseShortReadCount.Load(), shortStream, shortFetch)
+			fuseShortReadCount.Load(), fuseShortReadRepaired.Load(), fuseShortReadFailed.Load(), shortStream, shortFetch, repairedStream, unfilledStream)
 	})
 
 	http.HandleFunc("/webhook", handlePlexWebhook)
