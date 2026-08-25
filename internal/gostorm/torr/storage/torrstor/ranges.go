@@ -101,3 +101,25 @@ func pieceBudgetCount(count int, capacity, pieceLength int64) int {
 	}
 	return count
 }
+
+// minPerReaderReadahead keeps a scan burst from starving the reader that is actually playing.
+// Matches the floor updateRA already applies to the undivided value.
+const minPerReaderReadahead = 8 << 20
+
+// perReaderReadahead splits a whole-cache readahead across the active readers, the same divisor
+// getOffsetRange uses for the protected window. Undivided, a second reader asks the torrent to
+// prefetch more than the cache promises to keep, and what arrives outside the window is evictable
+// on arrival - or pinned and unevictable while still incomplete.
+func perReaderReadahead(total int64, readers int) int64 {
+	if readers < 1 {
+		readers = 1
+	}
+	ra := total / int64(readers)
+	if ra < minPerReaderReadahead {
+		ra = minPerReaderReadahead
+	}
+	if ra > total {
+		ra = total
+	}
+	return ra
+}

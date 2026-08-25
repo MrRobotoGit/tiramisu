@@ -180,9 +180,11 @@ func (c *Cache) AdjustRA(readahead int64) {
 		c.capacity = readahead * 3
 	}
 	if c.Readers() > 0 {
+		// Split by the same divisor getOffsetRange uses, or the readahead outruns the window.
+		perReader := perReaderReadahead(readahead, int(c.activeReaders.Load()))
 		c.muReaders.RLock()
 		for r := range c.readers {
-			r.SetReadahead(readahead)
+			r.SetReadahead(perReader)
 		}
 		c.muReaders.RUnlock()
 	}
