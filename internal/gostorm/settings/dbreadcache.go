@@ -10,15 +10,15 @@ type DBReadCache struct {
 	db             GoStormDB
 	listCache      map[string][]string
 	listCacheMutex sync.RWMutex
-	dataCache      map[[2]string][]byte
-	dataCacheMutex sync.RWMutex
+	dataCache      *dataLRU
+	dataCacheMutex sync.Mutex
 }
 
 func NewDBReadCache(db GoStormDB) GoStormDB {
 	cdb := &DBReadCache{
 		db:        db,
 		listCache: map[string][]string{},
-		dataCache: map[[2]string][]byte{},
+		dataCache: newDataLRU(DataCacheLimit),
 	}
 	return cdb
 }
@@ -36,12 +36,16 @@ func (v *DBReadCache) Get(xPath, name string) []byte {
 	}
 	cacheKey := v.makeDataCacheKey(xPath, name)
 
-	v.dataCacheMutex.RLock()
-	if data, ok := v.dataCache[cacheKey]; ok {
-		defer v.dataCacheMutex.RUnlock()
-		return data
+	// Re-check under the lock: CloseDB nils the cache, and unlike the bare map it replaced,
+	// calling into a nil *dataLRU dereferences.
+	v.dataCacheMutex.Lock()
+	if v.dataCache != nil {
+		if data, ok := v.dataCache.get(cacheKey); ok {
+			defer v.dataCacheMutex.Unlock()
+			return data
+		}
 	}
-	v.dataCacheMutex.RUnlock()
+	v.dataCacheMutex.Unlock()
 
 	// Если база данных закрыта, не пытаемся к ней обращаться
 	if v.db == nil {
@@ -51,7 +55,7 @@ func (v *DBReadCache) Get(xPath, name string) []byte {
 
 	v.dataCacheMutex.Lock()
 	if v.dataCache != nil { // Двойная проверка
-		v.dataCache[cacheKey] = data
+		v.dataCache.put(cacheKey, data)
 	}
 	v.dataCacheMutex.Unlock()
 
@@ -75,7 +79,7 @@ func (v *DBReadCache) Set(xPath, name string, value []byte) {
 
 	v.dataCacheMutex.Lock()
 	if v.dataCache != nil { // Двойная проверка
-		v.dataCache[cacheKey] = value
+		v.dataCache.put(cacheKey, value)
 	}
 	v.dataCacheMutex.Unlock()
 
@@ -133,7 +137,7 @@ func (v *DBReadCache) Rem(xPath, name string) {
 
 	v.dataCacheMutex.Lock()
 	if v.dataCache != nil {
-		delete(v.dataCache, cacheKey)
+		v.dataCache.remove(cacheKey)
 	}
 	v.dataCacheMutex.Unlock()
 
@@ -166,10 +170,8 @@ func (v *DBReadCache) Clear(xPath string) {
 
 	// Clear data cache entries for this xPath
 	v.dataCacheMutex.Lock()
-	for key := range v.dataCache {
-		if key[0] == xPath {
-			delete(v.dataCache, key)
-		}
+	if v.dataCache != nil {
+		v.dataCache.removePath(xPath)
 	}
 	v.dataCacheMutex.Unlock()
 }
