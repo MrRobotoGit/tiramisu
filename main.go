@@ -1950,6 +1950,32 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 	return fuse.ReadResultData(dest[:total]), 0
 }
 
+// writeWarmupFromFetch mirrors a fetched block into the SSD warmup files: the head window
+// always, the tail only until playback is confirmed (the frozen tail is the discovery snapshot).
+// Runs off the read path, from FetchAhead's completion callback.
+func writeWarmupFromFetch(h *MkvHandle, off int64, data []byte) {
+	if warmup.DiskWarmup == nil || h.hash == "" || len(data) == 0 {
+		return
+	}
+	if off <= warmup.FileSize {
+		warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, data, off)
+		return
+	}
+	if h.size <= warmup.TailWarmupSize || off < h.size-warmup.TailWarmupSize {
+		return
+	}
+	if val, ok := playbackRegistry.Load(h.path); ok {
+		ps := val.(*PlaybackState)
+		ps.mu.RLock()
+		confirmed := !ps.ConfirmedAt.IsZero()
+		ps.mu.RUnlock()
+		if confirmed {
+			return
+		}
+	}
+	warmup.DiskWarmup.WriteTail(h.hash, h.fileID, data, off, h.size)
+}
+
 func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	now := time.Now()
 	timing := &ReadTiming{StartTime: now}
@@ -2405,9 +2431,15 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	}
 
 	// FALLBACK: Data Fetch with V265 Retry
-	// If cache miss, use FetchBlock. Retry up to 3 times if torrent not ready (async Wake).
-	var buf []byte
+	// If cache miss, use FetchAhead. Retry up to 3 times if torrent not ready (async Wake).
 	var n int
+
+	// releaseFlight is set when this read leads the singleflight below. The read-ahead window
+	// keeps filling after this function returns, so the flight is released from the fill's
+	// completion callback (once the cache is populated) instead of on return - a follower woken
+	// earlier would find nothing cached and start a duplicate fetch of the same chunk.
+	releaseFlight := func() {}
+	fetchHandedOff := false
 
 	// Dedup concurrent misses in the same chunk: leader fetches, followers wait and copy.
 	if h.hash != "" {
@@ -2416,29 +2448,48 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		newFlight := &fetchFlight{done: make(chan struct{})}
 		if val, loaded := inFlightFetches.LoadOrStore(flightKey, newFlight); loaded {
 			fl := val.(*fetchFlight)
-			select {
-			case <-fl.done:
-			case <-fuseCtx.Done():
-				return nil, syscall.EINTR
-			}
 			copyStart := time.Now()
-			if nCopy := raCache.CopyTo(h.path, off, end, dest); nCopy > 0 {
-				fetchFlightDedupCount.Add(1)
-				timing.UsedCache = true
-				timing.BytesRead = nCopy
-				atomic.StoreInt64(&h.lastOff, off)
-				h.mu.Lock()
-				h.lastLen = nCopy
-				h.lastTime = now
-				h.mu.Unlock()
-				ttffRead(h.path, srcRACacheHit, time.Since(copyStart), nCopy, off)
-				return fuse.ReadResultData(dest[:nCopy]), 0
+			// The leader re-caches its window as it fills, so poll instead of waiting for the
+			// whole window: a follower one FUSE block behind the leader gets its bytes after one
+			// fill step, not after the remaining 15MB.
+			leaderDone := false
+			for {
+				if nCopy := raCache.CopyTo(h.path, off, end, dest); nCopy > 0 {
+					fetchFlightDedupCount.Add(1)
+					timing.UsedCache = true
+					timing.BytesRead = nCopy
+					atomic.StoreInt64(&h.lastOff, off)
+					h.mu.Lock()
+					h.lastLen = nCopy
+					h.lastTime = now
+					h.mu.Unlock()
+					ttffRead(h.path, srcRACacheHit, time.Since(copyStart), nCopy, off)
+					return fuse.ReadResultData(dest[:nCopy]), 0
+				}
+				if leaderDone {
+					break // leader finished without covering our range
+				}
+				select {
+				case <-fl.done:
+					leaderDone = true // one more CopyTo, then fall through
+				case <-fuseCtx.Done():
+					return nil, syscall.EINTR
+				case <-time.After(20 * time.Millisecond):
+				}
 			}
 			// Leader failed or missed our range — fetch directly, don't re-register.
 		} else {
+			var once sync.Once
+			releaseFlight = func() {
+				once.Do(func() {
+					inFlightFetches.Delete(flightKey)
+					close(newFlight.done)
+				})
+			}
 			defer func() {
-				inFlightFetches.Delete(flightKey)
-				close(newFlight.done)
+				if !fetchHandedOff {
+					releaseFlight()
+				}
 			}()
 		}
 	}
@@ -2459,20 +2510,36 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 			forceTorrentWarmupActive(h.hash, h.fileID)
 		}
 		fetchStart := time.Now()
-		bufPtr := readBufferPool.Get().(*[]byte)
-		defer readBufferPool.Put(bufPtr)
-
-		limit := fetchSize
-		if limit > int64(len(*bufPtr)) {
-			limit = int64(len(*bufPtr))
-		}
-
-		buf = (*bufPtr)[:limit]
 
 		for attempt := 0; attempt < 3; attempt++ {
-			nFetch, err := nativeBridge.FetchBlock(h.hash, h.fileID, off, buf)
+			bufPtr := readBufferPool.Get().(*[]byte)
+
+			limit := fetchSize
+			if limit > int64(len(*bufPtr)) {
+				limit = int64(len(*bufPtr))
+			}
+			buf := (*bufPtr)[:limit]
+
+			// The window keeps filling after this read returns. Re-cache on every step so the
+			// reads queued behind this one find their bytes as they land instead of waiting for
+			// the whole window; the buffer goes back to the pool only once the fill is done.
+			nFetch, err := nativeBridge.FetchAhead(h.hash, h.fileID, off, buf, dest[:target],
+				func(total int, done bool, _ error) {
+					if total > 0 {
+						raCache.Put(h.path, off, off+int64(total)-1, buf[:total])
+					}
+					if !done {
+						return
+					}
+					if total > 0 {
+						writeWarmupFromFetch(h, off, buf[:total])
+					}
+					releaseFlight()
+					readBufferPool.Put(bufPtr)
+				})
 			if err == nil && nFetch > 0 {
 				n = nFetch
+				fetchHandedOff = true
 				timing.HTTPFetchTime = time.Since(fetchStart)
 				goto DATA_READY
 			}
@@ -2494,27 +2561,9 @@ DATA_READY:
 	timing.BytesRead = target
 
 	if n > 0 {
-		raCache.Put(h.path, off, off+int64(n)-1, buf[:n])
-
+		// The bytes are already in dest and the read-ahead window behind them is still
+		// filling; raCache.Put and the SSD warmup writes happen in FetchAhead's callback.
 		ttffRead(h.path, srcFetchBlock, timing.HTTPFetchTime, n, off)
-
-		if warmup.DiskWarmup != nil && h.hash != "" {
-			if off <= warmup.FileSize {
-				warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, buf[:n], off)
-			} else if h.size > warmup.TailWarmupSize && off >= h.size-warmup.TailWarmupSize {
-				// Freeze tail SSD cache after playback confirmation to preserve discovery snapshot.
-				isConfirmed := false
-				if val, ok := playbackRegistry.Load(h.path); ok {
-					ps := val.(*PlaybackState)
-					ps.mu.RLock()
-					isConfirmed = !ps.ConfirmedAt.IsZero()
-					ps.mu.RUnlock()
-				}
-				if !isConfirmed {
-					warmup.DiskWarmup.WriteTail(h.hash, h.fileID, buf[:n], off, h.size)
-				}
-			}
-		}
 
 		// Update sequential detection state
 		atomic.StoreInt64(&h.lastOff, off)
@@ -2523,8 +2572,6 @@ DATA_READY:
 		h.mu.Unlock()
 
 		globalCleanupManager.UpdateOffset(h.path, off, target)
-
-		nCopy := copy(dest, buf[:n])
 
 		// Prefetch next chunk if in last 25% of current chunk and pump is absent or lagging.
 		chunkSize := raCache.ChunkSize(h.path)
@@ -2592,15 +2639,10 @@ DATA_READY:
 			}
 		}
 
-		return fuse.ReadResultData(dest[:nCopy]), 0
+		return fuse.ReadResultData(dest[:n]), 0
 	}
 
-	if target > len(buf) {
-		target = len(buf)
-	}
-
-	nCopy := copy(dest, buf[:target])
-	return fuse.ReadResultData(dest[:nCopy]), 0
+	return fuse.ReadResultData(dest[:0]), 0
 }
 
 // ownsPumpState reports whether a releasing handle still owns the pump registered

@@ -431,6 +431,142 @@ func (r *NativeReader) IsIdle(d time.Duration) bool {
 	return time.Since(r.lastActivity) > d
 }
 
+// fetchBlockTimeout bounds a stateless fetch. 3 retries x 8s = 27s max FUSE block, under the
+// 60s smbd D-state watchdog.
+const fetchBlockTimeout = 8 * time.Second
+
+// streamRangeFn opens a byte stream for [offset, offset+length) into pw and closes pw when the
+// stream ends. A var so FetchAhead can be exercised without a live torrent, the same injection
+// seam used by startStreamFn.
+var streamRangeFn = streamRange
+
+func streamRange(ctx context.Context, hash string, fileID int, offset, length int64, pw *io.PipeWriter) error {
+	t := torr.PeekTorrent(hash)
+	if t == nil || t.Torrent == nil {
+		return fmt.Errorf("torrent not found")
+	}
+	req, _ := http.NewRequestWithContext(ctx, "GET", "/stream", nil)
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, offset+length-1))
+	resp := &PipeResponseWriter{writer: pw, header: make(http.Header)}
+	go func() {
+		defer pw.Close()
+		t.Stream(fileID, req, resp)
+	}()
+	return nil
+}
+
+// fetchFillStep is how much the background fill gathers before reporting progress. Sized around
+// a torrent piece: smaller steps report nothing earlier (data lands piece by piece) and only
+// multiply the caller's re-cache work.
+var fetchFillStep = 4 << 20
+
+// FetchAhead fills buf with [offset, offset+len(buf)) but returns as soon as the first
+// len(dest) bytes are copied into dest. A blocking FUSE read needs one FUSE block, not the
+// whole read-ahead window: waiting for the window multiplied every cache miss by the ratio
+// between them (1MB asked, 16MB awaited) and is what made a miss a multi-second stall.
+//
+// buf belongs to FetchAhead until onFill reports done — the background fill keeps writing into
+// it — so the caller must not recycle buf before then, and may only read buf[:n] for the n it
+// was last handed. onFill(n, false, nil) fires as the window grows, so the caller can widen its
+// cache entry and let the reads behind this one land while the tail is still arriving; it fires
+// exactly once with done=true, including when the head itself fails.
+func (c *NativeClient) FetchAhead(hash string, fileID int, offset int64, buf, dest []byte, onFill func(n int, done bool, err error)) (int, error) {
+	head := len(dest)
+	if head > len(buf) {
+		head = len(buf)
+	}
+	if head <= 0 {
+		onFill(0, true, nil)
+		return 0, fmt.Errorf("empty read")
+	}
+
+	pr, pw := io.Pipe()
+	ctx, cancel := context.WithTimeout(context.Background(), fetchBlockTimeout)
+
+	if err := streamRangeFn(ctx, hash, fileID, offset, int64(len(buf)), pw); err != nil {
+		cancel()
+		pw.Close()
+		pr.Close()
+		onFill(0, true, err)
+		return 0, err
+	}
+
+	// Unblock the reads below if the stream stalls without closing the pipe.
+	go func() {
+		<-ctx.Done()
+		pr.Close()
+	}()
+
+	type headResult struct {
+		n   int
+		err error
+	}
+	ready := make(chan headResult, 1)
+
+	go func() {
+		// The caller's onFill releases the buffer and unblocks the reads dedup'd behind this
+		// one; a panic escaping it must not leave them waiting for a done that never comes.
+		finished := false
+		finish := func(n int, err error) {
+			finished = true
+			onFill(n, true, err)
+		}
+		defer func() {
+			cancel()
+			if r := recover(); r != nil {
+				log.Printf("[NativeReader] FetchAhead fill panicked at off=%d: %v", offset, r)
+				if !finished {
+					onFill(0, true, fmt.Errorf("fill panic: %v", r))
+				}
+			}
+		}()
+		n, err := io.ReadFull(pr, buf[:head])
+		if err == io.ErrUnexpectedEOF || (err == io.EOF && n > 0) {
+			shortReadFetch.Add(1)
+			err = nil
+		}
+		if err == nil && n > 0 {
+			copy(dest, buf[:n])
+		}
+		ready <- headResult{n, err}
+
+		if err != nil || n < head {
+			pr.Close()
+			finish(n, err)
+			return
+		}
+
+		total := n
+		for total < len(buf) {
+			end := total + fetchFillStep
+			if end > len(buf) {
+				end = len(buf)
+			}
+			m, stepErr := io.ReadFull(pr, buf[total:end])
+			total += m
+			if stepErr != nil {
+				pr.Close()
+				if stepErr == io.ErrUnexpectedEOF || stepErr == io.EOF {
+					if total < len(buf) {
+						shortReadFetch.Add(1)
+					}
+					stepErr = nil
+				}
+				finish(total, stepErr)
+				return
+			}
+			if total < len(buf) {
+				onFill(total, false, nil)
+			}
+		}
+		pr.Close()
+		finish(total, nil)
+	}()
+
+	r := <-ready
+	return r.n, r.err
+}
+
 // FetchBlock performs an atomic, stateless read from the Torrent Core.
 func (c *NativeClient) FetchBlock(hash string, fileID int, offset int64, p []byte) (int, error) {
 	// V255: Use PeekTorrent — same reasoning as startStream above.
