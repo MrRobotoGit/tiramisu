@@ -76,3 +76,28 @@ func mergeRange(ranges []Range) []Range {
 	}
 	return merged[:j+1]
 }
+
+// prefetchBudgetPct is the share of the cache the in-flight prefetch front may pin. At the
+// production 128MB/4MB configuration it yields the count of 12 that ran clean, so piece sizes
+// that already fit keep their behaviour and only oversized ones are trimmed.
+const prefetchBudgetPct = 40
+
+// pieceBudgetCount caps a prefetch count by the bytes it pins rather than the pieces it names.
+// An incomplete piece cannot be evicted - anacrolix keeps its own chunk bookkeeping, so dropping
+// one fails the hash check and bans the peer that supplied it - and piece length varies 1MB..8MB
+// across a library, so a fixed count reserves 8x more cache on one torrent than on another. Only
+// ever lowers count: raising it would widen the request front on small-piece torrents and trade
+// sequential focus for breadth.
+func pieceBudgetCount(count int, capacity, pieceLength int64) int {
+	if count <= 1 || capacity <= 0 || pieceLength <= 0 {
+		return count
+	}
+	max := int(capacity * prefetchBudgetPct / 100 / pieceLength)
+	if max < 1 {
+		max = 1
+	}
+	if max < count {
+		return max
+	}
+	return count
+}

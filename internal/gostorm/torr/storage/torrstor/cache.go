@@ -417,6 +417,9 @@ func (c *Cache) setLoadPriority(ranges []Range) {
 			}
 		}
 
+		// count names pieces; what it costs is bytes, and the pieces it pins cannot be evicted.
+		count = pieceBudgetCount(count, c.capacity, c.pieceLength)
+
 		if count < 1 {
 			count = 1
 		}
