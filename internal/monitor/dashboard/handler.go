@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"tiramisu/internal/monitor/collector"
+	"tiramisu/internal/monitor/logtail"
 )
 
 //go:embed dashboard.html
@@ -103,13 +103,10 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 }
 
 func tailFile(path string, n int) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	// Only the tail is needed; reading the whole file kept a 218MB log resident.
+	data := logtail.Read(path, 128*1024)
+	if data == nil {
 		return []string{}
-	}
-	// For large files, only use last 128KB
-	if len(data) > 128*1024 {
-		data = data[len(data)-128*1024:]
 	}
 	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	if len(all) > n {

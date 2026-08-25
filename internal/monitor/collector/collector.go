@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"tiramisu/internal/monitor/logtail"
 	"tiramisu/internal/catalog"
 )
 
@@ -227,12 +228,9 @@ func (c *Collector) parseShieldEvents() []ShieldEvent {
 	if c.logsDir == "" {
 		return nil
 	}
-	data, err := os.ReadFile(filepath.Join(c.logsDir, "tiramisu.log"))
-	if err != nil {
+	data := logtail.Read(filepath.Join(c.logsDir, "tiramisu.log"), 256*1024)
+	if data == nil {
 		return nil
-	}
-	if len(data) > 256*1024 {
-		data = data[len(data)-256*1024:]
 	}
 	cutoff := time.Now().Add(-shieldEventWindow)
 	var events []ShieldEvent
