@@ -343,6 +343,9 @@ func (r *NativeReader) readAtOnce(p []byte, off int64) (n int, err error) {
 // V286: Interrupt unblocks a blocked ReadAt by closing the pipe reader.
 // Sets interrupted flag so ReadAt returns ErrInterrupted reliably.
 func (r *NativeReader) Interrupt() {
+	if r == nil {
+		return // the handle was released; the pump keeps its own captured copy
+	}
 	r.interrupted.Store(true)
 	if pr := r.pipeReaderAtomic.Load(); pr != nil {
 		pr.Close() // Reader side close is enough to unblock ReadFull

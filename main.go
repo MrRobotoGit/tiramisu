@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -1421,7 +1422,9 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 					// the retry path re-issues it with fresh peer selection; ResetShield
 					// clears adaptive state. interruptPending prevents cascade with seeks.
 					if ps := sharedState; !ps.interruptPending.Swap(true) {
-						h.nativeReader.Interrupt()
+						// pumpReader, not h.nativeReader: Release nils the field while the pump
+						// keeps its captured copy alive, so the field can be nil right here.
+						pumpReader.Interrupt()
 						torrstor.ResetShield()
 						lastRevival = now
 						watchSamples = watchSamples[:0]
@@ -1879,7 +1882,7 @@ func safeGo(fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[PANIC] Background goroutine recovered: %v", r)
+				logger.Printf("[PANIC] Background goroutine recovered: %v\n%s", r, debug.Stack())
 			}
 		}()
 		fn()
@@ -2084,7 +2087,8 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	// only the first to detect the seek fires Interrupt(); others skip until the pump
 	// restarts and resets the flag (preventing the thrash loop seen in the logs).
 	budget := int64(gc().ReadAheadBudget)
-	if h.nativeReader != nil && shouldInterruptPump(prevOff, off, budget, shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize)) {
+	seekReader := h.nativeReader // capture: a concurrent Release nils the field
+	if seekReader != nil && shouldInterruptPump(prevOff, off, budget, shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize)) {
 		// Promote to primary on a genuine seek once playback is confirmed/inferred - mirrors the
 		// refCount 0->1 "primary reconnect" promotion at attach time (main.go:1030): a secondary
 		// (attached) handle doing a real seek during confirmed playback IS the player, and needs
@@ -2103,7 +2107,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 			ps = val.(*NativePumpState)
 		}
 		if ps == nil || !ps.interruptPending.Swap(true) {
-			h.nativeReader.Interrupt()
+			seekReader.Interrupt()
 			torrstor.ResetShield()
 			h.state.Store(stateStreaming)
 			logger.Printf("[V286b] Interrupt pump for seek+shield reset: %dMB → %dMB (%s→%s)",
