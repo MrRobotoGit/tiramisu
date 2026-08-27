@@ -155,6 +155,17 @@ func (c *Cache) Close() error {
 	// Note: c.storage.caches cleanup is handled by Storage.CloseHash() and Storage.Close()
 	// to avoid concurrent map modification during range iteration in Storage.Close().
 
+	// Free the piece buffers before dropping the map. Nilling c.pieces does not make them
+	// collectable: the anacrolix fork caches storage.Piece on every torrent piece
+	// (piece.cachedStorage), so each *Piece stays reachable from there and pins its whole buffer
+	// - 773MB still held after 35h with nothing playing. drop, not Release: recycling into the
+	// global pool makes a torrent with a different piece length miss on every allocation. And
+	// mPiece, not Piece.Release: the latter takes c.muReaders.RLock, held for writing here, and
+	// a Go RWMutex is not reentrant.
+	for _, p := range c.pieces {
+		p.mPiece.drop()
+	}
+
 	c.readers = nil
 	c.pieces = nil
 	c.muReaders.Unlock()

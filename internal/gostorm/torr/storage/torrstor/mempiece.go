@@ -14,6 +14,10 @@ var memBufferPool = sync.Pool{
 	},
 }
 
+// memBufferPut is the only way a buffer re-enters the shared pool; a var so tests can observe
+// what gets recycled.
+var memBufferPut = func(b []byte) { memBufferPool.Put(b) }
+
 type MemPiece struct {
 	piece *Piece
 
@@ -94,9 +98,21 @@ func (p *MemPiece) Release() {
 	defer p.mu.Unlock()
 	if p.buffer != nil {
 		// V96: Put the buffer back into the pool for future reuse
-		memBufferPool.Put(p.buffer)
+		memBufferPut(p.buffer)
 		p.buffer = nil
 	}
+	atomic.StoreInt64(&p.piece.Size, 0)
+	p.piece.Complete.Store(false)
+}
+
+// drop frees the buffer without recycling it. The pool is global and holds no notion of piece
+// length: a Get that draws the wrong size discards the buffer and allocates anyway, so handing
+// it a closing torrent's buffers makes every allocation of the torrent still playing miss. Only
+// same-cache eviction, where the length always matches, may recycle.
+func (p *MemPiece) drop() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.buffer = nil
 	atomic.StoreInt64(&p.piece.Size, 0)
 	p.piece.Complete.Store(false)
 }
