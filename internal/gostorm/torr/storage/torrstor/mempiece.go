@@ -51,9 +51,10 @@ func (p *MemPiece) WriteAt(b []byte, off int64) (n int, err error) {
 		}
 	}
 	n = copy(p.buffer[off:], b[:])
-	p.piece.Size += int64(n)
-	if p.piece.Size > p.piece.cache.pieceLength {
-		p.piece.Size = p.piece.cache.pieceLength
+	// Size is read by cleanPieces/GetState under the cache lock, written here under the piece
+	// lock: two different mutexes, so the accesses have to be atomic.
+	if sz := atomic.AddInt64(&p.piece.Size, int64(n)); sz > p.piece.cache.pieceLength {
+		atomic.StoreInt64(&p.piece.Size, p.piece.cache.pieceLength)
 	}
 	atomic.StoreInt64(&p.piece.Accessed, time.Now().Unix())
 	return
@@ -75,7 +76,7 @@ func (p *MemPiece) ReadAt(b []byte, off int64) (n int, err error) {
 	}
 	n = copy(b, p.buffer[int(off) : int(off)+size][:])
 	atomic.StoreInt64(&p.piece.Accessed, time.Now().Unix())
-	if int64(len(b))+off >= p.piece.Size {
+	if int64(len(b))+off >= atomic.LoadInt64(&p.piece.Size) {
 		// V227: Non-blocking rate-limited cleanup trigger
 		select {
 		case p.piece.cache.cleanTrigger <- struct{}{}:
@@ -96,6 +97,6 @@ func (p *MemPiece) Release() {
 		memBufferPool.Put(p.buffer)
 		p.buffer = nil
 	}
-	p.piece.Size = 0
+	atomic.StoreInt64(&p.piece.Size, 0)
 	p.piece.Complete.Store(false)
 }

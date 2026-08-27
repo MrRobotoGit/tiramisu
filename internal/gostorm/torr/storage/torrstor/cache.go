@@ -199,15 +199,15 @@ func (c *Cache) GetState() *state.CacheState {
 	c.muReaders.RLock()
 	if len(c.pieces) > 0 {
 		for _, p := range c.pieces {
-			if p.Size > 0 {
-				fill += p.Size
+			if sz := atomic.LoadInt64(&p.Size); sz > 0 {
+				fill += sz
 				priority := 0
 				if c.torrent != nil {
 					priority = int(c.torrent.PieceState(p.Id).Priority)
 				}
 				piecesState[p.Id] = state.ItemState{
 					Id:        p.Id,
-					Size:      p.Size,
+					Size:      atomic.LoadInt64(&p.Size),
 					Length:    c.pieceLength,
 					Completed: p.Complete.Load(),
 					Priority:  priority,
@@ -336,6 +336,10 @@ func (c *Cache) getRemPieces() []*Piece {
 		c.muReaders.RUnlock()
 		return nil
 	}
+	// Capture the map under the lock: the scan below runs unlocked, and Close nils the field
+	// while holding the write lock. The captured map stays valid on its own - a concurrent
+	// Close only means the sizes read from it are already zero.
+	pieces := c.pieces
 	for r := range c.readers {
 		r.checkReader()
 		if r.isUse {
@@ -348,11 +352,12 @@ func (c *Cache) getRemPieces() []*Piece {
 	// V305: Rebuild bitmap for O(1) piece-in-range checks
 	fillPieceInRange(c.pieceInRange, ranges, c.pieceCount)
 
-	for id, p := range c.pieces {
-		if p.Size > 0 {
-			fill += p.Size
+	for id, p := range pieces {
+		sz := atomic.LoadInt64(&p.Size)
+		if sz > 0 {
+			fill += sz
 		}
-		if !pieceEvictable(p.Size, p.Complete.Load(), c.pieceInRange[id]) {
+		if !pieceEvictable(sz, p.Complete.Load(), c.pieceInRange[id]) {
 			continue
 		}
 		if !c.isIdInFileBE(ranges, id) {
