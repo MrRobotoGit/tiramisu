@@ -2,12 +2,12 @@ package torr
 
 import (
 	"errors"
-	"tiramisu/internal/gostorm/torrshash"
 	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+	"tiramisu/internal/gostorm/torrshash"
 
 	utils2 "tiramisu/internal/gostorm/utils"
 

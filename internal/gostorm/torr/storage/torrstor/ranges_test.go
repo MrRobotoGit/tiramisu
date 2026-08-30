@@ -56,7 +56,7 @@ func TestInRanges(t *testing.T) {
 			ind:    35,
 		},
 		{
-			name:   "Large set of ranges",
+			name: "Large set of ranges",
 			ranges: []Range{
 				{Start: 0, End: 5},
 				{Start: 10, End: 15},

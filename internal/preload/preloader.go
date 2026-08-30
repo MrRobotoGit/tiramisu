@@ -80,4 +80,3 @@ func (pp *PeerPreloader) Cleanup() {
 		pp.logger.Printf("Cleanup: removed %d stale strategy entries", removed)
 	}
 }
-

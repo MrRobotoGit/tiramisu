@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"tiramisu/internal/monitor/logtail"
 	"tiramisu/internal/catalog"
+	"tiramisu/internal/monitor/logtail"
 )
 
 const speedHistorySize = 60
@@ -661,18 +661,18 @@ var (
 	reGroupTag    = regexp.MustCompile(`-[A-Za-z0-9]+$`)
 	reYearTitle   = regexp.MustCompile(`[.\s]((?:19|20)\d{2})[.\s]`)
 	reBadge4K     = regexp.MustCompile(`(?i)2160p|4[kK]|uhd`)
-	reBadgeDV    = regexp.MustCompile(`(?i)(?:^|[._\s-])dv(?:$|[._\s-])|dovi|dolby.?vision`)
-	reBadgeHDR   = regexp.MustCompile(`(?i)hdr10\+?|(?:^|[._\s])hdr(?:$|[._\s])`)
-	reBadge1080  = regexp.MustCompile(`(?i)1080p`)
-	reBadgeAtmos = regexp.MustCompile(`(?i)atmos`)
+	reBadgeDV     = regexp.MustCompile(`(?i)(?:^|[._\s-])dv(?:$|[._\s-])|dovi|dolby.?vision`)
+	reBadgeHDR    = regexp.MustCompile(`(?i)hdr10\+?|(?:^|[._\s])hdr(?:$|[._\s])`)
+	reBadge1080   = regexp.MustCompile(`(?i)1080p`)
+	reBadgeAtmos  = regexp.MustCompile(`(?i)atmos`)
 	reBadgeTrueHD = regexp.MustCompile(`(?i)truehd`)
-	reBadgeDTSHD = regexp.MustCompile(`(?i)dts[- ]?hd|dts[- ]?ma`)
-	reBadgeDTS   = regexp.MustCompile(`(?i)\bdts\b`)
-	reBadgeDDP   = regexp.MustCompile(`(?i)ddp|dd\+|eac3`)
-	reBadgeDD51  = regexp.MustCompile(`(?i)dd5|ac3`)
-	reBadge71    = regexp.MustCompile(`7\.1`)
-	reBadge51    = regexp.MustCompile(`5\.1`)
-	reBadge20    = regexp.MustCompile(`2\.0`)
+	reBadgeDTSHD  = regexp.MustCompile(`(?i)dts[- ]?hd|dts[- ]?ma`)
+	reBadgeDTS    = regexp.MustCompile(`(?i)\bdts\b`)
+	reBadgeDDP    = regexp.MustCompile(`(?i)ddp|dd\+|eac3`)
+	reBadgeDD51   = regexp.MustCompile(`(?i)dd5|ac3`)
+	reBadge71     = regexp.MustCompile(`7\.1`)
+	reBadge51     = regexp.MustCompile(`5\.1`)
+	reBadge20     = regexp.MustCompile(`2\.0`)
 	reQualityTail = regexp.MustCompile(`(?i)[.\s](2160p|1080p|720p|4k|uhd|hdr|dv|dovi|web|bluray|remux)\b.*`)
 )
 
@@ -734,7 +734,9 @@ func (c *Collector) enrichTorrents(torrents []TorrentInfo) {
 			if sess.AudioCodec != "" {
 				switch {
 				case strings.Contains(sess.AudioCodec, "truehd"):
-					if t.Audio == "" { t.Audio = "TrueHD" }
+					if t.Audio == "" {
+						t.Audio = "TrueHD"
+					}
 				case sess.AudioCodec == "eac3":
 					t.Audio = "DD+"
 				case strings.Contains(sess.AudioCodec, "dca"): // DTS family
@@ -777,16 +779,16 @@ type plexMediaContainer struct {
 }
 
 type plexVideo struct {
-	Type              string `xml:"type,attr"`            // "movie" or "episode"
-	Title             string `xml:"title,attr"`           // episode title (or movie title)
-	GrandparentTitle  string `xml:"grandparentTitle,attr"` // series title (episodes only)
-	GrandparentYear   string `xml:"grandparentYear,attr"`  // series year (episodes only)
-	Year              string `xml:"year,attr"`
-	Thumb             string `xml:"thumb,attr"`
-	GrandparentThumb  string `xml:"grandparentThumb,attr"` // series poster (episodes only)
-	ParentIndex       int    `xml:"parentIndex,attr"`      // season number
-	Index             int    `xml:"index,attr"`            // episode number
-	Media []struct {
+	Type             string `xml:"type,attr"`             // "movie" or "episode"
+	Title            string `xml:"title,attr"`            // episode title (or movie title)
+	GrandparentTitle string `xml:"grandparentTitle,attr"` // series title (episodes only)
+	GrandparentYear  string `xml:"grandparentYear,attr"`  // series year (episodes only)
+	Year             string `xml:"year,attr"`
+	Thumb            string `xml:"thumb,attr"`
+	GrandparentThumb string `xml:"grandparentThumb,attr"` // series poster (episodes only)
+	ParentIndex      int    `xml:"parentIndex,attr"`      // season number
+	Index            int    `xml:"index,attr"`            // episode number
+	Media            []struct {
 		VideoResolution string `xml:"videoResolution,attr"`
 		AudioCodec      string `xml:"audioCodec,attr"`
 		AudioChannels   int    `xml:"audioChannels,attr"`
@@ -866,8 +868,8 @@ func (c *Collector) fetchPlexSessions() map[string]plexSession {
 }
 
 var (
-	reVideoExt  = regexp.MustCompile(`(?i)\.(mkv|mp4|avi|mov|ts|m2ts)$`)
-	reHexHash8  = regexp.MustCompile(`[_.\s][a-f0-9]{8}$`)
+	reVideoExt = regexp.MustCompile(`(?i)\.(mkv|mp4|avi|mov|ts|m2ts)$`)
+	reHexHash8 = regexp.MustCompile(`[_.\s][a-f0-9]{8}$`)
 )
 
 func cleanTorrentTitle(raw string) string {

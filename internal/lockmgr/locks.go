@@ -13,7 +13,7 @@ type lockEntry struct {
 
 // LockManager provides per-file locking to prevent metadata fetch stampedes.
 // V140: Uses reference counting to prevent memory leaks (unbounded map growth).
-// WARNING: Locks are NOT recursive. Calling Lock() twice on the same path within 
+// WARNING: Locks are NOT recursive. Calling Lock() twice on the same path within
 // the same goroutine call stack will cause a DEADLOCK.
 type LockManager struct {
 	locks map[string]*lockEntry // Per-file active locks
@@ -65,7 +65,7 @@ func (lm *LockManager) Stop() {
 
 // LockStats structure
 type LockStats struct {
-	TotalLocks    int
+	TotalLocks int
 }
 
 // Stats returns current active lock statistics

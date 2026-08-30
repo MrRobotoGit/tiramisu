@@ -83,4 +83,3 @@ func (dc *DirCache) CleanupExpired() {
 }
 
 // Global instance
-

@@ -16,7 +16,7 @@ import (
 // Runs in background to avoid delaying mount operation
 type StartupCacheBuilder struct {
 	sourcePath string
-	metaCache   *cache.LRUCache
+	metaCache  *cache.LRUCache
 	logger     *log.Logger
 
 	// Statistics

@@ -100,7 +100,6 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
-
 // migrateInodes reads inode_map.json and inserts all entries.
 // The actual JSON format is:
 //

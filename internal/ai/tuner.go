@@ -53,10 +53,10 @@ const crisisCycle = 12 // 60s
 
 // AIProvider holds configuration for LLM backends
 type AIProvider struct {
-	URL          string     // Base URL (local: http://127.0.0.1:8085, openrouter: https://openrouter.ai/api/v1)
-	APIKey       string     // API key for cloud providers (empty for local)
-	Model        string     // Model ID for cloud providers (empty for local)
-	IsLocal      bool       // true = llama.cpp, false = cloud API
+	URL           string     // Base URL (local: http://127.0.0.1:8085, openrouter: https://openrouter.ai/api/v1)
+	APIKey        string     // API key for cloud providers (empty for local)
+	Model         string     // Model ID for cloud providers (empty for local)
+	IsLocal       bool       // true = llama.cpp, false = cloud API
 	GetBufferPct  func() int // Returns FUSE buffer fill percentage (0-100)
 	GetSaturation func() int // Returns number of active semaphore slots (concurrent FUSE readers)
 }
