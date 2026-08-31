@@ -69,6 +69,43 @@ type Cache struct {
 	// V305: Bitmap for O(1) piece-in-range check during eviction.
 	// Replaces O(N*R) inRanges() scan with O(N) array lookup.
 	pieceInRange []bool
+
+	// free holds spare piece buffers for reuse inside this cache only. A cache's piece length
+	// never changes, so a buffer taken from here always fits - and unlike sync.Pool the
+	// collector does not drain it, which is what made the shared pool useless: at 37.9 GC/min
+	// a recycled buffer lived ~3s, and make() still ran 34,883 times for 96GB, 42% of every
+	// byte the process allocated. Bounded by freeCap: one eviction is followed by one
+	// allocation, so a few spare buffers absorb the handoff without holding the cache twice.
+	free    [][]byte
+	freeCap int
+	muFree  sync.Mutex
+}
+
+// getBuffer returns a spare buffer of exactly pieceLength, or nil when none is held.
+func (c *Cache) getBuffer() []byte {
+	c.muFree.Lock()
+	defer c.muFree.Unlock()
+	if len(c.free) == 0 {
+		return nil
+	}
+	b := c.free[len(c.free)-1]
+	c.free[len(c.free)-1] = nil
+	c.free = c.free[:len(c.free)-1]
+	return b
+}
+
+// putBuffer keeps a buffer for reuse, up to freeCap. A buffer of the wrong length, or one
+// offered to a closed or uninitialised cache, is dropped for the collector.
+func (c *Cache) putBuffer(b []byte) {
+	if int64(len(b)) != c.pieceLength || c.pieceLength == 0 || c.isClosed.Load() {
+		return
+	}
+	c.muFree.Lock()
+	defer c.muFree.Unlock()
+	if len(c.free) >= c.freeCap {
+		return
+	}
+	c.free = append(c.free, b)
 }
 
 func NewCache(capacity int64, storage *Storage) *Cache {
@@ -105,6 +142,15 @@ func (c *Cache) Init(info *metainfo.Info, hash metainfo.Hash) {
 	c.pieceLength = info.PieceLength
 	c.pieceCount = info.NumPieces()
 	c.hash = hash
+	// A byte budget, not a piece count: cleanPieces evicts at most once per second, so a
+	// batch is throughput/second worth of pieces - about 8 at 63MB/s with 8MB pieces. Sizing
+	// on a fraction of the piece count did the opposite of what was needed, shrinking the
+	// freelist exactly where pieces are largest: 4K streaming got freeCap 2 against batches
+	// of 8, and 90% of the freed buffers were dropped for the collector to re-allocate.
+	c.freeCap = int(c.capacity / 4 / c.pieceLength)
+	if c.freeCap < 2 {
+		c.freeCap = 2
+	}
 
 	for i := 0; i < c.pieceCount; i++ {
 		c.pieces[i] = NewPiece(i, c)
@@ -165,6 +211,10 @@ func (c *Cache) Close() error {
 	for _, p := range c.pieces {
 		p.mPiece.drop()
 	}
+
+	c.muFree.Lock()
+	c.free = nil
+	c.muFree.Unlock()
 
 	c.readers = nil
 	c.pieces = nil

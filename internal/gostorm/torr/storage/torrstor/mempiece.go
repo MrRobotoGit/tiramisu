@@ -7,17 +7,6 @@ import (
 	"time"
 )
 
-// V96: Global buffer pool to reuse memory pieces and reduce GC pressure
-var memBufferPool = sync.Pool{
-	New: func() interface{} {
-		return nil // Return nil so we can handle specific piece length allocations
-	},
-}
-
-// memBufferPut is the only way a buffer re-enters the shared pool; a var so tests can observe
-// what gets recycled.
-var memBufferPut = func(b []byte) { memBufferPool.Put(b) }
-
 type MemPiece struct {
 	piece *Piece
 
@@ -40,16 +29,7 @@ func (p *MemPiece) WriteAt(b []byte, off int64) (n int, err error) {
 		default:
 		}
 
-		// V96: Try to get a buffer from the pool
-		if pooledBuf := memBufferPool.Get(); pooledBuf != nil {
-			buf := pooledBuf.([]byte)
-			// Check if the pooled buffer has the correct capacity
-			if int64(len(buf)) == p.piece.cache.pieceLength {
-				p.buffer = buf
-			}
-		}
-
-		// If pool was empty or size mismatch, allocate once
+		p.buffer = p.piece.cache.getBuffer()
 		if p.buffer == nil {
 			p.buffer = make([]byte, p.piece.cache.pieceLength, p.piece.cache.pieceLength)
 		}
@@ -97,18 +77,15 @@ func (p *MemPiece) Release() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.buffer != nil {
-		// V96: Put the buffer back into the pool for future reuse
-		memBufferPut(p.buffer)
+		p.piece.cache.putBuffer(p.buffer)
 		p.buffer = nil
 	}
 	atomic.StoreInt64(&p.piece.Size, 0)
 	p.piece.Complete.Store(false)
 }
 
-// drop frees the buffer without recycling it. The pool is global and holds no notion of piece
-// length: a Get that draws the wrong size discards the buffer and allocates anyway, so handing
-// it a closing torrent's buffers makes every allocation of the torrent still playing miss. Only
-// same-cache eviction, where the length always matches, may recycle.
+// drop frees the buffer without recycling it, for a cache that is closing: its freelist is
+// discarded in the same breath, so keeping the buffer would only delay the collector.
 func (p *MemPiece) drop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
