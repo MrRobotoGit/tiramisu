@@ -431,15 +431,92 @@ type TVShow struct {
 
 // TVDetail is the full TV show details response from TMDB.
 type TVDetail struct {
-	ID               int         `json:"id"`
-	Name             string      `json:"name"`
-	OriginalName     string      `json:"original_name"`
-	FirstAirDate     string      `json:"first_air_date"`
-	LastAirDate      string      `json:"last_air_date"`
-	NextEpisodeToAir interface{} `json:"next_episode_to_air"`
-	NumberOfSeasons  int         `json:"number_of_seasons"`
-	Seasons          []Season    `json:"seasons"`
-	WatchProviders   interface{} `json:"watch/providers"`
+	ID               int          `json:"id"`
+	Name             string       `json:"name"`
+	OriginalName     string       `json:"original_name"`
+	FirstAirDate     string       `json:"first_air_date"`
+	LastAirDate      string       `json:"last_air_date"`
+	NextEpisodeToAir *NextEpisode `json:"next_episode_to_air"`
+	NumberOfSeasons  int          `json:"number_of_seasons"`
+	Seasons          []Season     `json:"seasons"`
+	WatchProviders   interface{}  `json:"watch/providers"`
+}
+
+// NextEpisode is TMDB's next_episode_to_air: the first episode of the show that
+// has not aired yet. Everything before it in that season has aired.
+type NextEpisode struct {
+	SeasonNumber  int    `json:"season_number"`
+	EpisodeNumber int    `json:"episode_number"`
+	AirDate       string `json:"air_date"`
+}
+
+// TVLocalizedNames returns the show's name in each of the given TMDB language tags.
+// A release often uses the localized title ("Operazione speciale: Lioness"), which
+// alternative_titles does not always carry. Duplicates and blanks are dropped.
+func (c *Client) TVLocalizedNames(ctx context.Context, tmdbID int, languages []string) []string {
+	var names []string
+	seen := make(map[string]bool)
+	for _, lang := range languages {
+		if err := c.limiter.Wait(ctx); err != nil {
+			return names
+		}
+		urlStr := fmt.Sprintf("%s/tv/%d?api_key=%s&language=%s", baseURL, tmdbID, c.apiKey, url.QueryEscape(lang))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+		if err != nil {
+			continue
+		}
+		resp, err := catalog.Do(ctx, c.http, req)
+		if err != nil {
+			continue
+		}
+		var payload struct {
+			Name string `json:"name"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&payload)
+		resp.Body.Close()
+		if err != nil || payload.Name == "" || seen[payload.Name] {
+			continue
+		}
+		seen[payload.Name] = true
+		names = append(names, payload.Name)
+	}
+	return names
+}
+
+// Episode is a single episode from a TMDB season response.
+type Episode struct {
+	EpisodeNumber int    `json:"episode_number"`
+	Name          string `json:"name"`
+	AirDate       string `json:"air_date"`
+}
+
+// TVSeasonEpisodes returns a season's episode list. language is a TMDB language tag
+// ("en-US", "it-IT"); episode names are localized, so the same season fetched in two
+// languages gives the two spellings a release may legitimately use.
+func (c *Client) TVSeasonEpisodes(ctx context.Context, tmdbID, season int, language string) ([]Episode, error) {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
+
+	urlStr := fmt.Sprintf("%s/tv/%d/season/%d?api_key=%s&language=%s", baseURL, tmdbID, season, c.apiKey, url.QueryEscape(language))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := catalog.Do(ctx, c.http, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var payload struct {
+		Episodes []Episode `json:"episodes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload.Episodes, nil
 }
 
 // Season represents a TV season.

@@ -18,7 +18,9 @@ var reShowMarker = regexp.MustCompile(`(?i)[\s._\-\[]s\d{1,2}\s*e?\d{0,3}\b|\bs\
 var reShowYear = regexp.MustCompile(`\b(19|20)\d{2}\b`)
 
 // normalizeShowTitle folds a title down to what two spellings of the same show
-// have in common: accents, punctuation and separators all disappear.
+// have in common: accents, punctuation and separators all disappear. Apostrophes
+// are dropped rather than turned into separators, since TMDB writes "It's All Good"
+// where a release writes "Its All Good"; splitting the word made them disagree.
 func normalizeShowTitle(s string) string {
 	t := transform.Chain(norm.NFKD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
 	if folded, _, err := transform.String(t, s); err == nil {
@@ -30,11 +32,21 @@ func normalizeShowTitle(s string) string {
 		switch {
 		case unicode.IsLetter(r) || unicode.IsDigit(r):
 			b.WriteRune(r)
+		case isApostrophe(r):
+			// dropped, not separated
 		default:
 			b.WriteRune(' ')
 		}
 	}
 	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func isApostrophe(r rune) bool {
+	switch r {
+	case '\'', '\u2019', '\u02bc', '`', '\u00b4':
+		return true
+	}
+	return false
 }
 
 // showPrefixFromFilename returns the show name a file claims to belong to, or ""
@@ -52,14 +64,22 @@ func showPrefixFromFilename(filename string) string {
 
 // titlesMatch accepts a prefix that equals a known title or extends it with more
 // words: "lucky 2026 extended" still names Lucky, "one day" does not name Day One.
+// Word boundaries also disagree across an elision ("L'importante" vs "L.importante"),
+// so equality is additionally checked with every space removed — equality only, since
+// prefix rules on a squashed string would let "the bear" match "the bears".
 func titlesMatch(prefix, known string) bool {
 	if prefix == "" || known == "" {
 		return false
 	}
-	return prefix == known ||
+	if prefix == known ||
 		strings.HasPrefix(prefix, known+" ") ||
-		strings.HasPrefix(known, prefix+" ")
+		strings.HasPrefix(known, prefix+" ") {
+		return true
+	}
+	return squashSpaces(prefix) == squashSpaces(known)
 }
+
+func squashSpaces(s string) string { return strings.ReplaceAll(s, " ", "") }
 
 // filesMatchShow reports whether a torrent's real contents belong to the show we
 // asked for. Release titles are written by whoever uploaded them; the files
