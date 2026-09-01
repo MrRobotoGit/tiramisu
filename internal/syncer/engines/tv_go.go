@@ -62,11 +62,8 @@ type TVGoEngine struct {
 	// ~25s of rate-limited calls. A show met for the first time is always fetched.
 	knownTitles map[int][]string
 
-	// tmdbLangs are the languages episode names are fetched in; seasonEpNames caches
-	// them per run, keyed "tmdbID:season" — unlike aliases, names of a season still
-	// airing get filled in as episodes go out.
-	tmdbLangs     []string
-	seasonEpNames map[string]map[int][]string
+	// tmdbLangs are the languages a show's localized name is fetched in.
+	tmdbLangs []string
 }
 
 // TVEpisodeEntry is a single entry in the TV episode registry.
@@ -114,13 +111,6 @@ const (
 	// false rejects. A torrent that reaches here has already been downloaded, so
 	// rejecting costs nothing but the discard.
 	tvShowMatchEnforce = true
-	// tvEpisodeMatchEnforce turns the episode-name check from reporting into rejecting.
-	// Enabled 2026-08-31 after a full run: of 19 distinct firings, 16 were releases of
-	// unrelated shows pulled in by a one-word show title (FROM returned 401 Prowlarr
-	// results including "escape from planet klongo"), the defect a title-only check
-	// cannot see. The 3 false ones are shows naming a story arc instead of the episode
-	// ("Casualty S46E05 Lethal Legacy Episode 5").
-	tvEpisodeMatchEnforce = true
 
 	tvUpgradeThreshold = 1.2
 	tvSinglesLimit     = 15
@@ -197,7 +187,6 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 		exclLanguages:    ExcludedLanguageSet(cfg.Language.ExcludedFlags),
 		weights:          cfg.Weights,
 		tmdbLangs:        TMDBEpisodeLanguages(cfg.Language.PreferredFlags),
-		seasonEpNames:    make(map[string]map[int][]string),
 	}
 
 	e.registry = e.loadRegistry()
@@ -264,7 +253,6 @@ func (e *TVGoEngine) Run(ctx context.Context) error {
 	// B1.1: reset per-run state so repeated scheduler invocations start clean.
 	// processedThisRun and stats are long-lived struct fields, not local vars.
 	e.processedThisRun = make(map[string]bool)
-	e.seasonEpNames = make(map[string]map[int][]string)
 	e.stats = TVSyncStats{}
 	e.populateRegistryFromExisting()
 	e.reconcileRegistry()
@@ -819,8 +807,7 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 	// "Prowlarr worked" and suppress the fallback for the season that has no results at
 	// all (production: Dark Matter S02, Ted Lasso S04).
 	covered := make(map[int]bool)
-	spec := classifySpec{tmdbID: tmdbID, showName: showName, startSeason: startSeason, endSeason: endSeason, seasonEps: airedSeasonEps}
-	for _, c := range e.classifyAndFilter(ctx, allStreams, spec) {
+	for _, c := range e.classifyAndFilter(allStreams, startSeason, endSeason, airedSeasonEps) {
 		covered[c.Season] = true
 	}
 	var missing []int
@@ -864,27 +851,14 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		e.logger.Printf("    Torrentio fallback for S%v: %d streams total from %d eps in %v", missing, len(allStreams), epsFetched, time.Since(tt).Round(time.Millisecond))
 	}
 
-	spec.report = true
-	return e.classifyAndFilter(ctx, allStreams, spec)
+	return e.classifyAndFilter(allStreams, startSeason, endSeason, airedSeasonEps)
 }
 
 // classifyAndFilter runs classifyStream on each raw stream and keeps only those matching the
 // target season range and TMDB's canonical episode count. Used both to decide whether Prowlarr's
 // results are usable at all (fallback trigger) and to build the final result, so both checks stay
 // in sync.
-// classifySpec carries the show identity and season bounds one classification pass needs.
-// report is off for the coverage pass so a mismatch is not logged twice per stream.
-type classifySpec struct {
-	tmdbID      int
-	showName    string
-	startSeason int
-	endSeason   int
-	seasonEps   map[int]int
-	report      bool
-}
-
-func (e *TVGoEngine) classifyAndFilter(ctx context.Context, streams []prowlarr.Stream, spec classifySpec) []TVStream {
-	startSeason, endSeason, tmdbSeasonEps, tmdbID := spec.startSeason, spec.endSeason, spec.seasonEps, spec.tmdbID
+func (e *TVGoEngine) classifyAndFilter(streams []prowlarr.Stream, startSeason, endSeason int, tmdbSeasonEps map[int]int) []TVStream {
 	var classified []TVStream
 	for _, s := range streams {
 		c := e.classifyStream(s)
@@ -898,18 +872,6 @@ func (e *TVGoEngine) classifyAndFilter(ctx context.Context, streams []prowlarr.S
 		if !c.IsFullpack && c.EpisodeNum > 0 {
 			if maxEp, ok := tmdbSeasonEps[c.Season]; ok && c.EpisodeNum > maxEp {
 				continue
-			}
-			// Season and episode numbers already agree here, so when the release also
-			// names the episode, that name is what separates two same-titled shows.
-			if names := e.episodeNames(ctx, tmdbID, c.Season, c.EpisodeNum); episodeNameContradicts(c.Title, names) {
-				if spec.report {
-					e.logger.Printf("    [EpisodeMatch] %s S%02dE%02d names %q, TMDB has %q (enforce=%v)",
-						spec.showName, c.Season, c.EpisodeNum, episodeNameFromRelease(c.Title),
-						strings.Join(names, "/"), tvEpisodeMatchEnforce)
-				}
-				if tvEpisodeMatchEnforce {
-					continue
-				}
 			}
 		}
 		span := e.extractSeasonSpan(c.Title)
@@ -1589,37 +1551,6 @@ func (e *TVGoEngine) showKnownTitles(ctx context.Context, tmdbID int, details *t
 	titles = append(titles, e.tmdb.TVLocalizedNames(ctx, tmdbID, e.tmdbLangs)...)
 	e.knownTitles[tmdbID] = titles
 	return titles
-}
-
-// episodeNames returns the names TMDB lists for one episode, one per configured
-// language. Cached per season for the run; a nil TMDB client or a failed lookup
-// returns nil, which episodeNameContradicts treats as no evidence.
-func (e *TVGoEngine) episodeNames(ctx context.Context, tmdbID, season, episode int) []string {
-	if e.tmdb == nil || tmdbID == 0 {
-		return nil
-	}
-	key := fmt.Sprintf("%d:%d", tmdbID, season)
-	byEp, ok := e.seasonEpNames[key]
-	if !ok {
-		byEp = make(map[int][]string)
-		for _, lang := range e.tmdbLangs {
-			eps, err := e.tmdb.TVSeasonEpisodes(ctx, tmdbID, season, lang)
-			if err != nil {
-				e.logger.Printf("    [EpisodeMatch] season %d names unavailable (%s) for tmdb=%d: %v", season, lang, tmdbID, err)
-				continue
-			}
-			for _, ep := range eps {
-				if ep.Name != "" {
-					byEp[ep.EpisodeNumber] = append(byEp[ep.EpisodeNumber], ep.Name)
-				}
-			}
-		}
-		if e.seasonEpNames == nil {
-			e.seasonEpNames = make(map[string]map[int][]string)
-		}
-		e.seasonEpNames[key] = byEp
-	}
-	return byEp[episode]
 }
 
 // contentsBelongToShow checks a torrent's real file names against the show we asked

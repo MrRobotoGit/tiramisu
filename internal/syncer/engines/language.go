@@ -110,3 +110,32 @@ func ExcludedLanguageSet(flagCodes []string) map[string]bool {
 	}
 	return set
 }
+
+// preferredFlagTMDBLang maps a preferred-flag country code to the TMDB language tag
+// whose episode names that audience's releases use. Unlisted codes are skipped.
+var preferredFlagTMDBLang = map[string]string{
+	"IT": "it-IT", "US": "en-US", "GB": "en-GB", "ES": "es-ES", "FR": "fr-FR",
+	"DE": "de-DE", "PT": "pt-PT", "BR": "pt-BR", "NL": "nl-NL", "PL": "pl-PL",
+	"RU": "ru-RU", "JP": "ja-JP", "KR": "ko-KR", "CN": "zh-CN",
+}
+
+// TMDBEpisodeLanguages returns the language tags to fetch episode names in: always
+// en-US (scene names are English) plus one tag per preferred flag, deduped by base
+// language so en-US and en-GB do not cost two requests.
+func TMDBEpisodeLanguages(preferredFlags []string) []string {
+	langs := []string{"en-US"}
+	seen := map[string]bool{"en": true}
+	for _, code := range preferredFlags {
+		tag, ok := preferredFlagTMDBLang[strings.ToUpper(code)]
+		if !ok {
+			continue
+		}
+		base := strings.SplitN(tag, "-", 2)[0]
+		if seen[base] {
+			continue
+		}
+		seen[base] = true
+		langs = append(langs, tag)
+	}
+	return langs
+}

@@ -483,42 +483,6 @@ func (c *Client) TVLocalizedNames(ctx context.Context, tmdbID int, languages []s
 	return names
 }
 
-// Episode is a single episode from a TMDB season response.
-type Episode struct {
-	EpisodeNumber int    `json:"episode_number"`
-	Name          string `json:"name"`
-	AirDate       string `json:"air_date"`
-}
-
-// TVSeasonEpisodes returns a season's episode list. language is a TMDB language tag
-// ("en-US", "it-IT"); episode names are localized, so the same season fetched in two
-// languages gives the two spellings a release may legitimately use.
-func (c *Client) TVSeasonEpisodes(ctx context.Context, tmdbID, season int, language string) ([]Episode, error) {
-	if err := c.limiter.Wait(ctx); err != nil {
-		return nil, err
-	}
-
-	urlStr := fmt.Sprintf("%s/tv/%d/season/%d?api_key=%s&language=%s", baseURL, tmdbID, season, c.apiKey, url.QueryEscape(language))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := catalog.Do(ctx, c.http, req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var payload struct {
-		Episodes []Episode `json:"episodes"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, err
-	}
-	return payload.Episodes, nil
-}
-
 // Season represents a TV season.
 type Season struct {
 	SeasonNumber int `json:"season_number"`
