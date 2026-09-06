@@ -529,7 +529,29 @@ var (
 	ipBlocklistRejections atomic.Uint64
 	ipBlocklistIPs        sync.Map // ip string -> struct{}
 	ipBlocklistDistinct   atomic.Uint64
+	ipBlocklistByRange    sync.Map // range description -> *atomic.Uint64 (distinct IPs)
 )
+
+// BlockedRange is one blocklist entry and how many distinct addresses it rejected.
+type BlockedRange struct {
+	Description string `json:"description"`
+	IPs         uint64 `json:"ips"`
+}
+
+// IPBlocklistTopRanges returns the ranges that rejected the most distinct addresses,
+// busiest first, at most n entries.
+func IPBlocklistTopRanges(n int) []BlockedRange {
+	var out []BlockedRange
+	ipBlocklistByRange.Range(func(k, v any) bool {
+		out = append(out, BlockedRange{k.(string), v.(*atomic.Uint64).Load()})
+		return true
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].IPs > out[j].IPs })
+	if n > 0 && len(out) > n {
+		out = out[:n]
+	}
+	return out
+}
 
 // IPBlocklistRejections returns how many times the blocklist rejected an address.
 func IPBlocklistRejections() uint64 { return ipBlocklistRejections.Load() }
@@ -546,6 +568,11 @@ func (cl *Client) ipBlockRange(ip net.IP) (r iplist.Range, blocked bool) {
 		ipBlocklistRejections.Add(1)
 		if _, seen := ipBlocklistIPs.LoadOrStore(ip.String(), struct{}{}); !seen {
 			ipBlocklistDistinct.Add(1)
+			// Tally per range, counted once per address: the totals say how much is
+			// blocked, this says who - without it there is no telling an anti-P2P outfit
+			// from a list quietly eating ordinary peers.
+			c, _ := ipBlocklistByRange.LoadOrStore(r.Description, new(atomic.Uint64))
+			c.(*atomic.Uint64).Add(1)
 		}
 	}
 	return

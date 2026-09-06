@@ -4172,6 +4172,20 @@ func main() {
 			fuseShortReadCount.Load(), fuseShortReadRepaired.Load(), fuseShortReadFailed.Load(), shortStream, shortFetch, repairedStream, unfilledStream)
 	})
 
+	// Which blocklist ranges are actually rejecting peers. The aggregate counters say
+	// how much is blocked; this says who, which is the only way to tell a list that
+	// catches monitoring outfits from one quietly eating ordinary peers.
+	http.HandleFunc("/metrics/blocklist", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"enabled":      gc().BlockListEnabled,
+			"url":          gc().BlockListURL,
+			"distinct_ips": torrent.IPBlocklistDistinctIPs(),
+			"rejections":   torrent.IPBlocklistRejections(),
+			"top_ranges":   torrent.IPBlocklistTopRanges(25),
+		})
+	})
+
 	http.HandleFunc("/webhook", handlePlexWebhook)
 
 	http.HandleFunc("/metrics/profiling", func(w http.ResponseWriter, r *http.Request) {
@@ -4720,12 +4734,22 @@ func updateBlockList(urlStr string) {
 	}
 	destPath := filepath.Join(filepath.Dir(exePath), "blocklist")
 
-	// Check if file exists and is recent (e.g., less than 24h old)
-	if info, err := os.Stat(destPath); err == nil {
+	// A sidecar records which URL produced the file on disk. Age alone is not enough:
+	// changing the URL in the Control Panel used to keep serving the previous list for
+	// up to 24h, restart included, while the log claimed everything was fine.
+	urlPath := destPath + ".url"
+	prevURL := ""
+	if b, err := os.ReadFile(urlPath); err == nil {
+		prevURL = strings.TrimSpace(string(b))
+	}
+	if info, err := os.Stat(destPath); err == nil && prevURL == urlStr {
 		if time.Since(info.ModTime()) < 24*time.Hour {
 			logger.Printf("[BlockList] Existing blocklist is recent, skipping update")
 			return
 		}
+	}
+	if prevURL != "" && prevURL != urlStr {
+		logger.Printf("[BlockList] URL changed, refreshing now")
 	}
 
 	logger.Printf("[BlockList] Updating from %s...", urlStr)
@@ -4784,10 +4808,22 @@ func updateBlockList(urlStr string) {
 		logger.Printf("[BlockList] File close error: %v", err)
 		return
 	}
+	// Refuse to install something with no usable ranges. iblocklist serves a captcha page
+	// to anything that looks like a browser, and a downloaded HTML page would otherwise
+	// replace a working blocklist with an empty one, silently.
+	if ranges := torrutils.CountRanges(tmpPath); ranges == 0 {
+		os.Remove(tmpPath)
+		logger.Printf("[BlockList] Refused: %d bytes downloaded but no usable ranges — keeping the previous list", n)
+		return
+	}
+
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		os.Remove(tmpPath)
 		logger.Printf("[BlockList] File rename error: %v", err)
 		return
+	}
+	if err := os.WriteFile(urlPath, []byte(urlStr), 0644); err != nil {
+		logger.Printf("[BlockList] WARNING: could not record the source URL: %v", err)
 	}
 
 	logger.Printf("[BlockList] Updated successfully: %d bytes saved to %s", n, destPath)

@@ -93,3 +93,29 @@ func parseBlockList(buf []byte) (iplist.Ranger, error) {
 	log.TLogln(fmt.Sprintf("No ranges loaded from blocklist! (Lines read: %d, Errors: %d)", lineCount, errorCount))
 	return nil, fmt.Errorf("no valid ranges parsed (lines read: %d, errors: %d)", lineCount, errorCount)
 }
+
+// CountRanges reports how many P2P-format lines the file parses into. Used as a sanity
+// gate before a freshly downloaded list replaces the one in use: iblocklist serves a
+// captcha page to anything that looks like a browser, and installing that HTML would
+// silently leave the engine with no ranges at all.
+func CountRanges(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	n := 0
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if i := strings.LastIndex(line, ":"); i >= 0 && strings.Contains(line[i+1:], "-") {
+			n++
+		}
+	}
+	return n
+}
