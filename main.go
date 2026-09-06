@@ -3866,6 +3866,14 @@ func main() {
 			settings.Args = &settings.ExecArgs{}
 		}
 		settings.Args.Path = dbPath
+		// settings.Path is what the GoStorm layer actually joins against for config.db,
+		// the settings JSON, trackers.txt, accs.db and the blocklist fallback. It was never
+		// assigned, so all of those resolved relative to the working directory: under
+		// systemd that happens to be the install dir, but in Docker it is the image's
+		// WORKDIR, outside every mounted volume - so torrents and GoStorm settings were
+		// lost on "docker rm". Migrate anything already written there before switching.
+		settings.Path = dbPath
+		settings.MigrateFromWorkdir(dbPath)
 	}
 
 	source, mount := flag.Arg(0), flag.Arg(1)
@@ -4745,12 +4753,18 @@ func updateBlockList(urlStr string) {
 		return
 	}
 
-	exePath, err := os.Executable()
-	if err != nil {
-		logger.Printf("[BlockList] Error getting executable path: %v", err)
-		return
+	// Write next to the rest of the state, not next to the binary: in a container the
+	// binary lives in the image layer, so the list was re-downloaded on every start.
+	destDir := settings.Path
+	if destDir == "" {
+		exePath, err := os.Executable()
+		if err != nil {
+			logger.Printf("[BlockList] Error getting executable path: %v", err)
+			return
+		}
+		destDir = filepath.Dir(exePath)
 	}
-	destPath := filepath.Join(filepath.Dir(exePath), "blocklist")
+	destPath := filepath.Join(destDir, "blocklist")
 
 	// A sidecar records which URL produced the file on disk. Age alone is not enough:
 	// changing the URL in the Control Panel used to keep serving the previous list for
