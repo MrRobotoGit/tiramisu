@@ -11,6 +11,30 @@ HOST_MOUNT_HINT="${TIRAMISU_HOST_MOUNT_HINT:-${GOSTREAM_HOST_MOUNT_HINT:-}}"
 
 mkdir -p "$SOURCE_PATH" "$MOUNT_PATH" "$ROOT_PATH" "$STATE_DIR" "$LOG_DIR"
 
+# True when the path sits under a volume or bind mount rather than the container's
+# own writable layer. "/" is the overlay itself and does not count.
+path_is_persistent() {
+  p=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  while [ "$p" != "/" ] && [ -n "$p" ]; do
+    if awk -v d="$p" '$2 == d { found = 1 } END { exit !found }' /proc/mounts 2>/dev/null; then
+      return 0
+    fi
+    p=$(dirname "$p")
+  done
+  return 1
+}
+
+# GoStorm keeps its settings in $ROOT_PATH/config.db and Tiramisu its state in
+# $STATE_DIR. Unmounted, both vanish on "docker rm" and every setting silently
+# returns to its default, which is hard to attribute after the fact.
+for dir in "$ROOT_PATH" "$STATE_DIR"; do
+  if ! path_is_persistent "$dir"; then
+    echo "WARNING: $dir is not on a mounted volume." >&2
+    echo "         Settings and state there are lost when the container is removed." >&2
+    echo "         Mount a volume and point TIRAMISU_ROOT_PATH at it." >&2
+  fi
+done
+
 mount_is_readable() {
   ls -ld "$1" >/dev/null 2>&1
 }

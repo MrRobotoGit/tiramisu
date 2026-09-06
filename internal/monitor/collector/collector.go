@@ -938,8 +938,14 @@ func (c *Collector) checkMediaServers() []MediaServerStatus {
 	configured := ""
 
 	if c.plexURL != "" {
-		configured = hostOf(c.plexURL)
-		out = append(out, c.checkConfiguredServer())
+		st := c.checkConfiguredServer()
+		// A URL with no token was never set up by anyone: config.json.example ships a
+		// Plex default, so reporting it as a failing server is noise on a Jellyfin box.
+		// Leave the host unclaimed too, so discovery can still report it.
+		if st.OK || c.plexToken != "" {
+			configured = hostOf(c.plexURL)
+			out = append(out, st)
+		}
 	}
 
 	for _, d := range c.discoverCached() {
