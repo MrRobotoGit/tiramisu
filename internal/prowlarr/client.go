@@ -14,6 +14,9 @@ import (
 	"tiramisu/internal/catalog"
 )
 
+// resolveHashTimeout bounds one 301->magnet lookup through Prowlarr's download proxy.
+const resolveHashTimeout = 20 * time.Second
+
 // Client queries the Prowlarr API and returns results in Stremio/Torrentio format.
 // Thread-safe: all methods are safe for concurrent use.
 type Client struct {
@@ -222,8 +225,9 @@ func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
 		}
 	}
 
-	// Resolve missing hashes concurrently (max 5 workers).
-	// With the new sort, the first workers will focus on the largest files.
+	// Resolve missing hashes concurrently (max 5 workers). Never cap this list: the size sort
+	// only sets priority, and truncating it would drop the smaller 1080p releases that a
+	// 1080p-preferring quality preset exists to select.
 	if len(needsResolution) > 0 {
 		sem := make(chan struct{}, 5)
 		var mu sync.Mutex
@@ -269,8 +273,12 @@ func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
 // resolveHashFromDownloadURL follows the Prowlarr download proxy URL, which issues a
 // 301 redirect to a magnet link containing the infohash in the Location header.
 // Returns the uppercase hex infohash, or empty string on failure.
+//
+// The budget is 20s because Prowlarr proxies this to the indexer: measured 1.8s/13s/>20s
+// on three 1337x URLs. Indexers that return an infoHash inline never reach this path, so
+// a short budget silently dropped only the results that need it most.
 func (c *Client) resolveHashFromDownloadURL(downloadURL string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), resolveHashTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
@@ -280,17 +288,15 @@ func (c *Client) resolveHashFromDownloadURL(downloadURL string) string {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
 	noRedirectClient := &http.Client{
-		Timeout: 8 * time.Second,
+		Timeout: resolveHashTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	// catalog.Do adds retry here too (deliberate - consistency across both Prowlarr call sites
-	// was chosen over fail-fast, even though this runs on the concurrent search hot path and a
-	// flaky Prowlarr under load can now add up to ~3s backoff per item before this 8s-deadline
-	// function gives up, versus the previous single-shot behavior).
-	resp, err := catalog.Do(ctx, noRedirectClient, req)
+	// No retry: a 301 either resolves or does not, and catalog.Do's backoff would spend
+	// the budget on waiting instead of on the one request that matters.
+	resp, err := noRedirectClient.Do(req)
 	if err != nil {
 		return ""
 	}
