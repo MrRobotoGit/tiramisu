@@ -1012,8 +1012,16 @@
                                 <div class="hint" style="margin-bottom: 12px;">Impacts swarm performance; not needed if you use a VPN</div>
                                 <label>IP BlockList URL</label>
                                 <input type="text" name="blocklist_url" id="blocklist_url_input"
-                                    placeholder="https://storage.iblocklist.com/ln8miglg7ok0qeoi9ybn/files/3lrs62z5xd4stkvuqi58/ydxerpxkpcfqjaybcssw.gz">
-                                <div class="hint">Block malicious/anti-P2P peers automatically</div>
+                                    placeholder="https://list.iblocklist.com/?list=ydxerpxkpcfqjaybcssw&amp;fileformat=p2p&amp;archiveformat=gz">
+                                <div class="hint">Changing the URL refreshes the list immediately</div>
+                                <label style="margin-top: 10px;">BlockList Filter (regexp)</label>
+                                <input type="text" name="blocklist_filter" id="blocklist_filter_input"
+                                    placeholder="(?i)\bap2p\b|anti-?p2p">
+                                <div class="hint">Keeps only ranges whose description matches. Published lists mix a
+                                    small current anti-P2P section with a large one built from 1990s whois records:
+                                    unfiltered, Level 1 spans 17% of IPv4 and rejects ordinary peers on netblocks that
+                                    changed hands years ago. Empty loads everything. See <code>/metrics/blocklist</code>
+                                    for which ranges actually reject peers.</div>
                             </div>
                         </div>
                     </div>
@@ -2231,7 +2239,7 @@
             'cache_cleanup_interval_min', 'max_retry_attempts',
             'retry_delay_ms', 'gostorm_url', 'rescue_grace_period_seconds',
             'rescue_cooldown_hours', 'metrics_port', 'disk_warmup_quota_gb',
-            'log_level', 'proxy_listen_port', 'blocklist_url',
+            'log_level', 'proxy_listen_port', 'blocklist_url', 'blocklist_filter',
             'tmdb_api_key', 'torrentio_url'
         ];
 
@@ -2314,10 +2322,14 @@
             ENGINE_ROOT_KEYS.forEach(k => {
                 let v = formData.get(k);
 
-                // If field is missing from form or empty string, skip it to preserve original/default
-                if (v === null || v === "") return;
+                // Empty means "clear it" for the blocklist filter - skipping it would make
+                // the filter impossible to remove once set. Every other field keeps the
+                // original value so a blank input cannot wipe a default.
+                if (v === null) return;
+                if (v === "" && k !== 'blocklist_filter') return;
 
                 if (k === 'log_level' || k === 'gostorm_url' || k === 'blocklist_url' ||
+                    k === 'blocklist_filter' ||
                     k === 'physical_source_path' || k === 'fuse_mount_path' || k === 'tmdb_api_key' ||
                     k === 'torrentio_url') {
                     data[k] = v;

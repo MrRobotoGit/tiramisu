@@ -38,7 +38,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - **TV Series sync** runs on schedule with a fullpack-first season pack strategy and a Plex-compatible directory structure.
 - Add a title to your **Plex cloud watchlist** and it shows up in your library within the hour.
 - **NAT-PMP** for WireGuard setups: Tiramisu requests an inbound port mapping from the VPN gateway and installs `iptables REDIRECT` rules, all without a restart.
-- An optional **peer blocklist** (~48,000 ranges, iblocklist badpeers) is downloaded on startup and refreshed every 24 hours, injected into the torrent engine before any connection is made.
+- An optional **peer blocklist** is downloaded on startup and refreshed every 24 hours, injected into the torrent engine before any connection is made. A description filter keeps only the part of a published list that is still maintained.
 - **Plex & Jellyfin Webhook integration**: `media.play` triggers Priority Mode with aggressive piece prioritization. IMDB-ID is extracted from the raw payload via regex, so it works even when the media server sends localized titles. Jellyfin is supported natively via JSON body, no code change, no plugin hacks.
 - The **embedded Control Panel** at `:9080/control` lets you adjust all FUSE and engine settings live, compiled directly into the binary.
 - The **Health Monitor Dashboard** at `:9080/dashboard` shows a real-time speed graph, an active stream panel with movie poster and quality badges, sync controls, and system stats, all embedded in the Go binary.
@@ -307,9 +307,20 @@ When BitTorrent traffic is routed through a WireGuard VPN, the home router's por
 
 Off by default. When `blocklist_enabled` is set, Tiramisu downloads a gzipped blocklist on startup and refreshes it every 24 hours; the ranges are injected directly into anacrolix/torrent's IP filter, so known-bad actors are blocked before any connection attempt. Compression is detected from the file itself, so a URL that serves gzip without a `.gz` extension works too, and a download that yields no usable ranges is refused rather than replacing a working list.
 
-**Check what a list actually covers before pointing Tiramisu at it.** The default is iblocklist *badpeers*: ~48,000 ranges covering 0.04% of IPv4, listing peers that send corrupt data, fake peers and trojans. It is deliberately not the better-known *Level 1* anti-P2P list, which spans 17% of IPv4 and is built from decades-old whois records — in practice it rejects ordinary peers sitting on corporate netblocks that were reassigned years ago, not monitoring outfits. Aggregate lists are worse still: some combine anti-P2P, ads, malware and whole-country blocks into 90%+ of the address space, and with one of those enabled almost no peer is reachable and playback never starts.
+**Published lists are mostly dead weight, so Tiramisu filters them.** iblocklist Level 1 holds ~236,000 ranges spanning **17% of IPv4**, and all but a sliver of it comes from whois records dating to the 1990s: entire /16s still attributed to companies that sold the address space years ago. Loaded whole, it rejects ordinary peers, not monitoring outfits — measured here, the ranges doing the rejecting were a broadcaster, a police force, a Dutch municipality and a defunct video startup.
 
-`GET /metrics/blocklist` reports how many distinct addresses were rejected and which ranges did the rejecting, which is the only way to tell a list that earns its keep from one quietly eating good peers.
+The part still being maintained carries an explicit label, and `blocklist_filter` is what keeps only that part:
+
+```json
+"blocklist_url": "https://list.iblocklist.com/?list=ydxerpxkpcfqjaybcssw&fileformat=p2p&archiveformat=gz",
+"blocklist_filter": "(?i)\\bap2p\\b|anti-?p2p"
+```
+
+That turns 236,172 ranges into 5,134 — from 17% of IPv4 down to **0.03%** — keeping the current anti-P2P entries (OVH, Hurricane Electric, GoDaddy and similar hosts) and dropping the rest. Leave the filter empty to load a list whole.
+
+Aggregate lists are worse still: some combine anti-P2P, ads, malware and whole-country blocks into 90%+ of the address space, and with one of those enabled almost no peer is reachable and playback never starts.
+
+`GET /metrics/blocklist` reports how many distinct addresses were rejected and which ranges did the rejecting — the only way to tell a list that earns its keep from one quietly eating good peers.
 
 ### 10. Profile-Guided Optimization (PGO)
 
@@ -736,7 +747,8 @@ nano /home/pi/Tiramisu/config.json
 | `proxy_listen_port` | `8080` | Tiramisu FUSE HTTP port |
 | `metrics_port` | `9080` | Metrics, Control Panel, Webhook port |
 | `blocklist_enabled` | `false` | Enable the peer IP blocklist (impacts swarm performance; not needed if you use a VPN) |
-| `blocklist_url` | *(iblocklist badpeers)* | Gzipped IP blocklist URL (24 h refresh). Gzip is detected from the content, not the extension; changing the URL refreshes immediately |
+| `blocklist_url` | *(iblocklist Level 1)* | Gzipped IP blocklist URL (24 h refresh). Gzip is detected from the content, not the extension; changing the URL refreshes immediately |
+| `blocklist_filter` | `(?i)\bap2p\b\|anti-?p2p` | Keep only ranges whose description matches this regexp. Empty loads the whole list |
 | `plex.url` | *(none)* | Plex server URL |
 | `plex.token` | *(none)* | Plex authentication token |
 | `plex.library_id` | `0` | Plex movies library section ID |

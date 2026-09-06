@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -25,6 +26,28 @@ var blockListEnabled atomic.Bool
 
 // SetBlockListEnabled turns blocklist loading on or off.
 func SetBlockListEnabled(enabled bool) { blockListEnabled.Store(enabled) }
+
+// blockListFilter keeps only the ranges whose description matches. Published lists mix a
+// small live section with a large stale one - iblocklist Level 1 carries ~5k current
+// anti-P2P entries among ~231k corporate whois records from the 1990s, and loading the
+// lot rejects ordinary peers on netblocks that changed hands years ago. Empty means
+// "keep everything".
+var blockListFilter atomic.Pointer[regexp.Regexp]
+
+// SetBlockListFilter compiles and installs the description filter. An invalid pattern is
+// rejected and reported rather than silently dropping every range.
+func SetBlockListFilter(pattern string) error {
+	if strings.TrimSpace(pattern) == "" {
+		blockListFilter.Store(nil)
+		return nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("blocklist filter %q: %w", pattern, err)
+	}
+	blockListFilter.Store(re)
+	return nil
+}
 
 // ReadBlockedIP loads the blocklist file. Returns (nil, nil) when the feature is
 // disabled, which callers apply as "no ranges banned".
@@ -58,6 +81,7 @@ func parseBlockList(buf []byte) (iplist.Ranger, error) {
 	var ranges []iplist.Range
 	lineCount := 0
 	errorCount := 0
+	filtered := 0
 	for scanner.Scan() {
 		lineCount++
 		r, ok, err := iplist.ParseBlocklistP2PLine(scanner.Bytes())
@@ -65,9 +89,14 @@ func parseBlockList(buf []byte) (iplist.Ranger, error) {
 			errorCount++
 			continue // Skip malformed lines
 		}
-		if ok {
-			ranges = append(ranges, r)
+		if !ok {
+			continue
 		}
+		if re := blockListFilter.Load(); re != nil && !re.MatchString(r.Description) {
+			filtered++
+			continue
+		}
+		ranges = append(ranges, r)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -80,7 +109,11 @@ func parseBlockList(buf []byte) (iplist.Ranger, error) {
 		sort.Slice(ranges, func(i, j int) bool {
 			return bytes.Compare(ranges[i].First, ranges[j].First) < 0
 		})
-		log.TLogln(fmt.Sprintf("Readed ranges: %d (Total lines: %d, Errors: %d)", len(ranges), lineCount, errorCount))
+		if filtered > 0 {
+			log.TLogln(fmt.Sprintf("Readed ranges: %d (Total lines: %d, Errors: %d, Filtered out: %d)", len(ranges), lineCount, errorCount, filtered))
+		} else {
+			log.TLogln(fmt.Sprintf("Readed ranges: %d (Total lines: %d, Errors: %d)", len(ranges), lineCount, errorCount))
+		}
 		return iplist.New(ranges), nil
 	}
 	// Zero valid ranges from an otherwise-clean scan (no scanner.Err()) must still surface

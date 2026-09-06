@@ -3908,6 +3908,9 @@ func main() {
 
 	// Must precede server.Start(): the engine reads the blocklist while configuring
 	// its client, and a flag set afterwards would leave it unloaded until a refresh.
+	if err := torrutils.SetBlockListFilter(gc().BlockListFilter); err != nil {
+		logger.Printf("[BlockList] %v — loading the list unfiltered", err)
+	}
 	torrutils.SetBlockListEnabled(gc().BlockListEnabled)
 
 	go func() {
@@ -4242,6 +4245,7 @@ func main() {
 			// Reload in memory (V1.4.0 Live Update)
 			oldEnabled := gc().BlockListEnabled
 			oldURL := gc().BlockListURL
+			oldFilter := gc().BlockListFilter
 			cfg := config.LoadConfig()
 			globalConfig.Store(&cfg)
 			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
@@ -4249,6 +4253,20 @@ func main() {
 			newEnabled := gc().BlockListEnabled
 			newURL := gc().BlockListURL
 			torrutils.SetBlockListEnabled(newEnabled)
+			newFilter := gc().BlockListFilter
+			if err := torrutils.SetBlockListFilter(newFilter); err != nil {
+				logger.Printf("[BlockList] %v — loading the list unfiltered", err)
+			}
+			// The filter changes which ranges the same file yields, so re-read it rather
+			// than waiting for the next download.
+			if newEnabled && newFilter != oldFilter {
+				if list, err := torrutils.ReadBlockedIP(); err == nil {
+					torr.SetIPBlocklist(list)
+					logger.Printf("[BlockList] Filter changed, reloaded from the existing file")
+				} else {
+					logger.Printf("[BlockList] WARNING: filter changed but reload failed: %v", err)
+				}
+			}
 			switch {
 			case newEnabled && (!oldEnabled || newURL != oldURL):
 				// was off -> on, or URL changed while staying on: (re)start with fresh URL

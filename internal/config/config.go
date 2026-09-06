@@ -194,6 +194,9 @@ type Config struct {
 	MetricsPort      int    `json:"metrics_port"`
 	BlockListEnabled bool   `json:"blocklist_enabled"`
 	BlockListURL     string `json:"blocklist_url"`
+	// BlockListFilter keeps only the ranges whose description matches this regexp.
+	// Empty keeps the whole list. See blockedIP.go for why published lists need it.
+	BlockListFilter string `json:"blocklist_filter"`
 	AIURL            string `json:"ai_url"`      // V1.4.5: AI Optimizer sidecar URL
 	AIProvider       string `json:"ai_provider"` // V1.7.1: Provider type (local, openrouter, openai)
 	AIModel          string `json:"ai_model"`    // V1.7.1: Model ID for cloud providers
