@@ -55,7 +55,8 @@ services:
       - "${BASE_DIR}/${CONTAINER_NAME}/transcode:/transcode"
 
       # Tiramisu config.json (BAT writes/patches this into the real-source tree)
-      - "${BASE_DIR}/tiramisu-mkv-real/config/config.json:/config.json:ro"
+      # Not :ro - the Control Panel saves settings back to this file.
+      - "${BASE_DIR}/tiramisu-mkv-real/config/config.json:/config.json"
 
       # s6-overlay hooks (mounted read-only; deterministic custom startup)
       - "${STACK_DIR}/custom-services:/custom-services.d:ro"
