@@ -1182,9 +1182,10 @@ func (t *Torrent) checkAndFireHedges() {
 // via peerImpl._request, bypassing t.requestState bookkeeping entirely (which enforces one peer
 // per request index) - the existing "redundant chunk" handling in receiveChunk already discards
 // whichever response arrives second, so this needs no new reconciliation logic. Gated by a
-// rolling 60s hedge-rate circuit breaker: if hedges spike, that signals the shared VPN tunnel
-// itself is saturated (not peer variance), so hedging is auto-disabled for a cooldown period
-// rather than making tunnel contention worse. Client lock must be held.
+// rolling 60s hedge-rate circuit breaker: if hedges spike, the bottleneck is shared across
+// peers (a saturated link, a VPN tunnel among other causes) rather than peer variance, so
+// hedging is auto-disabled for a cooldown period instead of adding to the contention.
+// Client lock must be held.
 //
 // trigger labels which threshold fired ("p95" or "ceiling") and is used only in the log
 // line - it exists so production calibration can distinguish baseline-driven hedges from
@@ -1223,7 +1224,7 @@ func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer, trig
 		if !t.hedgeCircuitOpen.CompareAndSwap(false, true) {
 			return
 		}
-		t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Circuit breaker tripped: %d hedges/60s, disabling — VPN tunnel likely saturated, not peer variance", t.infoHash.HexString(), count)
+		t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Circuit breaker tripped: %d hedges/60s, disabling — bottleneck is shared across peers (saturated link or tunnel), not peer variance", t.infoHash.HexString(), count)
 		time.AfterFunc(hedgeCircuitBreakerCooldown, func() {
 			t.hedgeCircuitOpen.Store(false)
 			t.hedgeWindowCount.Store(0)

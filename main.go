@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -3985,6 +3986,7 @@ func main() {
 		go ai.StartAITuner(context.Background(), provider)
 	}
 
+	torrutils.SetBlockListEnabled(gc().BlockListEnabled)
 	if gc().BlockListEnabled && gc().BlockListURL != "" {
 		startBlockListLoop(gc().BlockListURL)
 	}
@@ -4228,13 +4230,17 @@ func main() {
 
 			newEnabled := gc().BlockListEnabled
 			newURL := gc().BlockListURL
+			torrutils.SetBlockListEnabled(newEnabled)
 			switch {
 			case newEnabled && (!oldEnabled || newURL != oldURL):
 				// was off -> on, or URL changed while staying on: (re)start with fresh URL
 				startBlockListLoop(newURL)
 			case !newEnabled && oldEnabled:
-				// was on -> off: stop future refreshes
+				// was on -> off: stop future refreshes and clear the ranges already loaded
+				// into the engine, otherwise the file keeps banning peers until a restart.
 				stopBlockListLoop()
+				torr.SetIPBlocklist(nil)
+				logger.Printf("[BlockList] Disabled: cleared from running engine")
 			}
 			logger.Printf("[Config] Updated via Dashboard API")
 			w.WriteHeader(200)
@@ -4736,9 +4742,14 @@ func updateBlockList(urlStr string) {
 		return
 	}
 
-	var reader io.Reader = resp.Body
-	if strings.HasSuffix(urlStr, ".gz") {
-		gz, err := gzip.NewReader(resp.Body)
+	// Detect gzip from the magic bytes, not the URL: iblocklist and friends serve a
+	// gzip stream from a query string (...&archiveformat=gz), and a suffix test would
+	// save the compressed bytes verbatim - a blocklist with zero usable ranges and no
+	// error anywhere.
+	buffered := bufio.NewReader(resp.Body)
+	var reader io.Reader = buffered
+	if magic, err := buffered.Peek(2); err == nil && magic[0] == 0x1f && magic[1] == 0x8b {
+		gz, err := gzip.NewReader(buffered)
 		if err != nil {
 			logger.Printf("[BlockList] Gzip error: %v", err)
 			return

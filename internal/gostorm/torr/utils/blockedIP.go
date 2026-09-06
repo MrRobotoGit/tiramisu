@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"tiramisu/internal/gostorm/log"
 
@@ -16,7 +17,22 @@ import (
 	"github.com/anacrolix/torrent/iplist"
 )
 
+// blockListEnabled gates ReadBlockedIP. Tiramisu owns the setting (blocklist_enabled
+// in config.json) and pushes it here at startup and on every change: without the gate
+// a leftover blocklist file kept being loaded, so turning the feature off in the
+// Control Panel left every range still banned.
+var blockListEnabled atomic.Bool
+
+// SetBlockListEnabled turns blocklist loading on or off.
+func SetBlockListEnabled(enabled bool) { blockListEnabled.Store(enabled) }
+
+// ReadBlockedIP loads the blocklist file. Returns (nil, nil) when the feature is
+// disabled, which callers apply as "no ranges banned".
 func ReadBlockedIP() (ranger iplist.Ranger, err error) {
+	if !blockListEnabled.Load() {
+		return nil, nil
+	}
+
 	// 1. Try executable directory first (new auto-update location)
 	exePath, err := os.Executable()
 	if err == nil {
