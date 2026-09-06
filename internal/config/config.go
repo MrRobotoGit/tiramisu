@@ -154,7 +154,10 @@ type LanguageConfig struct {
 type Config struct {
 	// --- Internal / Derived Fields ---
 	ConfigPath string `json:"-"`
-	RootPath   string `json:"-"` // V138: Root path for state/config (default: /home/pi)
+	// LogDir holds the log files the dashboard tails. Docker points TIRAMISU_LOG_DIR at
+	// a mounted volume; elsewhere the logs sit next to config.json.
+	LogDir   string `json:"-"`
+	RootPath string `json:"-"` // V138: Root path for state/config (default: /home/pi)
 
 	// --- Core Tuning (JSON Mapped) ---
 	MasterConcurrencyLimit int    `json:"master_concurrency_limit"` // Global limit for concurrent HTTP requests to GoStorm
@@ -391,6 +394,10 @@ func LoadConfig() Config {
 	// 5. Finalize and map derived fields
 	cfg.finalize()
 
+	if cfg.LogDir == "" {
+		cfg.LogDir = filepath.Join(filepath.Dir(cfg.ConfigPath), "logs")
+	}
+
 	// 5b. Populate engine script paths
 	exe, _ := os.Executable()
 	binDir := filepath.Dir(exe)
@@ -466,6 +473,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("AI_API_KEY"); v != "" {
 		c.AI_API_KEY = v
+	}
+	if v := firstEnv("TIRAMISU_LOG_DIR", "GOSTREAM_LOG_DIR"); v != "" {
+		c.LogDir = v
 	}
 	if v := firstEnv("TIRAMISU_PLEX_URL", "GOSTREAM_PLEX_URL", "PLEX_URL"); v != "" {
 		c.Plex.URL = v

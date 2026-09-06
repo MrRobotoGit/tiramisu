@@ -99,11 +99,32 @@ shutdown() {
 
 trap shutdown INT TERM EXIT
 
+# Tiramisu logs to stdout only; under systemd the unit appends that to a file, but a
+# container has nothing doing so, which left the Control Panel's log viewer empty while
+# "docker logs" worked. A FIFO feeds tee, which writes both destinations - and keeps $!
+# pointing at tiramisu, which a plain pipeline would not.
+TIRAMISU_LOG_FILE="$LOG_DIR/tiramisu.log"
+LOG_FIFO="$(mktemp -u /tmp/tiramisu-log.XXXXXX)"
+if mkfifo "$LOG_FIFO" 2>/dev/null; then
+  tee -a "$TIRAMISU_LOG_FILE" < "$LOG_FIFO" &
+  tee_pid="$!"
+  # Hold a writer open for the life of the script. Without it tee sees EOF when
+  # tiramisu exits, and the next run blocks forever opening a FIFO nobody reads.
+  exec 3> "$LOG_FIFO"
+else
+  echo "WARNING: could not create the log FIFO; logs go to stdout only." >&2
+  LOG_FIFO=""
+fi
+
 # Supervision loop: without it a Control Panel restart would stop the container,
 # since the entrypoint is PID 1's only child and nothing restarts it.
 while :; do
   echo "Starting tiramisu" >&2
-  /usr/local/bin/tiramisu --path "$ROOT_PATH" "$SOURCE_PATH" "$MOUNT_PATH" &
+  if [ -n "$LOG_FIFO" ]; then
+    /usr/local/bin/tiramisu --path "$ROOT_PATH" "$SOURCE_PATH" "$MOUNT_PATH" > "$LOG_FIFO" 2>&1 &
+  else
+    /usr/local/bin/tiramisu --path "$ROOT_PATH" "$SOURCE_PATH" "$MOUNT_PATH" &
+  fi
   tiramisu_pid="$!"
 
   exit_code=0
@@ -118,5 +139,11 @@ while :; do
   fi
   echo "Restart requested from the Control Panel" >&2
 done
+
+if [ -n "$LOG_FIFO" ]; then
+  exec 3>&-
+  wait "$tee_pid" 2>/dev/null || true
+  rm -f "$LOG_FIFO"
+fi
 
 exit "$exit_code"

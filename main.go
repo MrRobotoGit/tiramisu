@@ -3906,6 +3906,10 @@ func main() {
 
 	gc().LogConfig(logger)
 
+	// Must precede server.Start(): the engine reads the blocklist while configuring
+	// its client, and a flag set afterwards would leave it unloaded until a refresh.
+	torrutils.SetBlockListEnabled(gc().BlockListEnabled)
+
 	go func() {
 		logger.Println("Starting Embedded GoStorm Engine...")
 		server.Start() // Starts Web Server on 8090 and Engine
@@ -3986,7 +3990,6 @@ func main() {
 		go ai.StartAITuner(context.Background(), provider)
 	}
 
-	torrutils.SetBlockListEnabled(gc().BlockListEnabled)
 	if gc().BlockListEnabled && gc().BlockListURL != "" {
 		startBlockListLoop(gc().BlockListURL)
 	}
@@ -4146,7 +4149,7 @@ func main() {
 		shortStream, shortFetch := native.ShortReadCounts()
 		repairedStream, unfilledStream := native.ShortReadRepairCounts()
 
-		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d}`,
+		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d}`,
 			AppVersion,
 			gc().ConfigPath,
 			time.Since(startTime),
@@ -4165,6 +4168,7 @@ func main() {
 			updater.LatestVersion(), updater.UpdateAvailable(),
 			warmupBucketsJSON,
 			hedgeTriggerTotal, hedgeCircuitOpenAny, fetchFlightDedupCount.Load(), peerEjectTotal, torr.V304BannedCount(),
+			torrent.IPBlocklistRejections(), torrent.IPBlocklistDistinctIPs(),
 			fuseShortReadCount.Load(), fuseShortReadRepaired.Load(), fuseShortReadFailed.Load(), shortStream, shortFetch, repairedStream, unfilledStream)
 	})
 
@@ -4351,7 +4355,7 @@ func main() {
 
 		statePath := filepath.Join(GetStateDir(), "scheduler_state.json")
 
-		logsDir := filepath.Join(filepath.Dir(gc().ConfigPath), "logs")
+		logsDir := gc().LogDir
 
 		// Start midnight log truncation
 		engines.StartLogTruncator(logsDir, backgroundStopChan)
@@ -4444,7 +4448,7 @@ func main() {
 	}
 
 	// Health Monitor + Dashboard (Fase 5)
-	logsDir := filepath.Join(filepath.Dir(gc().ConfigPath), "logs")
+	logsDir := gc().LogDir
 	monCollector := collector.New(
 		"http://127.0.0.1:8090",
 		gc().FuseMountPath,

@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"sort"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/chansync"
@@ -516,11 +517,38 @@ func (w *swappableIPBlocklist) NumRanges() int {
 	return inner.NumRanges()
 }
 
+// Blocklist rejection accounting. Without it a blocklist that silently stops being
+// applied is indistinguishable from a swarm that happens to contain no banned peers -
+// which is how one went unnoticed for months.
+//
+// Two numbers, because they answer different questions: DHT, PEX and the tracker
+// re-offer the same address continuously, so rejections climb without bound while the
+// set of addresses stays small. Rejections say how hard the filter is working;
+// distinct addresses say how many peers it actually kept out.
+var (
+	ipBlocklistRejections atomic.Uint64
+	ipBlocklistIPs        sync.Map // ip string -> struct{}
+	ipBlocklistDistinct   atomic.Uint64
+)
+
+// IPBlocklistRejections returns how many times the blocklist rejected an address.
+func IPBlocklistRejections() uint64 { return ipBlocklistRejections.Load() }
+
+// IPBlocklistDistinctIPs returns how many distinct addresses the blocklist rejected.
+func IPBlocklistDistinctIPs() uint64 { return ipBlocklistDistinct.Load() }
+
 func (cl *Client) ipBlockRange(ip net.IP) (r iplist.Range, blocked bool) {
 	if cl.ipBlockList == nil {
 		return
 	}
-	return cl.ipBlockList.Lookup(ip)
+	r, blocked = cl.ipBlockList.Lookup(ip)
+	if blocked {
+		ipBlocklistRejections.Add(1)
+		if _, seen := ipBlocklistIPs.LoadOrStore(ip.String(), struct{}{}); !seen {
+			ipBlocklistDistinct.Add(1)
+		}
+	}
+	return
 }
 
 func (cl *Client) ipIsBlocked(ip net.IP) bool {

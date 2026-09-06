@@ -74,7 +74,9 @@ type HealthStatus struct {
 
 	// V304BannedPeers is a process-lifetime count of peer IPs banned for sending
 	// corrupt pieces (V304 session ban). Never resets until the service restarts.
-	V304BannedPeers int `json:"v304_banned_peers"`
+	V304BannedPeers       int `json:"v304_banned_peers"`
+	IPBlocklistRejections int `json:"ip_blocklist_rejections"`
+	IPBlocklistIPs        int `json:"ip_blocklist_ips"`
 }
 
 // ServiceStatus tracks a single service's health.
@@ -440,6 +442,8 @@ func (c *Collector) fetchFUSEBuffer(s *HealthStatus) {
 	budget := jsonFloat(m, "read_ahead_budget")
 
 	s.V304BannedPeers = int(jsonFloat(m, "v304_banned_peers"))
+	s.IPBlocklistRejections = int(jsonFloat(m, "ip_blocklist_rejections"))
+	s.IPBlocklistIPs = int(jsonFloat(m, "ip_blocklist_ips"))
 
 	if budget > 0 {
 		s.FUSEBudgetMB = budget / 1024 / 1024
