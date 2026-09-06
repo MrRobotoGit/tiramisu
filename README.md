@@ -980,7 +980,26 @@ Or use `--privileged` as a simpler alternative to the individual capabilities (e
 
 `config.json` must be volume-mounted at `/config.json` (the default `MKV_PROXY_CONFIG_PATH`). Use `config.json.example` as the starting point. Do not mount it `:ro` — the Control Panel writes settings back to this file, and a read-only mount makes every save fail.
 
-**Mount a volume for the state directory too.** GoStorm keeps its settings in `$TIRAMISU_ROOT_PATH/config.db` and Tiramisu its inode map and sync caches in `STATE/` underneath it. Left at the default (`/usr/local`, inside the container's writable layer) both are destroyed by `docker rm`, so pulling a new image silently resets every GoStorm setting — the peer port back to `0`, and so on. The container warns on startup when this path is not on a mounted volume.
+**Mount a volume for the state directory too.** `TIRAMISU_ROOT_PATH` is where everything that must outlive the container lives:
+
+| Path | Holds |
+|------|-------|
+| `$TIRAMISU_ROOT_PATH/config.db` | Torrent list, and GoStorm settings when `StoreSettingsInJson` is off |
+| `$TIRAMISU_ROOT_PATH/settings.json` | GoStorm settings — peer port, cache size, connection limit |
+| `$TIRAMISU_ROOT_PATH/STATE/` | Inode map and sync caches |
+| `$TIRAMISU_ROOT_PATH/logs/` | Log files the Control Panel tails |
+| `$TIRAMISU_ROOT_PATH/blocklist` | The downloaded IP blocklist |
+
+Point it at a mounted volume and everything survives `docker rm`. The container warns on startup when it is not on one. `TIRAMISU_STATE_DIR` and `TIRAMISU_LOG_DIR` default to `STATE/` and `logs/` underneath it — set them only to move those two elsewhere, and keep them inside the volume if you do.
+
+**Updating the container.** Unmount the virtual directory between removing the old container and starting the new one: Docker refuses to bind-mount over the FUSE mount the previous container left behind.
+
+```bash
+docker pull mrrobotogit/tiramisu:latest
+docker rm -f tiramisu
+sudo fusermount3 -uz /mnt/tiramisu-mkv-virtual
+docker run -d ...   # same flags as above
+```
 
 > [!TIP]
 > **Troubleshooting: real directory fills up, virtual stays empty.** If `docker logs` shows `FUSE mounted at ... all systems active` and the InodeMap saving files, but `/mnt/tiramisu-mkv-virtual` is empty on the host, the FUSE mount succeeded *inside* the container but never propagated out — Docker bind mounts default to private propagation, so a mount created inside the container isn't visible outside it. Fix: add `:rshared` to the virtual volume's `-v` flag (as above). If Docker then refuses to start with an error like *"must be shared or slave"*, the host mountpoint itself isn't shared yet - run `sudo mount --make-rshared /mnt` (or whichever parent directory holds it) once, then restart the container.
