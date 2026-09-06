@@ -9,7 +9,10 @@ import (
 	"tiramisu/internal/catalog"
 )
 
-// Client refreshes a media server library section.
+// Client refreshes a media server library section. Each implementation decides what it
+// needs: Plex addresses one section and does nothing without an ID, Jellyfin refreshes
+// everything and ignores the argument, so callers pass whatever they have and let the
+// client skip the call when it cannot make it.
 type Client interface {
 	RefreshLibrary(ctx context.Context, sectionID int) error
 }
@@ -39,9 +42,10 @@ type PlexClient struct {
 	Token string
 }
 
-// RefreshLibrary triggers a Plex library scan.
+// RefreshLibrary triggers a Plex library scan. A section ID of 0 means "not configured",
+// the documented way to leave the refresh off.
 func (c *PlexClient) RefreshLibrary(ctx context.Context, sectionID int) error {
-	if c.URL == "" || c.Token == "" {
+	if c.URL == "" || c.Token == "" || sectionID <= 0 {
 		return nil
 	}
 
@@ -71,8 +75,9 @@ type JellyfinClient struct {
 	Token string
 }
 
-// RefreshLibrary triggers a Jellyfin library scan.
-func (c *JellyfinClient) RefreshLibrary(ctx context.Context, sectionID int) error {
+// RefreshLibrary triggers a Jellyfin library scan. sectionID is ignored: the endpoint
+// refreshes every library, which is why a Jellyfin setup leaves the section IDs at 0.
+func (c *JellyfinClient) RefreshLibrary(ctx context.Context, _ int) error {
 	if c.URL == "" || c.Token == "" {
 		return nil
 	}

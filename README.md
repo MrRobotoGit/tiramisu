@@ -882,7 +882,7 @@ Point the **Media Server** card in the Control Panel at your server and Tiramisu
 | `plex.token` | [X-Plex-Token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/) | API key: Dashboard → Advanced → API Keys → **+** |
 | `plex.library_id` / `plex.tv_library_id` | Section IDs to refresh after a sync | Leave at `0` |
 
-The token drives the library refresh Tiramisu issues after a sync — a token in the query string for Plex, an `X-Emby-Token` header for Jellyfin. It is optional: without it the media server finds new files on its own scan schedule. The playback sessions and posters on the dashboard are Plex-only.
+The token drives the library refresh Tiramisu issues when the movies, TV and watchlist syncs finish — a token in the query string for Plex, an `X-Emby-Token` header for Jellyfin. Plex refreshes the section named by `library_id`, and does nothing without one; Jellyfin refreshes every library, which is why its section IDs stay at `0`. Without a token the media server finds new files on its own scan schedule instead. The playback sessions and posters on the dashboard are Plex-only.
 
 The field names keep the `plex.` prefix for backward compatibility with existing configurations; they hold whichever server `media_server_type` names.
 

@@ -17,18 +17,19 @@ type MoviesSyncer struct {
 
 // MoviesSyncerConfig holds config for the Go movie engine.
 type MoviesSyncerConfig struct {
-	GoStormURL     string
-	TMDBAPIKey     string
-	TorrentioURL   string
-	PlexURL        string
-	PlexToken      string
-	PlexLib        int
-	MoviesDir      string
-	StateDir       string
-	LogsDir        string
-	ProwlarrCfg    prowlarr.ConfigProwlarr
-	Language       config.LanguageConfig
-	QualityScoring config.QualityScoringConfig
+	GoStormURL      string
+	TMDBAPIKey      string
+	TorrentioURL    string
+	PlexURL         string
+	PlexToken       string
+	MediaServerType string
+	PlexLib         int
+	MoviesDir       string
+	StateDir        string
+	LogsDir         string
+	ProwlarrCfg     prowlarr.ConfigProwlarr
+	Language        config.LanguageConfig
+	QualityScoring  config.QualityScoringConfig
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -53,19 +54,20 @@ func NewMoviesSyncer(cfg MoviesSyncerConfig) *MoviesSyncer {
 	}
 
 	engineCfg := MovieEngineConfig{
-		GoStormURL:     cfg.GoStormURL,
-		TMDBAPIKey:     cfg.TMDBAPIKey,
-		TorrentioURL:   cfg.TorrentioURL,
-		PlexURL:        cfg.PlexURL,
-		PlexToken:      cfg.PlexToken,
-		PlexLib:        cfg.PlexLib,
-		MoviesDir:      moviesDir,
-		StateDir:       stateDir,
-		LogsDir:        logsDir,
-		ProwlarrCfg:    cfg.ProwlarrCfg,
-		Language:       cfg.Language,
-		Weights:        cfg.QualityScoring.MovieWeights(),
-		InvalidatePath: cfg.InvalidatePath,
+		GoStormURL:      cfg.GoStormURL,
+		TMDBAPIKey:      cfg.TMDBAPIKey,
+		TorrentioURL:    cfg.TorrentioURL,
+		PlexURL:         cfg.PlexURL,
+		PlexToken:       cfg.PlexToken,
+		MediaServerType: cfg.MediaServerType,
+		PlexLib:         cfg.PlexLib,
+		MoviesDir:       moviesDir,
+		StateDir:        stateDir,
+		LogsDir:         logsDir,
+		ProwlarrCfg:     cfg.ProwlarrCfg,
+		Language:        cfg.Language,
+		Weights:         cfg.QualityScoring.MovieWeights(),
+		InvalidatePath:  cfg.InvalidatePath,
 	}
 
 	return &MoviesSyncer{

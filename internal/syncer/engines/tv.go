@@ -18,19 +18,20 @@ type TVSyncer struct {
 
 // TVSyncerConfig holds config for the Go TV engine.
 type TVSyncerConfig struct {
-	GoStormURL     string
-	TMDBAPIKey     string
-	TorrentioURL   string
-	PlexURL        string
-	PlexToken      string
-	PlexTVLib      int
-	TVDir          string
-	StateDir       string
-	LogsDir        string
-	ProwlarrCfg    prowlarr.ConfigProwlarr
-	Language       config.LanguageConfig
-	QualityScoring config.QualityScoringConfig
-	DB             *metadb.DB // V1.7.1: Optional SQLite backend
+	GoStormURL      string
+	TMDBAPIKey      string
+	TorrentioURL    string
+	PlexURL         string
+	PlexToken       string
+	MediaServerType string
+	PlexTVLib       int
+	TVDir           string
+	StateDir        string
+	LogsDir         string
+	ProwlarrCfg     prowlarr.ConfigProwlarr
+	Language        config.LanguageConfig
+	QualityScoring  config.QualityScoringConfig
+	DB              *metadb.DB // V1.7.1: Optional SQLite backend
 	// InvalidatePath, when set, is called after removing a stub file/dir so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -55,19 +56,20 @@ func NewTVSyncer(cfg TVSyncerConfig) *TVSyncer {
 	}
 
 	engineCfg := TVEngineConfig{
-		GoStormURL:     cfg.GoStormURL,
-		TMDBAPIKey:     cfg.TMDBAPIKey,
-		TorrentioURL:   cfg.TorrentioURL,
-		PlexURL:        cfg.PlexURL,
-		PlexToken:      cfg.PlexToken,
-		PlexTVLib:      cfg.PlexTVLib,
-		TVDir:          tvDir,
-		StateDir:       stateDir,
-		LogsDir:        logsDir,
-		ProwlarrCfg:    cfg.ProwlarrCfg,
-		Language:       cfg.Language,
-		Weights:        cfg.QualityScoring.TVWeights(),
-		InvalidatePath: cfg.InvalidatePath,
+		GoStormURL:      cfg.GoStormURL,
+		TMDBAPIKey:      cfg.TMDBAPIKey,
+		TorrentioURL:    cfg.TorrentioURL,
+		PlexURL:         cfg.PlexURL,
+		PlexToken:       cfg.PlexToken,
+		MediaServerType: cfg.MediaServerType,
+		PlexTVLib:       cfg.PlexTVLib,
+		TVDir:           tvDir,
+		StateDir:        stateDir,
+		LogsDir:         logsDir,
+		ProwlarrCfg:     cfg.ProwlarrCfg,
+		Language:        cfg.Language,
+		Weights:         cfg.QualityScoring.TVWeights(),
+		InvalidatePath:  cfg.InvalidatePath,
 	}
 
 	return &TVSyncer{

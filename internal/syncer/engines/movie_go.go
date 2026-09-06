@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,7 +16,7 @@ import (
 
 	"golang.org/x/time/rate"
 
-	"tiramisu/internal/catalog"
+	"tiramisu/internal/catalog/mediaserver"
 	"tiramisu/internal/catalog/rottentomatoes"
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
@@ -35,6 +34,7 @@ type MovieGoEngine struct {
 	plexURL   string
 	plexToken string
 	plexLib   int
+	mediasrv  mediaserver.Client
 	moviesDir string
 	stateDir  string
 	limiter   *rate.Limiter
@@ -86,18 +86,19 @@ type BlacklistData struct {
 
 // MovieEngineConfig holds config for the movie engine.
 type MovieEngineConfig struct {
-	GoStormURL   string
-	TMDBAPIKey   string
-	TorrentioURL string
-	PlexURL      string
-	PlexToken    string
-	PlexLib      int
-	MoviesDir    string
-	StateDir     string
-	LogsDir      string
-	ProwlarrCfg  prowlarr.ConfigProwlarr
-	Language     config.LanguageConfig
-	Weights      config.MovieWeights
+	GoStormURL      string
+	TMDBAPIKey      string
+	TorrentioURL    string
+	PlexURL         string
+	PlexToken       string
+	MediaServerType string
+	PlexLib         int
+	MoviesDir       string
+	StateDir        string
+	LogsDir         string
+	ProwlarrCfg     prowlarr.ConfigProwlarr
+	Language        config.LanguageConfig
+	Weights         config.MovieWeights
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -158,6 +159,7 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 		plexURL:   cfg.PlexURL,
 		plexToken: cfg.PlexToken,
 		plexLib:   cfg.PlexLib,
+		mediasrv:  mediaserver.New(cfg.MediaServerType, cfg.PlexURL, cfg.PlexToken),
 		moviesDir: cfg.MoviesDir,
 		stateDir:  cfg.StateDir,
 		limiter:   rate.NewLimiter(rate.Every(250*time.Millisecond), 1),
@@ -238,16 +240,9 @@ func (e *MovieGoEngine) Run(ctx context.Context) error {
 	e.rehydrateMissingTorrents(ctx)
 	e.cleanupOrphanedFiles(ctx)
 
-	if e.plexLib > 0 && e.plexURL != "" && e.plexToken != "" {
-		url := fmt.Sprintf("%s/library/sections/%d/refresh?X-Plex-Token=%s", e.plexURL, e.plexLib, e.plexToken)
-		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-		client := catalog.NewClient(10 * time.Second)
-		resp, err := catalog.Do(context.Background(), client, req)
-		if err != nil {
-			e.logger.Printf("[MovieSync] Warning: Plex library refresh failed: %v", err)
-		} else {
-			resp.Body.Close()
-		}
+	// Plex skips this without a section ID; Jellyfin refreshes every library and ignores it.
+	if err := e.mediasrv.RefreshLibrary(context.Background(), e.plexLib); err != nil {
+		e.logger.Printf("[MovieSync] Warning: media server library refresh failed: %v", err)
 	}
 
 	return nil
