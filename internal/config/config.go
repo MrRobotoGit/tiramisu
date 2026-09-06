@@ -286,6 +286,12 @@ func (c *Config) Save() error {
 	return os.WriteFile(c.ConfigPath, data, 0644)
 }
 
+// DefaultBlockListURL is the list the filter below is written for. It is a real default,
+// not just an example in config.json.example: a configuration without the key showed an
+// empty field in the Control Panel, and an empty field is skipped on save, so enabling the
+// blocklist downloaded nothing and there was no way to fix it from the panel.
+const DefaultBlockListURL = "https://list.iblocklist.com/?list=ydxerpxkpcfqjaybcssw&fileformat=p2p&archiveformat=gz"
+
 // DefaultBlockListFilter keeps only the anti-P2P section of a published blocklist. It is a
 // real default, not a hint: without it Level 1 loads whole - 17% of IPv4, nearly all of it
 // 1990s whois records - and rejects ordinary peers on netblocks that changed hands years
@@ -302,6 +308,7 @@ func LoadConfig() Config {
 		FuseBlockSize:          1048576,
 		StreamingThresholdKB:   128,
 		LogLevel:               "INFO",
+		BlockListURL:           DefaultBlockListURL,
 		BlockListFilter:        DefaultBlockListFilter,
 
 		AttrTimeoutSeconds:     1.0,
