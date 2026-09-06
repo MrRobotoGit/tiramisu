@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"tiramisu/internal/catalog"
+	"tiramisu/internal/catalog/mediaserver"
 	"tiramisu/internal/monitor/logtail"
 )
 
@@ -34,23 +36,23 @@ type ShieldEvent struct {
 
 // HealthStatus holds the current system health snapshot.
 type HealthStatus struct {
-	Timestamp   time.Time     `json:"timestamp"`
-	Uptime      string        `json:"uptime"`
-	GoRoutines  int           `json:"go_routines"`
-	MemAllocMB  float64       `json:"mem_alloc_mb"`
-	MemSysMB    float64       `json:"mem_sys_mb"`
-	CPU         float64       `json:"cpu_pct"`
-	RAMPct      float64       `json:"ram_pct"`
-	RAMUsedGB   float64       `json:"ram_used_gb"`
-	RAMTotalGB  float64       `json:"ram_total_gb"`
-	DiskUsedPct float64       `json:"disk_used_pct"`
-	DiskFreeGB  float64       `json:"disk_free_gb"`
-	DiskTotalGB float64       `json:"disk_total_gb"`
-	GoStorm     ServiceStatus `json:"gostorm"`
-	FUSE        ServiceStatus `json:"fuse"`
-	VPN         ServiceStatus `json:"vpn"`
-	NATPMP      ServiceStatus `json:"natpmp"`
-	Plex        ServiceStatus `json:"plex"`
+	Timestamp    time.Time           `json:"timestamp"`
+	Uptime       string              `json:"uptime"`
+	GoRoutines   int                 `json:"go_routines"`
+	MemAllocMB   float64             `json:"mem_alloc_mb"`
+	MemSysMB     float64             `json:"mem_sys_mb"`
+	CPU          float64             `json:"cpu_pct"`
+	RAMPct       float64             `json:"ram_pct"`
+	RAMUsedGB    float64             `json:"ram_used_gb"`
+	RAMTotalGB   float64             `json:"ram_total_gb"`
+	DiskUsedPct  float64             `json:"disk_used_pct"`
+	DiskFreeGB   float64             `json:"disk_free_gb"`
+	DiskTotalGB  float64             `json:"disk_total_gb"`
+	GoStorm      ServiceStatus       `json:"gostorm"`
+	FUSE         ServiceStatus       `json:"fuse"`
+	VPN          ServiceStatus       `json:"vpn"`
+	NATPMP       ServiceStatus       `json:"natpmp"`
+	MediaServers []MediaServerStatus `json:"media_servers"`
 
 	TotalTorrents int     `json:"total_torrents"`
 	ActiveCount   int     `json:"active_count"`
@@ -79,6 +81,17 @@ type HealthStatus struct {
 type ServiceStatus struct {
 	OK      bool   `json:"ok"`
 	Latency int    `json:"latency_ms"`
+	Message string `json:"message,omitempty"`
+}
+
+// MediaServerStatus is one Plex or Jellyfin instance shown on the dashboard.
+// Message carries a short state ("unreachable", "found on LAN"), never a raw
+// Go error: the card renders it verbatim.
+type MediaServerStatus struct {
+	Product string `json:"product"`
+	Name    string `json:"name,omitempty"`
+	OK      bool   `json:"ok"`
+	Latency int    `json:"latency_ms,omitempty"`
 	Message string `json:"message,omitempty"`
 }
 
@@ -145,6 +158,10 @@ type Collector struct {
 
 	publicIP     string
 	publicIPTime time.Time
+
+	msMu      sync.Mutex
+	msFound   []mediaserver.Discovered
+	msFoundAt time.Time
 }
 
 // New creates a Collector.
@@ -292,7 +309,7 @@ func (c *Collector) collect() {
 	s.FUSE = c.checkFUSE()
 	s.VPN = c.checkVPN()
 	s.NATPMP = c.checkNATPMP()
-	s.Plex = c.checkHTTP(c.plexURL, "/", 5*time.Second)
+	s.MediaServers = c.checkMediaServers()
 
 	// FUSE buffer from /metrics
 	c.fetchFUSEBuffer(&s)
@@ -904,4 +921,75 @@ func cleanTorrentTitle(raw string) string {
 		s = strings.ReplaceAll(s, "  ", " ")
 	}
 	return s
+}
+
+// Media server discovery cadence. The collector ticks every 5s; broadcasting
+// that often would be noise, so replies are reused for discoveryTTL.
+const (
+	discoveryTTL  = 60 * time.Second
+	discoveryWait = 1500 * time.Millisecond
+)
+
+// checkMediaServers reports every Plex or Jellyfin instance it can see: the
+// configured one first, then whatever answers a LAN broadcast. Returns an empty
+// slice when nothing is found, which the dashboard renders as "not active".
+func (c *Collector) checkMediaServers() []MediaServerStatus {
+	var out []MediaServerStatus
+	configured := ""
+
+	if c.plexURL != "" {
+		configured = hostOf(c.plexURL)
+		out = append(out, c.checkConfiguredServer())
+	}
+
+	for _, d := range c.discoverCached() {
+		if hostOf(d.Address) == configured {
+			continue // already reported, with a real reachability check
+		}
+		out = append(out, MediaServerStatus{
+			Product: d.Product,
+			Name:    d.Name,
+			OK:      true,
+			Message: "found on LAN",
+		})
+	}
+	return out
+}
+
+// checkConfiguredServer probes the configured URL and names the product from
+// whatever actually answers, so a Jellyfin sitting in the plex.url field is not
+// mislabelled.
+func (c *Collector) checkConfiguredServer() MediaServerStatus {
+	ctx := context.Background()
+	start := time.Now()
+	product := mediaserver.Identify(ctx, c.plexURL, 5*time.Second)
+	latency := int(time.Since(start).Milliseconds())
+
+	if product == "" {
+		return MediaServerStatus{Product: "Media Server", OK: false, Message: "unreachable"}
+	}
+	return MediaServerStatus{Product: product, OK: true, Latency: latency}
+}
+
+// discoverCached broadcasts at most once per discoveryTTL and reuses the result.
+func (c *Collector) discoverCached() []mediaserver.Discovered {
+	c.msMu.Lock()
+	defer c.msMu.Unlock()
+
+	if time.Since(c.msFoundAt) < discoveryTTL {
+		return c.msFound
+	}
+	c.msFound = mediaserver.Discover(context.Background(), discoveryWait)
+	c.msFoundAt = time.Now()
+	return c.msFound
+}
+
+// hostOf extracts host:port from a base URL, for comparing a configured server
+// against a discovered one.
+func hostOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return rawURL
+	}
+	return u.Host
 }

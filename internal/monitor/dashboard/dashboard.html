@@ -102,9 +102,9 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">NAT-PMP</div>
     <div class="flex items-center gap-2"><span id="s-natpmp" class="text-base sm:text-lg">&#9679;</span><span id="l-natpmp" class="text-sm sm:text-base font-bold">--</span></div>
   </div>
-  <div class="glass rounded-xl p-4" id="c-plex">
-    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Plex</div>
-    <div class="flex items-center gap-2"><span id="s-plex" class="text-base sm:text-lg">&#9679;</span><span id="l-plex" class="text-sm sm:text-base font-bold">--</span></div>
+  <div class="glass rounded-xl p-4" id="c-mediaserver">
+    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Media Server</div>
+    <div id="l-mediaserver" class="space-y-1"></div>
   </div>
   <div class="glass rounded-xl p-4">
     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">System</div>
@@ -151,7 +151,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
 </div>
 <script>
 let chart;
-const svcKeys=['gostorm','fuse','vpn','natpmp','plex'];
+const svcKeys=['gostorm','fuse','vpn','natpmp'];
 
 function initChart(){
   const ctx=document.getElementById('speedChart').getContext('2d');
@@ -170,6 +170,30 @@ function svc(el,st){
   if(el==='fuse'&&st.ok&&st.message)lbl.textContent=st.message;
   if(el==='vpn'&&st.ok&&st.message)lbl.textContent=st.message;
   if(el==='natpmp'&&st.ok&&st.message)lbl.textContent=st.message;
+}
+
+// One line per server: the user can run Plex and Jellyfin side by side.
+function mediaServers(list){
+  const box=document.getElementById('l-mediaserver');
+  if(!box)return;
+  box.innerHTML='';
+  if(!list||!list.length){
+    box.innerHTML='<div class="flex items-center gap-2"><span class="text-base sm:text-lg" style="color:#64748b">&#9679;</span>'
+      +'<span class="text-sm sm:text-base text-slate-500">not active</span></div>';
+    return;
+  }
+  for(const m of list){
+    const detail=m.ok?(m.latency_ms?m.latency_ms+'ms':(m.message||'')):(m.message||'down');
+    const row=document.createElement('div');
+    row.className='flex items-center gap-2';
+    row.innerHTML='<span class="text-base sm:text-lg '+(m.ok?'pulse-ok':'pulse-err')+'" style="color:'
+      +(m.ok?'#22c55e':'#ef4444')+'">&#9679;</span>'
+      +'<span class="text-sm sm:text-base font-bold"></span>'
+      +'<span class="text-xs text-slate-400"></span>';
+    row.children[1].textContent=m.product||'Media Server';
+    row.children[2].textContent=detail;
+    box.appendChild(row);
+  }
 }
 
 function fmtSize(b){if(!b||b<1024)return'0 B';const u=['B','KB','MB','GB','TB'];let i=0,v=b;while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(1)+' '+u[i]}
@@ -244,6 +268,7 @@ async function load(){
     document.getElementById('v304BannedPeers').textContent=h.v304_banned_peers ?? 0;
 
     svcKeys.forEach(k=>svc(k,h[k]));
+    mediaServers(h.media_servers);
 
     if(chart&&history.length){
       chart.data.labels=history.map((_,i)=>i);
