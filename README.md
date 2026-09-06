@@ -1109,7 +1109,7 @@ Without an open inbound port, peers cannot initiate connections. The engine reli
 **If you are not using a VPN, forward the peer port on your router.** Tiramisu asks the router for the mapping over UPnP on its own, but many routers ship with UPnP disabled (and some ISP routers do not offer it at all). When that request fails nothing is logged as an error — the port simply stays closed and peer counts stay low.
 
 1. Pin the port. In the Control Panel, set **GoStorm → `PeersListenPort`** to a fixed high port (e.g. `64407`). Left at `0` the engine picks a new random port on every start, which no static forward can follow.
-2. Forward that same port to the machine running Tiramisu, **both TCP and UDP**. UDP is not optional: DHT and uTP travel on the peer port, not on 6881, so a TCP-only rule leaves peer discovery crippled.
+2. Forward that same port to the machine running Tiramisu, **both TCP and UDP**.
 3. Verify from outside your network that the port is open — a closed port and a working UPnP mapping look identical from the inside.
 
 A router that drops the unforwarded traffic *and* logs every drop can also wear out its own flash storage over time; if your router has a firewall logging option, check it is not writing a line per dropped packet.
