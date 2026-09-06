@@ -197,10 +197,10 @@ type Config struct {
 	// BlockListFilter keeps only the ranges whose description matches this regexp.
 	// Empty keeps the whole list. See blockedIP.go for why published lists need it.
 	BlockListFilter string `json:"blocklist_filter"`
-	AIURL            string `json:"ai_url"`      // V1.4.5: AI Optimizer sidecar URL
-	AIProvider       string `json:"ai_provider"` // V1.7.1: Provider type (local, openrouter, openai)
-	AIModel          string `json:"ai_model"`    // V1.7.1: Model ID for cloud providers
-	AI_API_KEY       string `json:"ai_api_key"`  // V1.7.1: API key for cloud providers
+	AIURL           string `json:"ai_url"`      // V1.4.5: AI Optimizer sidecar URL
+	AIProvider      string `json:"ai_provider"` // V1.7.1: Provider type (local, openrouter, openai)
+	AIModel         string `json:"ai_model"`    // V1.7.1: Model ID for cloud providers
+	AI_API_KEY      string `json:"ai_api_key"`  // V1.7.1: API key for cloud providers
 
 	// --- FUSE Paths ---
 	// Fallback when CLI args are omitted. CLI args always take precedence.
@@ -286,6 +286,12 @@ func (c *Config) Save() error {
 	return os.WriteFile(c.ConfigPath, data, 0644)
 }
 
+// DefaultBlockListFilter keeps only the anti-P2P section of a published blocklist. It is a
+// real default, not a hint: without it Level 1 loads whole - 17% of IPv4, nearly all of it
+// 1990s whois records - and rejects ordinary peers on netblocks that changed hands years
+// ago. Set the key to an empty string in config.json to load a list unfiltered.
+const DefaultBlockListFilter = `(?i)\bap2p\b|anti-?p2p`
+
 // LoadConfig loads configuration from environment variables with defaults
 func LoadConfig() Config {
 	// 1. Initial Defaults (V138 Gold Standard)
@@ -296,6 +302,7 @@ func LoadConfig() Config {
 		FuseBlockSize:          1048576,
 		StreamingThresholdKB:   128,
 		LogLevel:               "INFO",
+		BlockListFilter:        DefaultBlockListFilter,
 
 		AttrTimeoutSeconds:     1.0,
 		EntryTimeoutSeconds:    1.0,
