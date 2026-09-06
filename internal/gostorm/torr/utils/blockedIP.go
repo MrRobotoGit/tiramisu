@@ -56,23 +56,27 @@ func ReadBlockedIP() (ranger iplist.Ranger, err error) {
 		return nil, nil
 	}
 
-	// 1. Try executable directory first (new auto-update location)
-	exePath, err := os.Executable()
-	if err == nil {
-		exeDir := filepath.Dir(exePath)
-		buf, err := os.ReadFile(filepath.Join(exeDir, "blocklist"))
+	// 1. The state directory, where the downloader writes. These are the same directory
+	// under systemd; in a container only this one is on a mounted volume, so a stale copy
+	// beside the binary must not outrank the file being refreshed.
+	if settings.Path != "" {
+		buf, err := os.ReadFile(filepath.Join(settings.Path, "blocklist"))
 		if err == nil {
-			log.TLogln("Read block list from binary directory...")
+			log.TLogln("Read block list from settings directory...")
 			return parseBlockList(buf)
 		}
 	}
 
-	// 2. Fallback to settings.Path
-	buf, err := os.ReadFile(filepath.Join(settings.Path, "blocklist"))
+	// 2. Fall back to the binary's directory.
+	exePath, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
-	log.TLogln("Read block list from settings directory...")
+	buf, err := os.ReadFile(filepath.Join(filepath.Dir(exePath), "blocklist"))
+	if err != nil {
+		return nil, err
+	}
+	log.TLogln("Read block list from binary directory...")
 	return parseBlockList(buf)
 }
 
