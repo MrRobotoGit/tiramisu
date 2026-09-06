@@ -1058,19 +1058,36 @@
                     </div>
 
                     <div class="form-section">
-                        <div class="form-section-title">Media Manager (Plex)</div>
+                        <div class="form-section-title">Media Server</div>
                         <div class="form-grid">
                             <div class="form-group" style="grid-column: 1 / -1;">
                                 <label>TMDB API key</label>
                                 <input type="text" name="tmdb_api_key">
                             </div>
                             <div class="form-group" style="grid-column: 1 / -1;">
-                                <label>Plex URL</label>
-                                <input type="text" name="plex_url" data-nested="plex.url">
+                                <label>Media Server Type</label>
+                                <select name="media_server_type">
+                                    <option value="plex">Plex</option>
+                                    <option value="jellyfin">Jellyfin</option>
+                                </select>
+                                <div class="hint">Which product the URL and token below belong to. Selects how the library
+                                    refresh after a sync is issued: Plex takes a token in the query string, Jellyfin an
+                                    <code>X-Emby-Token</code> header.</div>
                             </div>
                             <div class="form-group" style="grid-column: 1 / -1;">
-                                <label>Plex Token</label>
+                                <label>Media Server URL</label>
+                                <input type="text" name="plex_url" data-nested="plex.url"
+                                    placeholder="http://192.168.1.10:32400  or  http://192.168.1.10:8096">
+                                <div class="hint">Plex or Jellyfin. The Media Server card identifies which one answers, and
+                                    reports it as verified rather than merely discovered. A LAN broadcast finds servers on
+                                    the same network, but not one running in a Docker bridge network, so setting this is
+                                    the reliable way.</div>
+                            </div>
+                            <div class="form-group" style="grid-column: 1 / -1;">
+                                <label>Media Server Token</label>
                                 <input type="text" name="plex_token" data-nested="plex.token">
+                                <div class="hint">A Plex token, or a Jellyfin API key. Needed for the library refresh after
+                                    a sync, and for the playback sessions and posters the dashboard shows (Plex only).</div>
                             </div>
                             <div class="form-group">
                                 <label>Movies Library ID</label>
@@ -2240,6 +2257,7 @@
             'retry_delay_ms', 'gostorm_url', 'rescue_grace_period_seconds',
             'rescue_cooldown_hours', 'metrics_port', 'disk_warmup_quota_gb',
             'log_level', 'proxy_listen_port', 'blocklist_url', 'blocklist_filter',
+            'media_server_type',
             'tmdb_api_key', 'torrentio_url'
         ];
 
@@ -2252,6 +2270,11 @@
                     const input = document.querySelector(`[name="${k}"]`);
                     if (input) {
                         input.value = originalEngine[k] ?? "";
+                        // A <select> shows blank when the stored value matches no option;
+                        // an unset media server type means Plex, which is the engine default.
+                        if (input.tagName === 'SELECT' && !input.value) {
+                            input.value = input.options[0]?.value ?? "";
+                        }
                         const label = document.querySelector(`[data-for="${k}"]`);
                         if (label) {
                             const suffix = k.includes('_mb') ? ' MB' : '%';
@@ -2329,7 +2352,7 @@
                 if (v === "" && k !== 'blocklist_filter') return;
 
                 if (k === 'log_level' || k === 'gostorm_url' || k === 'blocklist_url' ||
-                    k === 'blocklist_filter' ||
+                    k === 'blocklist_filter' || k === 'media_server_type' ||
                     k === 'physical_source_path' || k === 'fuse_mount_path' || k === 'tmdb_api_key' ||
                     k === 'torrentio_url') {
                     data[k] = v;

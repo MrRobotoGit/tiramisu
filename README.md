@@ -749,10 +749,11 @@ nano /home/pi/Tiramisu/config.json
 | `blocklist_enabled` | `false` | Enable the peer IP blocklist (impacts swarm performance; not needed if you use a VPN) |
 | `blocklist_url` | *(iblocklist Level 1)* | Gzipped IP blocklist URL (24 h refresh). Gzip is detected from the content, not the extension; changing the URL refreshes immediately |
 | `blocklist_filter` | `(?i)\bap2p\b\|anti-?p2p` | Keep only ranges whose description matches this regexp. Empty loads the whole list |
-| `plex.url` | *(none)* | Plex server URL |
-| `plex.token` | *(none)* | Plex authentication token |
-| `plex.library_id` | `0` | Plex movies library section ID |
-| `plex.tv_library_id` | `0` | Plex TV series library section ID (0 = disabled) |
+| `media_server_type` | `plex` | `plex` or `jellyfin`. Selects how the post-sync library refresh is issued |
+| `plex.url` | *(none)* | Media server URL — Plex (`:32400`) or Jellyfin (`:8096`) |
+| `plex.token` | *(none)* | Plex token, or Jellyfin API key |
+| `plex.library_id` | `0` | Movies library section ID, Plex only (0 = skip the refresh) |
+| `plex.tv_library_id` | `0` | TV series library section ID, Plex only (0 = skip the refresh) |
 | `tmdb_api_key` | *(none)* | TMDB API key |
 | `prowlarr.enabled` | `false` | Use Prowlarr as primary indexer (falls back to Torrentio if disabled) |
 | `prowlarr.api_key` | *(none)* | Prowlarr API key (Settings → General → API Key) |
@@ -869,6 +870,21 @@ Reads Plex cloud watchlist → IMDB ID resolution → Prowlarr/Torrentio (min 10
 ---
 
 ## Plex/Jellyfin and Samba Setup
+
+### Connecting a Media Server
+
+Point the **Media Server** card in the Control Panel at your server and Tiramisu identifies which product answers, showing it as verified with its latency. Tiramisu also broadcasts on the LAN — Plex GDM on UDP 32414, Jellyfin on UDP 7359 — and lists whatever replies, so a server on the same network shows up without configuration. A broadcast does not cross a Docker bridge network, and Jellyfin lets you switch its discovery off, so setting the URL is the reliable way.
+
+| Setting | Plex | Jellyfin |
+|---------|------|----------|
+| `media_server_type` | `plex` | `jellyfin` |
+| `plex.url` | `http://host:32400` | `http://host:8096` |
+| `plex.token` | [X-Plex-Token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/) | API key: Dashboard → Advanced → API Keys → **+** |
+| `plex.library_id` / `plex.tv_library_id` | Section IDs to refresh after a sync | Leave at `0` |
+
+The token drives the library refresh Tiramisu issues after a sync — a token in the query string for Plex, an `X-Emby-Token` header for Jellyfin. It is optional: without it the media server finds new files on its own scan schedule. The playback sessions and posters on the dashboard are Plex-only.
+
+The field names keep the `plex.` prefix for backward compatibility with existing configurations; they hold whichever server `media_server_type` names.
 
 ### Samba Configuration
 

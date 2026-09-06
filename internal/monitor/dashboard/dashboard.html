@@ -177,7 +177,14 @@ function mediaServers(list){
   const box=document.getElementById('l-mediaserver');
   if(!box)return;
   box.innerHTML='';
-  if(!list||!list.length){
+  if(!list){
+    // Before the collector's first cycle there is no answer yet, which is not the same
+    // as having looked and found nothing.
+    box.innerHTML='<div class="flex items-center gap-2"><span class="text-base sm:text-lg" style="color:#64748b">&#9679;</span>'
+      +'<span class="text-sm sm:text-base text-slate-500">checking...</span></div>';
+    return;
+  }
+  if(!list.length){
     box.innerHTML='<div class="flex items-center gap-2"><span class="text-base sm:text-lg" style="color:#64748b">&#9679;</span>'
       +'<span class="text-sm sm:text-base text-slate-500">not active</span></div>';
     return;
