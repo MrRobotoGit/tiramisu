@@ -946,6 +946,7 @@ docker pull ghcr.io/mrrobotogit/tiramisu:latest
 ```bash
 docker run -d \
   --name tiramisu \
+  --restart unless-stopped \
   --device /dev/fuse \
   --cap-add SYS_ADMIN \
   --cap-add NET_ADMIN \

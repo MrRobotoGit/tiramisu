@@ -54,9 +54,16 @@ if [ ! -f "$CONFIG_PATH" ]; then
 fi
 
 tiramisu_pid=""
+stopping=""
+
+# Exit code tiramisu uses to ask for a restart (Control Panel button). Any other
+# code ends the container, so a real crash still hands control to Docker's
+# restart policy. Keep in sync with restartExitCode in main.go.
+RESTART_EXIT_CODE=75
 
 shutdown() {
   trap - INT TERM EXIT
+  stopping=1
 
   if [ -n "$tiramisu_pid" ] && kill -0 "$tiramisu_pid" 2>/dev/null; then
     kill -TERM "$tiramisu_pid" 2>/dev/null || true
@@ -68,11 +75,24 @@ shutdown() {
 
 trap shutdown INT TERM EXIT
 
-echo "Starting tiramisu" >&2
-/usr/local/bin/tiramisu --path "$ROOT_PATH" "$SOURCE_PATH" "$MOUNT_PATH" &
-tiramisu_pid="$!"
+# Supervision loop: without it a Control Panel restart would stop the container,
+# since the entrypoint is PID 1's only child and nothing restarts it.
+while :; do
+  echo "Starting tiramisu" >&2
+  /usr/local/bin/tiramisu --path "$ROOT_PATH" "$SOURCE_PATH" "$MOUNT_PATH" &
+  tiramisu_pid="$!"
 
-wait "$tiramisu_pid"
-exit_code=$?
-fusermount3 -uz "$MOUNT_PATH" 2>/dev/null || true
+  exit_code=0
+  wait "$tiramisu_pid" || exit_code=$?
+  tiramisu_pid=""
+
+  # Unmount between runs, or the next process finds the previous FUSE layer.
+  fusermount3 -uz "$MOUNT_PATH" 2>/dev/null || true
+
+  if [ -n "$stopping" ] || [ "$exit_code" -ne "$RESTART_EXIT_CODE" ]; then
+    break
+  fi
+  echo "Restart requested from the Control Panel" >&2
+done
+
 exit "$exit_code"

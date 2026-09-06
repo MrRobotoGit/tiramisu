@@ -177,6 +177,13 @@ var (
 	blockListStop chan struct{}
 )
 
+// restartExitCode tells a supervisor that this exit was a restart request from
+// the Control Panel, not a crash. The Docker entrypoint restarts only on this
+// code; systemd restarts on any. Keep in sync with docker-entrypoint.sh.
+const restartExitCode = 75
+
+var restartRequested atomic.Bool
+
 // readBufferPool size matches Config.ReadAheadBase (set in main).
 var readBufferPool *sync.Pool
 
@@ -4313,7 +4320,9 @@ func main() {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		// Trigger graceful shutdown — systemd Restart=always will bring it back up
+		// Graceful shutdown, then exit with restartExitCode: systemd restarts on any
+		// code, and the Docker entrypoint's supervision loop restarts only on this one.
+		restartRequested.Store(true)
 		go func() {
 			time.Sleep(150 * time.Millisecond)
 			p, _ := os.FindProcess(os.Getpid())
@@ -4505,6 +4514,10 @@ func main() {
 			server.Unmount()
 		}
 
+		if restartRequested.Load() {
+			logger.Printf("Graceful shutdown complete, exiting with %d to request a restart...", restartExitCode)
+			os.Exit(restartExitCode)
+		}
 		logger.Println("Graceful shutdown complete, exiting...")
 		os.Exit(0)
 	}()
@@ -4585,6 +4598,7 @@ func smbdWatchdog() {
 			if consecutiveHits >= restartThreshold {
 				logger.Printf("[Watchdog] D-state STILL persistent for %ds — triggering graceful restart",
 					consecutiveHits*int(checkInterval/time.Second))
+				restartRequested.Store(true)
 				syscall.Kill(syscall.Getpid(), syscall.SIGTERM)
 				return
 			}
