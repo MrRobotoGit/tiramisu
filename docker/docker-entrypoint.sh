@@ -59,6 +59,10 @@ mkdir -p "$STATE_DIR" "$LOG_DIR"
 # $STATE_DIR. Unmounted, both vanish on "docker rm" and every setting silently
 # returns to its default, which is hard to attribute after the fact.
 for dir in "$ROOT_PATH" "$STATE_DIR"; do
+  # STATE_DIR usually sits under ROOT_PATH; warning twice about the same volume is noise.
+  case "$dir" in
+    "$ROOT_PATH"|"$ROOT_PATH"/*) [ "$dir" = "$ROOT_PATH" ] || continue ;;
+  esac
   if ! path_is_persistent "$dir"; then
     echo "===============================================================" >&2
     echo "WARNING: $dir is NOT on a mounted volume." >&2
