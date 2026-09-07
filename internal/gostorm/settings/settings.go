@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"tiramisu/internal/gostorm/log"
 )
@@ -61,8 +62,17 @@ func InitSets(readOnly, searchWA bool) {
 		}
 	}
 
+	// A settings file we cannot parse is set aside rather than kept: leaving it in place
+	// makes every later save fail, so the server could never recover on its own.
+	quarantined := quarantineCorruptSettings(jsonDB)
+
 	// Determine storage preferences
 	settingsStoragePref := determineStoragePreferences(bboltDB, jsonDB)
+	if quarantined {
+		// The file existing at all means settings were kept in JSON. Stay there, and let
+		// the migration below repopulate the fresh file from the BBolt copy if one exists.
+		settingsStoragePref = true
+	}
 
 	// Apply migrations (clean, one-way)
 	applyCleanMigrations(bboltDB, jsonDB, settingsStoragePref)
@@ -83,6 +93,28 @@ func InitSets(readOnly, searchWA bool) {
 	MigrateTorrents()
 
 	logConfiguration(settingsStoragePref)
+}
+
+// quarantineCorruptSettings moves an unparseable settings file aside and reports whether
+// it did. The content is kept under a timestamped name instead of being deleted.
+func quarantineCorruptSettings(jsonDB GoStormDB) bool {
+	j, ok := jsonDB.(*JsonDB)
+	if !ok || j.readable("Settings") {
+		return false
+	}
+	filename, err := j.xPathToFilename("Settings")
+	if err != nil {
+		return false
+	}
+	path := filepath.Join(j.Path, filename)
+	dest := path + ".corrupt-" + time.Now().Format("20060102-150405")
+	if err := os.Rename(path, dest); err != nil {
+		// Leave it alone: the guard in loadExistingSettings still prevents a backend flip.
+		log.TLogln("Settings file is corrupt and could not be set aside:", err)
+		return false
+	}
+	log.TLogln("Settings file was corrupt, moved to", dest, "- restoring from the BBolt copy or defaults")
+	return true
 }
 
 func determineStoragePreferences(bboltDB, jsonDB GoStormDB) (settingsInJson bool) {
