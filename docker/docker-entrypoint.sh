@@ -2,14 +2,14 @@
 set -eu
 
 CONFIG_PATH="${MKV_PROXY_CONFIG_PATH:-/config.json}"
-ROOT_PATH="${TIRAMISU_ROOT_PATH:-${GOSTREAM_ROOT_PATH:-/usr/local}}"
+ROOT_PATH="${TIRAMISU_ROOT_PATH:-${GOSTREAM_ROOT_PATH:-/state}}"
 SOURCE_PATH="${TIRAMISU_SOURCE_PATH:-${GOSTREAM_SOURCE_PATH:-/mnt/tiramisu-mkv-real}}"
 MOUNT_PATH="${TIRAMISU_MOUNT_PATH:-${GOSTREAM_MOUNT_PATH:-/mnt/tiramisu-mkv-virtual}}"
 STATE_DIR="${TIRAMISU_STATE_DIR:-${GOSTREAM_STATE_DIR:-$ROOT_PATH/STATE}}"
 LOG_DIR="${TIRAMISU_LOG_DIR:-${GOSTREAM_LOG_DIR:-$ROOT_PATH/logs}}"
 HOST_MOUNT_HINT="${TIRAMISU_HOST_MOUNT_HINT:-${GOSTREAM_HOST_MOUNT_HINT:-}}"
 
-mkdir -p "$SOURCE_PATH" "$MOUNT_PATH" "$ROOT_PATH" "$STATE_DIR" "$LOG_DIR"
+mkdir -p "$SOURCE_PATH" "$MOUNT_PATH" "$ROOT_PATH"
 
 # True when the path sits under a volume or bind mount rather than the container's
 # own writable layer. "/" is the overlay itself and does not count.
@@ -24,14 +24,52 @@ path_is_persistent() {
   return 1
 }
 
+# Images before v1.9.61 defaulted ROOT_PATH to /usr/local, inside the container's
+# writable layer. Carry that state over so an in-place image update keeps the peer
+# port, the torrent list and the settings instead of silently starting from defaults.
+LEGACY_ROOT="/usr/local"
+dir_is_empty() {
+  [ -z "$(ls -A "$1" 2>/dev/null)" ]
+}
+if [ "$ROOT_PATH" != "$LEGACY_ROOT" ] && path_is_persistent "$ROOT_PATH"; then
+  for entry in config.db settings.json accs.db trackers.txt blocklist; do
+    if [ -f "$LEGACY_ROOT/$entry" ] && [ ! -e "$ROOT_PATH/$entry" ]; then
+      echo "Migrating $LEGACY_ROOT/$entry to $ROOT_PATH/$entry" >&2
+      mv "$LEGACY_ROOT/$entry" "$ROOT_PATH/$entry" 2>/dev/null \
+        || cp -a "$LEGACY_ROOT/$entry" "$ROOT_PATH/$entry" 2>/dev/null \
+        || echo "WARNING: could not migrate $entry" >&2
+    fi
+  done
+  # STATE/ and logs/ may already exist as empty directories; move their contents.
+  for entry in STATE logs; do
+    src="$LEGACY_ROOT/$entry"
+    dst="$ROOT_PATH/$entry"
+    if [ -d "$src" ] && ! dir_is_empty "$src" && { [ ! -d "$dst" ] || dir_is_empty "$dst"; }; then
+      echo "Migrating $src/ to $dst/" >&2
+      mkdir -p "$dst"
+      cp -a "$src/." "$dst/" 2>/dev/null && rm -rf "$src" \
+        || echo "WARNING: could not migrate $entry/" >&2
+    fi
+  done
+fi
+
+mkdir -p "$STATE_DIR" "$LOG_DIR"
+
 # GoStorm keeps its settings in $ROOT_PATH/config.db and Tiramisu its state in
 # $STATE_DIR. Unmounted, both vanish on "docker rm" and every setting silently
 # returns to its default, which is hard to attribute after the fact.
 for dir in "$ROOT_PATH" "$STATE_DIR"; do
   if ! path_is_persistent "$dir"; then
-    echo "WARNING: $dir is not on a mounted volume." >&2
-    echo "         Settings and state there are lost when the container is removed." >&2
-    echo "         Mount a volume and point TIRAMISU_ROOT_PATH at it." >&2
+    echo "===============================================================" >&2
+    echo "WARNING: $dir is NOT on a mounted volume." >&2
+    echo "" >&2
+    echo "  Torrents, the peer port and every other setting stored there" >&2
+    echo "  are DISCARDED when this container is removed. A later" >&2
+    echo "  'docker rm' + 'docker run' comes back with the defaults." >&2
+    echo "" >&2
+    echo "  Fix it by mounting a host directory on $ROOT_PATH:" >&2
+    echo "    -v /opt/tiramisu/state:$ROOT_PATH" >&2
+    echo "===============================================================" >&2
   fi
 done
 

@@ -982,7 +982,6 @@ docker run -d \
   --device /dev/fuse \
   --cap-add SYS_ADMIN \
   --cap-add NET_ADMIN \
-  -e TIRAMISU_ROOT_PATH=/state \
   -v /path/to/config.json:/config.json \
   -v /path/to/state:/state \
   -v /mnt/tiramisu-mkv-real:/mnt/tiramisu-mkv-real \
@@ -996,17 +995,21 @@ Or use `--privileged` as a simpler alternative to the individual capabilities (e
 
 `config.json` must be volume-mounted at `/config.json` (the default `MKV_PROXY_CONFIG_PATH`). Use `config.json.example` as the starting point. Do not mount it `:ro` — the Control Panel writes settings back to this file, and a read-only mount makes every save fail.
 
-**Mount a volume for the state directory too.** `TIRAMISU_ROOT_PATH` is where everything that must outlive the container lives:
+**Mount a volume on `/state`.** Everything that must outlive the container lives there:
 
 | Path | Holds |
 |------|-------|
-| `$TIRAMISU_ROOT_PATH/config.db` | Torrent list, and GoStorm settings when `StoreSettingsInJson` is off |
-| `$TIRAMISU_ROOT_PATH/settings.json` | GoStorm settings — peer port, cache size, connection limit |
-| `$TIRAMISU_ROOT_PATH/STATE/` | Inode map and sync caches |
-| `$TIRAMISU_ROOT_PATH/logs/` | Log files the Control Panel tails |
-| `$TIRAMISU_ROOT_PATH/blocklist` | The downloaded IP blocklist |
+| `/state/config.db` | Torrent list, and GoStorm settings when `StoreSettingsInJson` is off |
+| `/state/settings.json` | GoStorm settings — peer port, cache size, connection limit |
+| `/state/STATE/` | Inode map and sync caches |
+| `/state/logs/` | Log files the Control Panel tails |
+| `/state/blocklist` | The downloaded IP blocklist |
 
-Point it at a mounted volume and everything survives `docker rm`. The container warns on startup when it is not on one. `TIRAMISU_STATE_DIR` and `TIRAMISU_LOG_DIR` default to `STATE/` and `logs/` underneath it — set them only to move those two elsewhere, and keep them inside the volume if you do.
+Mount a host directory there and everything survives `docker rm`. Without that volume the peer port, the torrent list and every other setting are discarded when the container is removed, and the next `docker run` starts from the defaults — the container prints a warning on startup when it detects this.
+
+`/state` is the default, so `TIRAMISU_ROOT_PATH` only needs setting to move the whole directory elsewhere. `TIRAMISU_STATE_DIR` and `TIRAMISU_LOG_DIR` default to `STATE/` and `logs/` underneath it — set them only to move those two, and keep them inside the volume if you do.
+
+Do not mount a named or anonymous Docker volume expecting the warning to catch a mistake: an anonymous volume looks mounted but a fresh `docker run` attaches a *new* empty one. Use a host path.
 
 **Updating the container.** Unmount the virtual directory between removing the old container and starting the new one: Docker refuses to bind-mount over the FUSE mount the previous container left behind.
 
