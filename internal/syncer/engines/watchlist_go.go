@@ -373,7 +373,11 @@ func (e *WatchlistGoEngine) isAlreadyPresent(item WatchlistItem, imdbSet map[str
 
 func (e *WatchlistGoEngine) getStreams(ctx context.Context, imdbID, title string, year int) ([]prowlarr.Stream, error) {
 	if e.prowlarr != nil {
-		streams := e.prowlarr.FetchTorrents(imdbID, "movie", title, year)
+		streams, err := e.prowlarr.FetchTorrents(imdbID, "movie", title, year)
+		if err != nil {
+			e.logger.Printf("Prowlarr search failed for %s: %v", title, err)
+			streams = nil
+		}
 		if len(streams) > 0 {
 			return streams, nil
 		}

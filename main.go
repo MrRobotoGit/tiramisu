@@ -4313,7 +4313,11 @@ func main() {
 			contentType = "movie"
 		}
 		year, _ := strconv.Atoi(r.URL.Query().Get("year"))
-		streams := prowlarrClient.FetchTorrents(imdbID, contentType, title, year)
+		streams, err := prowlarrClient.FetchTorrents(imdbID, contentType, title, year)
+		if err != nil {
+			http.Error(w, "prowlarr search failed: "+err.Error(), http.StatusBadGateway)
+			return
+		}
 		if streams == nil {
 			streams = []prowlarr.Stream{}
 		}

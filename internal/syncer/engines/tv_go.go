@@ -787,7 +787,11 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		for s := startSeason; s <= endSeason; s++ {
 			targetSeasons = append(targetSeasons, s)
 		}
-		streams := e.prowlarr.FetchTorrents(imdbID, "series", showName, 0, targetSeasons...)
+		streams, err := e.prowlarr.FetchTorrents(imdbID, "series", showName, 0, targetSeasons...)
+		if err != nil {
+			e.logger.Printf("Prowlarr search failed for %s: %v", showName, err)
+			streams = nil
+		}
 		for _, s := range streams {
 			h := strings.ToLower(s.InfoHash)
 			if h != "" && !seenHashes[h] {

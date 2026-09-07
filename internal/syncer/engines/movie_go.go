@@ -430,7 +430,13 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		year, _ = strconv.Atoi(movie.ReleaseDate[:4])
 	}
 	candidates, hadRaw, err := e.getMovieStreams(ctx, imdbID, title, year)
-	if err != nil || len(candidates) == 0 {
+	if err != nil {
+		// A search that never completed says nothing about the title. Caching it would
+		// hide the film for a day over a transient indexer timeout.
+		e.logger.Printf("[MovieSync] Search failed for %s, not caching: %v", title, err)
+		return false
+	}
+	if len(candidates) == 0 {
 		if hadRaw {
 			e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_valid_stream", TS: time.Now().Unix()})
 		} else {
@@ -528,40 +534,68 @@ type MovieStream struct {
 	SizeGB       float64
 }
 
+// getMovieStreams asks both indexers and scores their releases together. Stopping at the
+// first source that yields anything hid better releases: the two carry different catalogues,
+// and whichever answered first won regardless of quality.
+//
+// The error return means no search completed. It must stay distinct from "searched and found
+// nothing", because the caller caches the latter for a day.
 func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title string, year int) ([]MovieStream, bool, error) {
-	hadRaw := false
+	var streams []prowlarr.Stream
+	prowlarrOK, torrentioOK := false, false
 
-	// Prowlarr first
 	if e.prowlarr != nil {
-		streams := e.prowlarr.FetchTorrents(imdbID, "movie", title, year)
-		if len(streams) > 0 {
-			hadRaw = true
-			if candidates := e.filterMovieStreams(streams); len(candidates) > 0 {
-				return candidates, true, nil
-			}
-			// Prowlarr had streams but all filtered → fall through to Torrentio
+		ps, err := e.prowlarr.FetchTorrents(imdbID, "movie", title, year)
+		if err != nil {
+			e.logger.Printf("[MovieSync] Prowlarr search failed: %v", err)
+		} else {
+			prowlarrOK = true
+			streams = append(streams, ps...)
+		}
+	} else {
+		prowlarrOK = true // not configured: nothing to fail
+	}
+
+	tioStreams, err := e.torrentio.FetchMovieStreams(ctx, imdbID)
+	if err != nil {
+		e.logger.Printf("[MovieSync] Torrentio search failed: %v", err)
+	} else {
+		torrentioOK = true
+		for _, s := range tioStreams {
+			streams = append(streams, prowlarr.Stream{
+				Name:     s.Name,
+				Title:    s.Title,
+				InfoHash: s.InfoHash,
+				SizeGB:   float64(s.Size) / (1024 * 1024 * 1024),
+			})
 		}
 	}
 
-	// Torrentio fallback
-	tioStreams, err := e.torrentio.FetchMovieStreams(ctx, imdbID)
-	if err != nil {
-		return nil, hadRaw, err
+	if !prowlarrOK && !torrentioOK {
+		return nil, false, fmt.Errorf("every indexer search failed for %s", imdbID)
 	}
 
-	var streams []prowlarr.Stream
-	for _, s := range tioStreams {
-		streams = append(streams, prowlarr.Stream{
-			Name:     s.Name,
-			Title:    s.Title,
-			InfoHash: s.InfoHash,
-			SizeGB:   float64(s.Size) / (1024 * 1024 * 1024),
-		})
+	streams = dedupStreamsByHash(streams)
+	return e.filterMovieStreams(streams), len(streams) > 0, nil
+}
+
+// dedupStreamsByHash keeps the first occurrence of each infohash: the two indexers list the
+// same releases, and a duplicate would be scored and attempted twice.
+func dedupStreamsByHash(in []prowlarr.Stream) []prowlarr.Stream {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]prowlarr.Stream, 0, len(in))
+	for _, s := range in {
+		k := strings.ToLower(s.InfoHash)
+		if k == "" {
+			continue
+		}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, s)
 	}
-	if len(streams) > 0 {
-		hadRaw = true
-	}
-	return e.filterMovieStreams(streams), hadRaw, nil
+	return out
 }
 
 func (e *MovieGoEngine) filterMovieStreams(streams []prowlarr.Stream) []MovieStream {

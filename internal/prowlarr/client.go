@@ -14,8 +14,13 @@ import (
 	"tiramisu/internal/catalog"
 )
 
-// resolveHashTimeout bounds one 301->magnet lookup through Prowlarr's download proxy.
-const resolveHashTimeout = 20 * time.Second
+const (
+	// searchTimeout bounds the whole parallel search. Measured: 3-7s idle, more under sync
+	// load, so the previous 25s turned a busy Prowlarr into "no releases found".
+	searchTimeout = 45 * time.Second
+	// resolveHashTimeout bounds one 301->magnet lookup through Prowlarr's download proxy.
+	resolveHashTimeout = 20 * time.Second
+)
 
 // Client queries the Prowlarr API and returns results in Stremio/Torrentio format.
 // Thread-safe: all methods are safe for concurrent use.
@@ -50,13 +55,19 @@ func NewClient(cfg ConfigProwlarr) *Client {
 // year is the release year and is only used as a keyword-search qualifier for movies
 // (a series' year reflects season 1's air date, not later seasons, so it isn't used there).
 // seasons is optional and used for series keyword search (e.g. "title s01").
-// Returns an empty slice (never nil) if disabled or on error.
-func (c *Client) FetchTorrents(imdbID, contentType, title string, year int, seasons ...int) []Stream {
+//
+// An error means the search itself did not complete - every query failed or timed out.
+// That is not the same as a search that ran and found nothing, and callers must not cache
+// it as "no releases exist": a slow Prowlarr would otherwise blacklist the title for a day.
+func (c *Client) FetchTorrents(imdbID, contentType, title string, year int, seasons ...int) ([]Stream, error) {
 	if c == nil {
-		return []Stream{}
+		return []Stream{}, nil
 	}
-	results := c.fetchFromProwlarr(imdbID, contentType, title, year, seasons...)
-	return c.mapToStremioFormat(results)
+	results, err := c.fetchFromProwlarr(imdbID, contentType, title, year, seasons...)
+	if err != nil {
+		return []Stream{}, err
+	}
+	return c.mapToStremioFormat(results), nil
 }
 
 // fetchFromProwlarr executes an API query using the IMDb ID and merges results by infoHash.
@@ -64,7 +75,7 @@ func (c *Client) FetchTorrents(imdbID, contentType, title string, year int, seas
 // (e.g., "Show Name s01") in parallel to maximize discovery of 4K releases. For movies, a
 // single "Title Year" keyword query is added (e.g. "Gone 2026"), since indexers without
 // IMDb-ID search (1337x, etc.) otherwise never contribute movie results at all.
-func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, seasons ...int) []ProwlarrResult {
+func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, seasons ...int) ([]ProwlarrResult, error) {
 	prowlarrType := "movie"
 	if contentType == "series" {
 		prowlarrType = "tvsearch"
@@ -80,6 +91,7 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, 
 	type result struct {
 		items []ProwlarrResult
 		idx   int
+		err   error
 	}
 
 	var queries []map[string]string
@@ -109,22 +121,34 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, 
 		}))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
 	defer cancel()
 
 	ch := make(chan result, len(queries))
 	for i, params := range queries {
 		i, params := i, params
 		go func() {
-			ch <- result{items: c.queryCtx(ctx, params), idx: i}
+			items, err := c.queryCtx(ctx, params)
+			ch <- result{items: items, idx: i, err: err}
 		}()
 	}
 
 	// Collect results preserving q1-first order for dedup
 	collected := make([][]ProwlarrResult, len(queries))
+	failures := 0
+	var lastErr error
 	for range queries {
 		r := <-ch
 		collected[r.idx] = r.items
+		if r.err != nil {
+			failures++
+			lastErr = r.err
+		}
+	}
+	// Only a total failure is reported: as long as one query answered, the search ran and
+	// an empty result genuinely means "nothing found".
+	if failures == len(queries) {
+		return nil, fmt.Errorf("all %d Prowlarr queries failed: %w", failures, lastErr)
 	}
 
 	// Merge deduplicating by infoHash when available, or by guid for no-hash results.
@@ -149,15 +173,15 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, 
 			merged = append(merged, r)
 		}
 	}
-	return merged
+	return merged, nil
 }
 
 // queryCtx executes a single Prowlarr API GET request, respecting context cancellation.
-func (c *Client) queryCtx(ctx context.Context, params map[string]string) []ProwlarrResult {
+func (c *Client) queryCtx(ctx context.Context, params map[string]string) ([]ProwlarrResult, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.searchURL, nil)
 	if err != nil {
 		log.Printf("[Prowlarr] Error building request: %v", err)
-		return nil
+		return nil, err
 	}
 
 	q := req.URL.Query()
@@ -173,21 +197,21 @@ func (c *Client) queryCtx(ctx context.Context, params map[string]string) []Prowl
 	resp, err := catalog.Do(ctx, c.httpClient, req)
 	if err != nil {
 		log.Printf("[Prowlarr] Error fetching from API: %v", err)
-		return nil
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[Prowlarr] API returned status %d", resp.StatusCode)
-		return nil
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 
 	var results []ProwlarrResult
 	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
 		log.Printf("[Prowlarr] Error decoding response: %v", err)
-		return nil
+		return nil, err
 	}
-	return results
+	return results, nil
 }
 
 // mapToStremioFormat converts raw Prowlarr results to Stremio/Torrentio stream format.
