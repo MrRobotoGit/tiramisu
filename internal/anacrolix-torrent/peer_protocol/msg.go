@@ -73,33 +73,42 @@ func (msg Message) MarshalBinary() (data []byte, err error) {
 }
 
 // V239-Optimization: Write directly to writer to avoid allocs
+//
+// Fixed-width fields go through binary.BigEndian.Put* into a stack array rather than
+// binary.Write: that takes an interface{}, so every 1-4 byte field was boxed onto the heap.
+// The write sequence is unchanged, so the bytes on the wire are identical.
 func (msg Message) MarshalTo(w io.Writer) (err error) {
 	if !msg.Keepalive {
-		err = binary.Write(w, binary.BigEndian, msg.Type)
-		if err != nil {
+		var b [4]byte
+		b[0] = byte(msg.Type)
+		if _, err = w.Write(b[:1]); err != nil {
 			return
 		}
 		switch msg.Type {
 		case Choke, Unchoke, Interested, NotInterested, HaveAll, HaveNone:
 		case Have, AllowedFast, Suggest:
-			err = binary.Write(w, binary.BigEndian, msg.Index)
+			binary.BigEndian.PutUint32(b[:], uint32(msg.Index))
+			_, err = w.Write(b[:])
 		case Request, Cancel, Reject:
-			for _, i := range []Integer{msg.Index, msg.Begin, msg.Length} {
-				err = binary.Write(w, binary.BigEndian, i)
-				if err != nil {
+			for _, i := range [3]Integer{msg.Index, msg.Begin, msg.Length} {
+				binary.BigEndian.PutUint32(b[:], uint32(i))
+				if _, err = w.Write(b[:]); err != nil {
 					break
 				}
 			}
 		case Bitfield:
 			_, err = w.Write(marshalBitfield(msg.Bitfield))
 		case Piece:
-			for _, i := range []Integer{msg.Index, msg.Begin} {
-				err = binary.Write(w, binary.BigEndian, i)
-				if err != nil {
+			for _, i := range [2]Integer{msg.Index, msg.Begin} {
+				binary.BigEndian.PutUint32(b[:], uint32(i))
+				if _, err = w.Write(b[:]); err != nil {
 					return
 				}
 			}
-			n, err := w.Write(msg.Piece)
+			var n int
+			// The original shadowed err here, so a failed payload write was reported as
+			// success and the peer was left believing it had the piece.
+			n, err = w.Write(msg.Piece)
 			if err != nil {
 				break
 			}
@@ -107,13 +116,14 @@ func (msg Message) MarshalTo(w io.Writer) (err error) {
 				panic(n)
 			}
 		case Extended:
-			err = binary.Write(w, binary.BigEndian, msg.ExtendedID)
-			if err != nil {
+			b[0] = byte(msg.ExtendedID)
+			if _, err = w.Write(b[:1]); err != nil {
 				return
 			}
 			_, err = w.Write(msg.ExtendedPayload)
 		case Port:
-			err = binary.Write(w, binary.BigEndian, msg.Port)
+			binary.BigEndian.PutUint16(b[:], msg.Port)
+			_, err = w.Write(b[:2])
 		default:
 			err = fmt.Errorf("unknown message type: %v", msg.Type)
 		}
