@@ -120,6 +120,13 @@ func loadExistingSettings(bboltDB, jsonDB GoStormDB) *BTSets {
 			return &sets
 		}
 	}
+	// A JSON file that exists but cannot be parsed must not fall through to BBolt: the
+	// fallback would flip the backend to a stale copy, and the migration then clears the
+	// file we failed to read.
+	if j, ok := jsonDB.(*JsonDB); ok && !j.readable("Settings") {
+		log.TLogln("Settings JSON unreadable, keeping JSON storage (no fallback to BBolt)")
+		return &BTSets{StoreSettingsInJson: true}
+	}
 	// Try BBolt
 	if buf := bboltDB.Get("Settings", "BitTorr"); buf != nil {
 		var sets BTSets
@@ -153,7 +160,7 @@ func safeMigrate(source, target GoStormDB, xpath, name, targetName string, clear
 	if migrated {
 		log.TLogln(fmt.Sprintf("Successfully migrated %s/%s to %s", xpath, name, targetName))
 		// Clear source if requested
-		if clearSource {
+		if clearSource && source.Get(xpath, name) != nil {
 			source.Rem(xpath, name)
 			if IsDebug() {
 				log.TLogln(fmt.Sprintf("Cleared %s/%s from source", xpath, name))

@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,76 +45,96 @@ func (v *JsonDB) CloseDB() {
 }
 
 func (v *JsonDB) Set(xPath, name string, value []byte) {
-	var err error = nil
 	jsonObj := map[string]interface{}{}
-	if err := json.Unmarshal(value, &jsonObj); err == nil {
-		if filename, err := v.xPathToFilename(xPath); err == nil {
-			v.lock(filename)
-			defer v.unlock(filename)
-			if root, err := v.readJsonFileAsMap(filename); err == nil {
-				root[name] = jsonObj
-				if err = v.writeMapAsJsonFile(filename, root); err == nil {
-					return
-				}
-			}
-		}
+	if err := json.Unmarshal(value, &jsonObj); err != nil {
+		v.log(fmt.Sprintf("Set: error writing entry %s->%s", xPath, name), err)
+		return
 	}
-	v.log(fmt.Sprintf("Set: error writing entry %s->%s", xPath, name), err)
+	filename, err := v.xPathToFilename(xPath)
+	if err != nil {
+		v.log(fmt.Sprintf("Set: error writing entry %s->%s", xPath, name), err)
+		return
+	}
+	v.lock(filename)
+	defer v.unlock(filename)
+	root, err := v.readJsonFileAsMap(filename)
+	if err != nil {
+		// Never rebuild the file from an unreadable read: that would drop every other
+		// entry it holds.
+		v.log(fmt.Sprintf("Set: refusing to overwrite unreadable %s for %s->%s", filename, xPath, name), err)
+		return
+	}
+	root[name] = jsonObj
+	if err := v.writeMapAsJsonFile(filename, root); err != nil {
+		v.log(fmt.Sprintf("Set: error writing entry %s->%s", xPath, name), err)
+	}
 }
 
 func (v *JsonDB) Get(xPath, name string) []byte {
-	var err error = nil
-	if filename, err := v.xPathToFilename(xPath); err == nil {
-		v.lock(filename)
-		defer v.unlock(filename)
-		if root, err := v.readJsonFileAsMap(filename); err == nil {
-			if jsonData, ok := root[name]; ok {
-				if byteData, err := json.Marshal(jsonData); err == nil {
-					// Return a copy to be safe
-					data := make([]byte, len(byteData))
-					copy(data, byteData)
-					return data
-				}
-			} else {
-				// We assume this is not 'error' but 'no entry' which is normal
-				return nil
-			}
-		}
+	filename, err := v.xPathToFilename(xPath)
+	if err != nil {
+		v.log(fmt.Sprintf("Get: error reading entry %s->%s", xPath, name), err)
+		return nil
 	}
-	v.log(fmt.Sprintf("Get: error reading entry %s->%s", xPath, name), err)
-	return nil
+	v.lock(filename)
+	defer v.unlock(filename)
+	root, err := v.readJsonFileAsMap(filename)
+	if err != nil {
+		v.log(fmt.Sprintf("Get: error reading entry %s->%s", xPath, name), err)
+		return nil
+	}
+	jsonData, ok := root[name]
+	if !ok {
+		// Not an error: no entry is the normal case for a fresh install.
+		return nil
+	}
+	byteData, err := json.Marshal(jsonData)
+	if err != nil {
+		v.log(fmt.Sprintf("Get: error reading entry %s->%s", xPath, name), err)
+		return nil
+	}
+	data := make([]byte, len(byteData))
+	copy(data, byteData)
+	return data
 }
 
 func (v *JsonDB) List(xPath string) []string {
-	var err error = nil
-	if filename, err := v.xPathToFilename(xPath); err == nil {
-		v.lock(filename)
-		defer v.unlock(filename)
-		if root, err := v.readJsonFileAsMap(filename); err == nil {
-			nameList := make([]string, 0, len(root))
-			for k := range root {
-				nameList = append(nameList, k)
-			}
-			return nameList
-		}
+	filename, err := v.xPathToFilename(xPath)
+	if err != nil {
+		v.log(fmt.Sprintf("List: error reading entries in xPath %s", xPath), err)
+		return nil
 	}
-	v.log(fmt.Sprintf("List: error reading entries in xPath %s", xPath), err)
-	return nil
+	v.lock(filename)
+	defer v.unlock(filename)
+	root, err := v.readJsonFileAsMap(filename)
+	if err != nil {
+		v.log(fmt.Sprintf("List: error reading entries in xPath %s", xPath), err)
+		return nil
+	}
+	nameList := make([]string, 0, len(root))
+	for k := range root {
+		nameList = append(nameList, k)
+	}
+	return nameList
 }
 
 func (v *JsonDB) Rem(xPath, name string) {
-	var err error = nil
-	if filename, err := v.xPathToFilename(xPath); err == nil {
-		v.lock(filename)
-		defer v.unlock(filename)
-		if root, err := v.readJsonFileAsMap(filename); err == nil {
-			delete(root, name)
-			if err = v.writeMapAsJsonFile(filename, root); err == nil {
-				return
-			}
-		}
+	filename, err := v.xPathToFilename(xPath)
+	if err != nil {
+		v.log(fmt.Sprintf("Rem: error removing entry %s->%s", xPath, name), err)
+		return
 	}
-	v.log(fmt.Sprintf("Rem: error removing entry %s->%s", xPath, name), err)
+	v.lock(filename)
+	defer v.unlock(filename)
+	root, err := v.readJsonFileAsMap(filename)
+	if err != nil {
+		v.log(fmt.Sprintf("Rem: refusing to overwrite unreadable %s for %s->%s", filename, xPath, name), err)
+		return
+	}
+	delete(root, name)
+	if err := v.writeMapAsJsonFile(filename, root); err != nil {
+		v.log(fmt.Sprintf("Rem: error removing entry %s->%s", xPath, name), err)
+	}
 }
 
 func (v *JsonDB) Clear(xPath string) {
@@ -161,26 +182,84 @@ func (v *JsonDB) xPathToFilename(xPath string) (string, error) {
 }
 
 func (v *JsonDB) readJsonFileAsMap(filename string) (map[string]interface{}, error) {
-	var err error = nil
 	jsonData := map[string]interface{}{}
 	path := filepath.Join(v.Path, filename)
-	if fileData, err := os.ReadFile(path); err == nil {
-		if err = json.Unmarshal(fileData, &jsonData); err != nil {
-			v.log(fmt.Sprintf("readJsonFileAsMap(%s) fileData: %s error", filename, fileData), err)
+
+	fileData, err := os.ReadFile(path)
+	if err != nil {
+		// A missing file is an empty store. Anything else is a real failure and must not
+		// be reported as empty, or the caller rewrites the file from nothing.
+		if os.IsNotExist(err) {
+			return jsonData, nil
 		}
+		v.log(fmt.Sprintf("readJsonFileAsMap(%s) read error", filename), err)
+		return nil, err
 	}
-	return jsonData, err
+	if len(bytes.TrimSpace(fileData)) == 0 {
+		return jsonData, nil
+	}
+	if err := json.Unmarshal(fileData, &jsonData); err != nil {
+		v.log(fmt.Sprintf("readJsonFileAsMap(%s) invalid JSON: %s", filename, fileData), err)
+		return nil, err
+	}
+	return jsonData, nil
 }
 
 func (v *JsonDB) writeMapAsJsonFile(filename string, o map[string]interface{}) error {
-	var err error = nil
 	path := filepath.Join(v.Path, filename)
-	if fileData, err := json.MarshalIndent(o, "", "  "); err == nil {
-		if err = os.WriteFile(path, fileData, v.fileMode); err != nil {
-			v.log(fmt.Sprintf("writeMapAsJsonFile path: %s, fileMode: %s, fileData: %s error", path, v.fileMode, fileData), err)
-		}
+
+	fileData, err := json.MarshalIndent(o, "", "  ")
+	if err != nil {
+		v.log(fmt.Sprintf("writeMapAsJsonFile path: %s marshal error", path), err)
+		return err
 	}
-	return err
+
+	// Temp file + rename: os.WriteFile truncates before writing, so a power cut or a hard
+	// reboot mid-write leaves a partial settings.json.
+	tmp, err := os.CreateTemp(v.Path, filename+".tmp")
+	if err != nil {
+		v.log(fmt.Sprintf("writeMapAsJsonFile path: %s temp error", path), err)
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if _, err := tmp.Write(fileData); err != nil {
+		tmp.Close()
+		v.log(fmt.Sprintf("writeMapAsJsonFile path: %s write error", path), err)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		v.log(fmt.Sprintf("writeMapAsJsonFile path: %s sync error", path), err)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		v.log(fmt.Sprintf("writeMapAsJsonFile path: %s close error", path), err)
+		return err
+	}
+	if err := os.Chmod(tmpName, v.fileMode); err != nil {
+		v.log(fmt.Sprintf("writeMapAsJsonFile path: %s chmod error", path), err)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		v.log(fmt.Sprintf("writeMapAsJsonFile path: %s rename error", path), err)
+		return err
+	}
+	return nil
+}
+
+// readable reports whether the file backing xPath can be parsed. It separates a corrupt
+// file from an absent one, which the storage decision in InitSets depends on.
+func (v *JsonDB) readable(xPath string) bool {
+	filename, err := v.xPathToFilename(xPath)
+	if err != nil {
+		return false
+	}
+	v.lock(filename)
+	defer v.unlock(filename)
+	_, err = v.readJsonFileAsMap(filename)
+	return err == nil
 }
 
 func (v *JsonDB) log(s string, params ...interface{}) {
