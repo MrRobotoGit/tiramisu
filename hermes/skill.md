@@ -58,7 +58,7 @@ on the real filesystem, exposed by the FUSE layer with the declared full size.
 - The response is the torrent status at that instant, with `stat` and
   `stat_string`. `stat` is an enum: `0` added, `1` getting info, `2` preload,
   `3` working, `4` closed, `5` in db. A successful add typically returns `0`
-  or `1`. **Do not treat `0` as a failure**
+  or `1` — **do not treat `0` as a failure**
 - `save_to_db` is honoured only AFTER metadata resolves, inside a background
   goroutine. If metadata never resolves, the torrent is never persisted
 
@@ -78,7 +78,7 @@ is exactly what "metadata not resolved yet" looks like.
 Do NOT rely on the `data` field for this. `data` is a free-form string supplied
 by whoever added the torrent (it is passed straight through from the add
 request). Tiramisu's own sync engine stores a `{"GoStorm":{"Files":[...]}}`
-document there, so torrents created by the sync do carry a file list in `data`,
+document there, so torrents created by the sync do carry a file list in `data` —
 but a torrent added by hand through this skill does not, because the add sends
 no `data`. Read `file_stats` first and fall back to parsing `data` only for
 sync-created entries.
@@ -121,7 +121,7 @@ Stub JSON shape (same for movies and TV):
 ```
 
 The `size` MUST equal the `length` the engine reports for that exact file id;
-the FUSE layer enforces reads against it. **File ids are 1-based**: the engine
+the FUSE layer enforces reads against it. **File ids are 1-based** — the engine
 treats id 0 as undefined, so never pass `index=0`.
 
 Copy the tracker list from an existing stub in the same library rather than
@@ -159,8 +159,8 @@ The shape of the formula is stable even though the numbers are not. For a movie
 candidate, from the release title plus its seeders and size:
 
 1. resolution: `res_4k` if the release is 4K, otherwise `res_1080p`
-2. dynamic range: `dolby_vision` **or** `hdr`, mutually exclusive, DV wins
-3. audio: `atmos` **or** `audio_5_1` **or** `stereo_penalty`, first match only,
+2. dynamic range: `dolby_vision` **or** `hdr` — mutually exclusive, DV wins
+3. audio: `atmos` **or** `audio_5_1` **or** `stereo_penalty` — first match only,
    and `stereo_penalty` is negative
 4. `remux` if the release is a remux
 5. `preferred_language` if the title matches the configured preferred terms
@@ -180,7 +180,7 @@ not collect both bonuses.
 3. **blacklisted title**, then **blacklisted hash**, if the deployment keeps a
    blacklist
 4. **seeders below `min_seeders`**
-5. **resolution neither 4K nor 1080p**. Anything else is rejected outright,
+5. **resolution neither 4K nor 1080p** — anything else is rejected outright,
    there is no 720p path
 6. **size out of band**, and the two resolutions differ here: a 4K release with
    an unknown size (0) is ACCEPTED and merely takes `unknown_size_4k_penalty`,
@@ -196,10 +196,10 @@ those and say so when reporting what was chosen.
 TV reads `quality_scoring.tv` and the formula is NOT the movie one with other
 numbers. Differences that change which release wins:
 
-1. resolution: `res_4k` or `res_1080p`, and if the release is neither, the
+1. resolution: `res_4k` or `res_1080p` — and if the release is neither, the
    score is **0 and the candidate is dropped**, there is no partial credit
 2. `dolby_vision` **or** `hdr`
-3. `atmos` **or** `audio_5_1`, with **no stereo penalty at all**, unlike movies
+3. `atmos` **or** `audio_5_1` — **no stereo penalty at all**, unlike movies
 4. `preferred_language`
 5. seeders are **tiered, not capped**: >=100 adds `seeder_tier_100`, >=50 adds
    `seeder_tier_50`, >=20 adds `seeder_tier_20`, below 20 adds nothing
@@ -209,7 +209,7 @@ Separately from the score, season packs get a priority bonus: a full pack adds
 `fullpack`, a partial range (`E01-E06`) adds **half** of it.
 
 TV gates: score 0 drops the candidate; the seeder minimum is `min_seeders_4k`
-for 4K releases and `min_seeders` otherwise, so **two different thresholds**;
+for 4K releases and `min_seeders` otherwise — **two different thresholds**;
 excluded language in the title drops it. A season whose already-present episodes
 average at or above `season_skip_score` is skipped entirely.
 
@@ -276,7 +276,7 @@ TV, one episode at a time (nested + empty imdb):
 python3 create_mkv.py "$LIB" "tv/Series_Name (2024)/Season.01/Series_S01E01_<HASH8>.mkv" "<HASH>" 1 922746880 ""
 ```
 
-TV, a whole season pack in one pass. Reads the file list, takes SxxEyy from
+TV, a whole season pack in one pass — reads the file list, takes SxxEyy from
 each filename and writes every episode. Dry run first, then `--write`:
 
 ```bash
@@ -678,7 +678,7 @@ import urllib.parse
 import urllib.request
 
 VIDEO_EXT = (".mkv", ".mp4", ".avi", ".mov", ".m4v")
-# S01E02 / s1e2 / 1x02, the first two are by far the most common
+# S01E02 / s1e2 / 1x02 — the first two are by far the most common
 RE_SXXEYY = re.compile(r"[Ss](\d{1,2})[\s._-]?[Ee](\d{1,3})")
 RE_NXNN = re.compile(r"\b(\d{1,2})x(\d{2,3})\b")
 
