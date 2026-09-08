@@ -75,6 +75,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - [Build from Source](#build-from-source)
 - [Docker](#docker)
 - [API Reference](#api-quick-reference)
+- [AI Agent Skill](#ai-agent-skill)
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
 - [Donate](#support)
