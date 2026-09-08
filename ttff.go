@@ -87,7 +87,12 @@ func (h *TTFFHistogram) Pct(p float64) float64 {
 	if total == 0 {
 		return 0
 	}
+	// Floored at 1: p*total truncates to 0 for a single sample, and the scan below would
+	// then be satisfied by the first (empty) bucket, reporting 1ms whatever the sample was.
 	need := int64(p * float64(total))
+	if need < 1 {
+		need = 1
+	}
 	var cum int64
 	for i := 0; i < len(h.buckets); i++ {
 		cum += h.buckets[i].Load()
