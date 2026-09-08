@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use to add a specific movie/TV release to Tiramisu by hand."
-version: 3.0.1
+version: 3.0.2
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -28,7 +28,11 @@ Environment placeholders:
 - `CTRL` = Tiramisu control/metrics base URL, default `http://127.0.0.1:9080`
   (env var `TIRAMISU_CTRL`). This is a DIFFERENT port from `API` and is where
   the running configuration is read from.
-- `LIB` = library root containing the `movies/` and `tv/` directories
+- `LIB` = library root containing the `movies/` and `tv/` directories, on the
+  real filesystem
+- `FUSE` = the mount point where Tiramisu exposes the same tree as full-size
+  virtual files. A different path from `LIB`, and the one to delete through:
+  removing a file here also unregisters and blacklists its torrent
 
 The engine API is the GoStorm-compatible torrents API (route `POST /torrents`,
 actions `add | get | set | rem | list | active | drop | wipe`).
@@ -467,17 +471,67 @@ refresh is not evidence the stub is wrong: check the FUSE layer first.
 
 ### 9. Undo, if the stub was wrong
 
-Deleting the stub is not enough: the torrent stays registered in the engine.
+**Delete through the FUSE mount, not through `$LIB`.** One `rm` on the mount
+does the whole job:
 
 ```bash
-rm "$LIB/<path to the stub>.mkv"
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"rem","hash":"<hash>"}' "$API/torrents"
+rm "$FUSE/<path to the stub>.mkv"
 ```
 
-Then rescan the library so the media server drops the entry. Only remove a hash
-this skill added: `rem` on a hash the automated pipeline manages will make the
-next sync re-add it, or leave an orphaned stub behind.
+The FUSE unlink handler closes any open handle, removes the torrent from the
+engine, writes the hash and title into `STATE/blacklist.json`, and only then
+deletes the stub. Deleting the file under `$LIB` instead skips all of that: the
+torrent stays registered and, worse, nothing records that the removal was
+deliberate.
+
+That blacklist is the part that makes a deletion stick. Both sync engines check
+it before adding anything (`blacklist_title` and `blacklist_hash` are two of the
+rejection gates), so a title removed through the mount stays removed. A title
+removed the wrong way comes back on the next sync run.
+
+Then rescan the library so the media server drops the entry.
+
+## Bulk removal
+
+Requests like "remove everything older than 2025" or "remove every Ridley Scott
+film" are not covered by any API. The engine removes **one hash at a time**
+(`rem`, `drop`) or **everything** (`wipe`, which is never the right answer here).
+There is no endpoint that lists the library by year, director or quality. The
+selection is yours to build; only the deletion primitive is provided.
+
+### Build the selection
+
+- **Year** is in the filename (`Title_2025_1080p_<hash8>.mkv`), so it needs
+  nothing but a listing and a pattern
+- **Quality tags** are there too: `_2160p`, `_DV`, `_Atmos`, `_REMUX`
+- **Anything else**, director included, is not stored anywhere in Tiramisu. The
+  stub does carry the `imdb` id, which is the way in: resolve it through TMDB
+  (`/find/<imdb_id>?external_source=imdb_id`, then the credits) and filter on
+  that. On a library of thousands this is thousands of API calls, so narrow the
+  candidate list by filename first and only then resolve what is left
+- TV stubs carry an **empty** `imdb`, so the same trick does not work there. Go
+  through the series directory name instead
+
+### Delete
+
+```bash
+rm "$FUSE/movies/<file>.mkv"      # one per title, always through the mount
+```
+
+Nothing else is needed: the unlink handler removes the torrent and blacklists it
+on its own. Deleting under `$LIB` leaves the torrent registered and lets the next
+sync bring the title back.
+
+### Before deleting anything
+
+Bulk deletion is destructive, irreversible and operates on someone else's
+library. Print the full list of what matches, with a count, and get an explicit
+confirmation before the first `rm`. If the criterion needed TMDB lookups, say so
+and show what could not be resolved rather than silently excluding it.
+
+Removing a title the automated pipeline manages is legitimate here, since that
+is precisely what the blacklist is for. But say which ones they are: the operator
+may have wanted them.
 
 ## Fast-track (skip the engine API)
 
@@ -511,6 +565,11 @@ triggers the engine to fetch it.
 - Create stubs for content already present in the library
 - Modify files that the automated pipeline manages
 - Guess the naming convention: read an existing stub first and copy it
+- Delete a stub from `$LIB`: it leaves the torrent registered and the removal
+  is not recorded, so the next sync brings the title back. Delete via `$FUSE`
+- Use `action=wipe`. It removes every torrent on the deployment, and no request
+  phrased as "remove these films" ever means that
+- Delete in bulk without showing the full list first and having it confirmed
 - Run the whole flow when only a verification was asked (check, don't add)
 
 ## Helper scripts
