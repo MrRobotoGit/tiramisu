@@ -1084,6 +1084,37 @@ curl -s http://127.0.0.1:9080/metrics | \
 
 ---
 
+## AI Agent Skill
+
+`hermes/skill.md` is a portable skill file for an AI agent. It was written for
+Hermes but works with any agent that loads markdown skills. It teaches the agent
+how to add one specific release to the library by hand, for the times the
+automated sync misses something.
+
+The skill covers the whole flow: reading the deployment's own scoring profile
+from `/api/config`, adding the magnet, waiting for metadata, mapping torrent
+files to episodes, writing the virtual `.mkv` stubs, verifying them on both the
+physical and the FUSE layer, and undoing the change if the wrong release was
+picked. The five helper scripts are embedded in the file itself, so there is
+nothing else to install.
+
+It hardcodes no hosts, no ports and no scoring weights. Quality weights, seeder
+minimums and size bands are read from the running configuration, so the same
+file works unchanged on any Tiramisu deployment.
+
+Once the agent has the skill loaded, ask in plain language:
+
+```
+Hermes, add the latest Dummy Bunny movie in 4K
+Hermes, season 2 of Dummy Bunny is missing episodes 4 to 8, fill them in
+Hermes, is Dummy Bunny (2024) already in the library, and in what quality?
+```
+
+The agent picks the release, applies the same scoring the sync engine uses, and
+reports what it chose and why before writing anything.
+
+---
+
 ## FAQ
 
 **What is Tiramisu?**
