@@ -19,6 +19,18 @@ import (
 	torrenttypes "github.com/anacrolix/torrent/types"
 )
 
+// runRecovered runs fn, turning a panic into a log line instead of unwinding the caller.
+// Loops must wrap each iteration with it: safeGo's recovery is outside the loop, so a panic
+// there ends the goroutine for good.
+func runRecovered(what string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.TLogln("[PANIC]", what, "recovered:", r)
+		}
+	}()
+	fn()
+}
+
 // safeGo runs a function in a new goroutine with panic recovery.
 func safeGo(fn func()) {
 	go func() {
@@ -126,7 +138,7 @@ func NewCache(capacity int64, storage *Storage) *Cache {
 			case <-ret.cleanStop:
 				return
 			case <-ret.cleanTrigger:
-				ret.cleanPieces()
+				runRecovered("cleanPieces", ret.cleanPieces)
 			}
 		}
 	})
