@@ -119,16 +119,19 @@ type TTFFSession struct {
 	warmupHeadReady atomic.Bool
 	warmupTailReady atomic.Bool
 
-	openedAt     atomic.Int64 // unixNano
-	firstDataAt  atomic.Int64 // 0 = unset (CAS-once)
-	reached8MBAt atomic.Int64 // 0 = unset (CAS-once)
-	lastReadAt   atomic.Int64
-	bytesRead    atomic.Int64
-	lastOff      atomic.Int64 // start offset of previous read; -1 = none
-	seekCount    atomic.Int64
-	stallCount   atomic.Int64
-	maxStallMS   atomic.Int64
-	tailOrDeep   atomic.Bool // read at off>=8MB or inside last 16MB (tail region)
+	openedAt    atomic.Int64 // unixNano
+	firstDataAt atomic.Int64 // 0 = unset (CAS-once)
+	// When the player first read deep (off>=8MB) or in the tail, not how long 8MB took
+	// to arrive: a client that probes the Cues stamps it at once, one that plays from 0
+	// only once playback has consumed that much.
+	firstDeepReadAt atomic.Int64 // 0 = unset (CAS-once)
+	lastReadAt      atomic.Int64
+	bytesRead       atomic.Int64
+	lastOff         atomic.Int64 // start offset of previous read; -1 = none
+	seekCount       atomic.Int64
+	stallCount      atomic.Int64
+	maxStallMS      atomic.Int64
+	tailOrDeep      atomic.Bool // read at off>=8MB or inside last 16MB (tail region)
 
 	closeOnce sync.Once
 	closed    atomic.Bool
@@ -147,7 +150,7 @@ func (s *TTFFSession) recordRead(d time.Duration, n int, off int64) {
 		s.bytesRead.Add(int64(n))
 		if off >= ttffDeepReadOff || (s.size > 0 && off >= s.size-warmup.TailWarmupSize) {
 			s.tailOrDeep.Store(true)
-			s.reached8MBAt.CompareAndSwap(0, nowN)
+			s.firstDeepReadAt.CompareAndSwap(0, nowN)
 		}
 		if prev := s.lastOff.Load(); prev > 0 {
 			if b := gc(); b != nil && shouldInterruptForSeek(prev, off, b.ReadAheadBudget) {
@@ -204,8 +207,8 @@ func (s *TTFFSession) closeSession() {
 		if fd := s.firstDataAt.Load(); fd > 0 {
 			ttffStats.openToHeader.Add(time.Duration(fd - opened))
 		}
-		if r8 := s.reached8MBAt.Load(); r8 > 0 {
-			ttffStats.openTo8MB.Add(time.Duration(r8 - opened))
+		if dr := s.firstDeepReadAt.Load(); dr > 0 {
+			ttffStats.openToDeepRead.Add(time.Duration(dr - opened))
 		}
 		if sc := s.stallCount.Load(); sc > 0 {
 			ttffStats.stallCount.Add(sc)
@@ -218,10 +221,10 @@ func (s *TTFFSession) closeSession() {
 				}
 			}
 		}
-		logger.Printf("[TTFF] path=%s head=%d tail=%d header=%s to8mb=%s seek=%d stalls=%d bytes=%d",
+		logger.Printf("[TTFF] path=%s head=%d tail=%d header=%s deepread=%s seek=%d stalls=%d bytes=%d",
 			filepath.Base(s.path),
 			boolToInt(s.warmupHeadReady.Load()), boolToInt(s.warmupTailReady.Load()),
-			durOrDash(s.firstDataAt.Load(), opened), durOrDash(s.reached8MBAt.Load(), opened),
+			durOrDash(s.firstDataAt.Load(), opened), durOrDash(s.firstDeepReadAt.Load(), opened),
 			s.seekCount.Load(), s.stallCount.Load(), s.bytesRead.Load())
 	})
 }
@@ -252,7 +255,7 @@ type ttffAgg struct {
 	sessionsCompleted atomic.Int64
 	sessionsFiltered  atomic.Int64
 	openToHeader      TTFFHistogram
-	openTo8MB         TTFFHistogram
+	openToDeepRead    TTFFHistogram
 	seekLatency       TTFFHistogram
 	warmupHead        TTFFHistogram
 	warmupTail        TTFFHistogram

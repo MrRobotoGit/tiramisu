@@ -383,8 +383,10 @@ func (c *Cache) cleanPieces() {
 			if readers == 0 {
 				readers = 1
 			}
+			// protected/reader is derived from the capacity (getOffsetRange's 0.85
+			// safety factor split across readers), not measured off the reader.
 			log.TLogln("[CacheEvict] nothing evictable — readers:", readers,
-				"window(MB):", c.capacity/readers*85/100>>20,
+				"protected/reader(MB):", c.capacity/readers*85/100>>20,
 				"filled(MB):", filled>>20, "capacity(MB):", c.capacity>>20)
 		}
 		for _, p := range remPieces {

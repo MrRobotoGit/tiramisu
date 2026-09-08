@@ -4250,11 +4250,11 @@ func main() {
 
 	http.HandleFunc("/metrics/ttff", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"sessions_completed":%d,"sessions_filtered":%d,`+
-			`"open_to_header_ms":%s,"open_to_8mb_ms":%s,"seek_latency_ms":%s,`+
+			`"open_to_header_ms":%s,"open_to_deep_read_ms":%s,"seek_latency_ms":%s,`+
 			`"read_latency_ms":{"warmup_head":%s,"warmup_tail":%s,"racache_hit":%s,"fetch_block":%s},`+
 			`"stalls":{"count":%d,"max_ms":%d}}`,
 			ttffStats.sessionsCompleted.Load(), ttffStats.sessionsFiltered.Load(),
-			histJSON(&ttffStats.openToHeader), histJSON(&ttffStats.openTo8MB), histJSON(&ttffStats.seekLatency),
+			histJSON(&ttffStats.openToHeader), histJSON(&ttffStats.openToDeepRead), histJSON(&ttffStats.seekLatency),
 			histJSON(&ttffStats.warmupHead), histJSON(&ttffStats.warmupTail),
 			histJSON(&ttffStats.raCacheHit), histJSON(&ttffStats.fetchBlock),
 			ttffStats.stallCount.Load(), ttffStats.maxStallMS.Load())
