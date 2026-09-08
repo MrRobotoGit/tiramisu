@@ -298,17 +298,45 @@ SxxEyy from the filenames (never assume id 1 = E01), ignore .nfo/.txt noise.
 
 ### 4. Check it is not already there
 
-The engine may already know the release, and the library may already carry the
-title under a different release. Check both before writing anything:
+Two different questions, two different sources. They disagree in normal
+operation, so check both.
+
+**Does the library already show it?** This is the one that matters, because the
+stub files are what Plex and Jellyfin actually see. Read the filesystem:
 
 ```bash
-grep -rl '<hash8>' "$LIB" | head            # same release already stubbed?
-ls "$LIB/movies" | grep -i '<title fragment>'   # same title, other release?
+ls "$LIB/movies" | grep -i '<title fragment>'          # same title, any release
+find "$LIB/tv" -ipath '*<Series>*Season.02*' | head    # season already filled?
+grep -rl '<hash8>' "$LIB" | head                       # this exact release
 ```
 
-A hit on the first means there is nothing to do. A hit on the second is a
-decision for the user, not for the skill: two stubs for the same title will show
-up as duplicates in Plex/Jellyfin.
+**Does the engine already know the hash?** One call, no filesystem walk:
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"list"}' "$API/torrents" | \
+  python3 -c 'import sys,json; print([t["title"] for t in json.load(sys.stdin) if t["hash"].lower().endswith("<hash8lower>")])'
+```
+
+Note `endswith`: HASH8 is the **last** 8 characters of the info hash, which is
+also why it is what appears in the filenames.
+
+Do not treat the two as interchangeable. The engine DB and the library drift
+apart in normal use: a stub can outlive the torrent entry, and a registered
+torrent can have no stub at all. On a mature deployment the engine listed 4077
+torrents against 5216 stub files. Only the filesystem answers "will this look
+like a duplicate in Plex".
+
+`action=list` returns every torrent in one response, which on such a deployment
+is several megabytes. Filter it in the pipe, never print it whole.
+
+A hit on the exact release means there is nothing to do. A hit on the title with
+a different release is a decision for the user, not for the skill: two stubs for
+the same title show up as duplicates in the media server.
+
+**Do not use `{CTRL}/api/torrents` for this.** It is the dashboard view and
+returns only what is streaming right now, so it will report nothing for a
+library of thousands.
 
 ### 5. Pick the target file(s)
 
