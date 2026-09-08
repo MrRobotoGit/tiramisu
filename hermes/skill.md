@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use to add a specific movie/TV release to Tiramisu by hand."
-version: 3.0.0
+version: 3.0.1
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -103,6 +103,10 @@ Two more quirks worth knowing:
 ```
 
 - **Movies**: flat in `movies/`, filename `Title_Year_Resolution[_DV|_HDR][_Atmos|_5.1][_REMUX]_HASH8.mkv`, JSON stub carries the IMDB id (e.g. `tt0088196`)
+- **The bracketed pairs are exclusive, never combined.** A release tagged both DV
+  and HDR gets `_DV` only, because the engine tests them with `else if`. Same for
+  `_Atmos` over `_5.1`. Do not write `_DV_HDR`: raw release names in the library
+  may carry both, but those are not names Tiramisu generated
 - **TV**: nested `<LIB>/tv/<Series_Name> (<Year>)/Season.NN/...`, series name with
   underscores and year in parentheses (e.g. `Alley_Cats (2026)`), stub has EMPTY
   `imdb` field (`""`) as TV convention
@@ -127,6 +131,27 @@ treats id 0 as undefined, so never pass `index=0`.
 Copy the tracker list from an existing stub in the same library rather than
 inventing one: the set is a deployment detail and the engine's own default list
 can change between versions.
+
+## Resolve the IMDB id first
+
+Every search below is keyed on the IMDB id, and nothing in the flow will find it
+for you. Resolve it through TMDB, the same way the sync engine does, using
+`tmdb_api_key` from the config:
+
+```bash
+# 1. title + year -> TMDB id
+curl -s "https://api.themoviedb.org/3/search/movie?api_key=$TMDB&query=Paris%2C%20Texas&year=1984"
+
+# 2. TMDB id -> IMDB id
+curl -s "https://api.themoviedb.org/3/movie/<tmdb_id>/external_ids?api_key=$TMDB"   # -> imdb_id
+```
+
+For a series the second call is `/tv/<tmdb_id>/external_ids`.
+
+**Check the title and year that come back before using the id.** Picking the
+neighbouring result is easy and silent: `tt0087884` is Paris, Texas and
+`tt0087889` is The Party Animal. Everything downstream will then quietly work on
+the wrong film.
 
 ## Search for candidates
 
@@ -153,6 +178,20 @@ curl -s "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=series&title=Some%20S
 - the response is a JSON array of `{name, title, infoHash, behaviorHints}`
 - **an empty array `[]` with status 200 means Prowlarr is not configured on this
   deployment**, not that the release does not exist. Fall through to Torrentio
+
+**This endpoint queries Prowlarr and nothing else.** It is not the same search
+the sync engine performs, so its result is not the full candidate set: to see
+what the engine would see, query Torrentio as well and merge the two lists
+yourself, deduplicating by info hash. A 4K release missing here is very often
+present on Torrentio.
+
+Two things that mislead when reading the response:
+
+- `name` is literally `"Torrentio\n<resolution>"` even for Prowlarr results. It
+  is a Stremio format label, not the source. Torrentio has NOT been consulted
+- the search has a 45 second deadline against indexers that can be slower under
+  load, so the same query can return a different number of results minute to
+  minute. Few results is not proof that few exist
 
 `title` is a multi-line string, and the extra lines are where seeders and size
 live. Scoring reads the whole thing, so keep it intact rather than splitting off
@@ -274,19 +313,24 @@ Write the five files from [Helper scripts](#helper-scripts) into a local
 working directory (or on the Tiramisu host), e.g. `/tmp/tiramisu-add/`. Verify
 with `python3 -m py_compile <file>.py`. Then run them from there.
 
-### 1. Read the deployment's scoring profile
+### 1. Resolve the IMDB id
+
+See [Resolve the IMDB id first](#resolve-the-imdb-id-first). Confirm the title
+and year that come back before going further.
+
+### 2. Read the deployment's scoring profile
 
 ```bash
 python3 get_scoring.py
 ```
 
-### 2. Add the torrent
+### 3. Add the torrent
 
 ```bash
 python3 add_torrent.py "magnet:?xt=urn:btih:<HASH>&dn=<name>&tr=udp://tracker.opentrackr.org:1337" "Title Year"
 ```
 
-### 3. Poll until files resolve
+### 4. Poll until files resolve
 
 ```bash
 python3 list_torrent_files.py "<HASH>"
@@ -296,7 +340,7 @@ Repeat with short sleeps until it prints the video files. For TV, print the
 FULL paths: file ids are NOT guaranteed to follow episode order, map id ->
 SxxEyy from the filenames (never assume id 1 = E01), ignore .nfo/.txt noise.
 
-### 4. Check it is not already there
+### 5. Check it is not already there
 
 Two different questions, two different sources. They disagree in normal
 operation, so check both.
@@ -328,7 +372,8 @@ torrents against 5216 stub files. Only the filesystem answers "will this look
 like a duplicate in Plex".
 
 `action=list` returns every torrent in one response, which on such a deployment
-is several megabytes. Filter it in the pipe, never print it whole.
+is several megabytes and takes seconds to serialise. Give it a generous timeout
+(`--max-time 60`) and filter it in the pipe, never print it whole.
 
 A hit on the exact release means there is nothing to do. A hit on the title with
 a different release is a decision for the user, not for the skill: two stubs for
@@ -338,12 +383,12 @@ the same title show up as duplicates in the media server.
 returns only what is streaming right now, so it will report nothing for a
 library of thousands.
 
-### 5. Pick the target file(s)
+### 6. Pick the target file(s)
 
 Video extensions: .mkv, .mp4, .avi, .mov, .m4v. Pick the largest within the
 size band from the profile; skip featurettes/extras.
 
-### 6. Write one stub per video file
+### 7. Write one stub per video file
 
 Movie (flat + imdb):
 
@@ -372,7 +417,7 @@ Copy scripts to the host and run there rather than through ssh heredocs:
 heredocs containing single quotes corrupt the script silently (runtime
 NameError on a legitimate `r.get('key')`).
 
-### 7. Verify on both layers
+### 8. Verify on both layers
 
 The stub is a small JSON file on disk, and the same path seen through the FUSE
 mount must report the declared size. Compare the two:
@@ -387,9 +432,40 @@ reports ~700 B too, the file is being read as a plain file and the mount is not
 covering that path. If it is missing entirely, the engine has not registered
 the stub yet.
 
-Then trigger a library scan on Plex/Jellyfin for the movies or TV folder.
+Reading the first bytes through the mount streams the real MKV header from the
+swarm, so the container and track layout can be inspected without downloading
+anything:
 
-### 8. Undo, if the stub was wrong
+```bash
+head -c 2M "$FUSE/movies/<file>.mkv" | ffprobe -v error -show_streams -
+```
+
+That doubles as the strongest proof the stub works end to end: real codec data
+coming back means engine, FUSE and swarm are all doing their job.
+
+#### Trigger the library scan
+
+Credentials come from the config, not from the user. `media_server_type` says
+which of the two applies.
+
+```bash
+# Plex: one section at a time, id from plex.library_id (movies) or plex.tv_library_id
+curl -s "{plex.url}/library/sections/{id}/refresh?X-Plex-Token={plex.token}"
+
+# Jellyfin: refreshes every library, no id involved
+curl -s -X POST "{url}/Library/Refresh" -H "X-Emby-Token: {token}"
+```
+
+A `library_id` of `0` means the operator disabled the refresh deliberately. Do
+not invent an id in that case, tell the user instead.
+
+Expect a delay before the title appears, especially with the library on a remote
+share. Tiramisu's own dashboard lists the file as soon as the stub exists,
+because it reads the filesystem, while the media server only shows it after its
+scan has completed and settled. A title missing from Plex right after the
+refresh is not evidence the stub is wrong: check the FUSE layer first.
+
+### 9. Undo, if the stub was wrong
 
 Deleting the stub is not enough: the torrent stays registered in the engine.
 
