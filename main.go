@@ -153,6 +153,28 @@ func (ps *PlaybackState) IsInferredPlayback() bool {
 	return active && significantReads && streaming
 }
 
+func (ps *PlaybackState) GetOpenedAt() time.Time {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.OpenedAt
+}
+
+func (ps *PlaybackState) GetImdbID() string {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.ImdbID
+}
+
+// LastSignOfLife is the later of the open and the webhook confirmation.
+func (ps *PlaybackState) LastSignOfLife() time.Time {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	if ps.ConfirmedAt.After(ps.OpenedAt) {
+		return ps.ConfirmedAt
+	}
+	return ps.OpenedAt
+}
+
 func (ps *PlaybackState) GetStatus() bool {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
@@ -1025,6 +1047,20 @@ type MkvHandle struct {
 
 // startNativePump acquires a slot and starts the background pump.
 // Called from Open (proactive) or Read (rescue for late resolution).
+// scanSlotLimit is how many pump slots a not-yet-confirmed playback may find taken before it
+// is denied one. capacity is the semaphore's, fixed at make(): reading the live config here
+// would apply half of a limit change, since the channel itself cannot be resized.
+// The floor of 1 matters because a request cannot reach IsHealthy without pumping first.
+func scanSlotLimit(capacity int, anyHealthyPlayback bool) int {
+	if anyHealthyPlayback {
+		return 5
+	}
+	if n := capacity - 5; n > 1 {
+		return n
+	}
+	return 1
+}
+
 func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 	// 1. Verify we don't already have a slot or an active pump
 	if h.hasSlot {
@@ -1044,23 +1080,15 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 	// Without active playback, allow up to MasterConcurrencyLimit-5 (default 20).
 	canTakeSlot := true
 	if !isHealthy {
-		scanLimit := gc().MasterConcurrencyLimit - 5
-		// Floor at 1: at MasterConcurrencyLimit<=5 the subtraction makes the saturation
-		// check below always true, and no new playback reaches IsHealthy without a slot.
-		if scanLimit < 1 {
-			scanLimit = 1
-		}
 		anyHealthyPlayback := false
 		playbackRegistry.Range(func(_, v interface{}) bool {
-			if ps, ok := v.(*PlaybackState); ok && ps.IsHealthy {
+			if ps, ok := v.(*PlaybackState); ok && ps.GetStatus() {
 				anyHealthyPlayback = true
 				return false
 			}
 			return true
 		})
-		if anyHealthyPlayback {
-			scanLimit = 5
-		}
+		scanLimit := scanSlotLimit(cap(masterDataSemaphore), anyHealthyPlayback)
 		if len(masterDataSemaphore) >= scanLimit {
 			canTakeSlot = false
 			logger.Printf("[StrategicReserve] Denying pump slot to background scan (Saturation: %d/%d, healthyPlayback=%v): %s",
@@ -3493,7 +3521,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			state := value.(*PlaybackState)
 
 			// Tentativo 0a: Match per IMDB ID (V281 — immune a titoli localizzati)
-			if webhookImdbID != "" && state.ImdbID != "" && state.ImdbID == webhookImdbID {
+			if imdb := state.GetImdbID(); webhookImdbID != "" && imdb != "" && imdb == webhookImdbID {
 				exactMatch = path
 				exactState = state
 				return false
@@ -3536,7 +3564,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 				playbackRegistry.Range(func(key, value interface{}) bool {
 					path := key.(string)
 					state := value.(*PlaybackState)
-					if strings.Contains(path, sectionDir) && state.ImdbID == "" {
+					if strings.Contains(path, sectionDir) && state.GetImdbID() == "" {
 						bootPath = path
 						bootState = state
 						bootCount++
@@ -3655,7 +3683,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			path := key.(string)
 			state := value.(*PlaybackState)
 
-			if stopImdbID != "" && state.ImdbID != "" && state.ImdbID == stopImdbID {
+			if imdb := state.GetImdbID(); stopImdbID != "" && imdb != "" && imdb == stopImdbID {
 				stopMatch = path
 				stopState = state
 				return false

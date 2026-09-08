@@ -525,6 +525,11 @@ func firstEnv(keys ...string) string {
 }
 
 func (c *Config) finalize() {
+	// At 0 the pump semaphore is unbuffered and its non-blocking send never succeeds.
+	if c.MasterConcurrencyLimit < 1 {
+		c.MasterConcurrencyLimit = 1
+	}
+
 	// Sync legacy fields with unified master limit
 	c.ConcurrencyLimit = c.MasterConcurrencyLimit
 	c.MaxConcurrentHTTP = c.MasterConcurrencyLimit

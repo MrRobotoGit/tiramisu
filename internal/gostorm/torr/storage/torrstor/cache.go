@@ -51,10 +51,10 @@ type Cache struct {
 
 	isRemove     atomic.Bool
 	isClosed     atomic.Bool
-	IsAggressive bool // V217: Aggressive download priority
-	MasterLimit  int  // V218: Master limit from config.json
-	lastClean    time.Time
-	lastEvictLog time.Time // rate-limits the starved-eviction warning
+	IsAggressive bool         // V217: Aggressive download priority
+	MasterLimit  int          // V218: Master limit from config.json
+	lastCleanNS  atomic.Int64 // throttle stamp, read before muRemove is held
+	lastEvictLog time.Time    // rate-limits the starved-eviction warning
 	muRemove     sync.Mutex
 	torrent      *torrent.Torrent
 	cleanTrigger chan struct{} // V227: Rate-limited cleanup trigger (never closed — use cleanStop)
@@ -152,10 +152,10 @@ func (c *Cache) Init(info *metainfo.Info, hash metainfo.Hash) {
 		c.freeCap = 2
 	}
 
+	c.pieceInRange = make([]bool, c.pieceCount)
 	for i := 0; i < c.pieceCount; i++ {
 		c.pieces[i] = NewPiece(i, c)
 	}
-	c.pieceInRange = make([]bool, c.pieceCount)
 }
 
 func (c *Cache) SetTorrent(torr *torrent.Torrent) {
@@ -294,7 +294,7 @@ func (c *Cache) GetState() *state.CacheState {
 		c.muReaders.RUnlock()
 	}
 
-	c.filled = fill
+	atomic.StoreInt64(&c.filled, fill)
 	cState.Capacity = c.capacity
 	cState.PiecesLength = c.pieceLength
 	cState.PiecesCount = c.pieceCount
@@ -342,7 +342,7 @@ func (c *Cache) cleanPieces() {
 	// V138: Throttle eviction to at most once per second,
 	// unless we are near capacity (>90%)
 	now := time.Now()
-	if now.Sub(c.lastClean) < time.Second && c.filled < (c.capacity*9)/10 {
+	if now.UnixNano()-c.lastCleanNS.Load() < int64(time.Second) && atomic.LoadInt64(&c.filled) < (c.capacity*9)/10 {
 		return
 	}
 
@@ -351,15 +351,16 @@ func (c *Cache) cleanPieces() {
 		return
 	}
 	c.isRemove.Store(true)
-	c.lastClean = now
+	c.lastCleanNS.Store(now.UnixNano())
 	defer func() {
 		c.isRemove.Store(false)
 		c.muRemove.Unlock()
 	}()
 
 	remPieces := c.getRemPieces()
-	if c.filled > c.capacity {
-		rems := (c.filled-c.capacity)/c.pieceLength + 1
+	filled := atomic.LoadInt64(&c.filled)
+	if filled > c.capacity {
+		rems := (filled-c.capacity)/c.pieceLength + 1
 		// Only the starved case is worth reporting: nothing evictable while over
 		// capacity means the protected window is too wide for the configured cache
 		// and the reader will thrash. Logging every cycle floods the log at several
@@ -372,7 +373,7 @@ func (c *Cache) cleanPieces() {
 			}
 			log.TLogln("[CacheEvict] nothing evictable — readers:", readers,
 				"window(MB):", c.capacity/readers*85/100>>20,
-				"filled(MB):", c.filled>>20, "capacity(MB):", c.capacity>>20)
+				"filled(MB):", filled>>20, "capacity(MB):", c.capacity>>20)
 		}
 		for _, p := range remPieces {
 			c.removePiece(p)
@@ -418,7 +419,9 @@ func (c *Cache) getRemPieces() []*Piece {
 		if sz > 0 {
 			fill += sz
 		}
-		if !pieceEvictable(sz, p.Complete.Load(), c.pieceInRange[id]) {
+		// Bounds-checked: NewCache starts the cleaner before Init sizes the bitmap.
+		inRange := id < len(c.pieceInRange) && c.pieceInRange[id]
+		if !pieceEvictable(sz, p.Complete.Load(), inRange) {
 			continue
 		}
 		if !c.isIdInFileBE(ranges, id) {
@@ -433,7 +436,7 @@ func (c *Cache) getRemPieces() []*Piece {
 		return atomic.LoadInt64(&piecesRemove[i].Accessed) < atomic.LoadInt64(&piecesRemove[j].Accessed)
 	})
 
-	c.filled = fill
+	atomic.StoreInt64(&c.filled, fill)
 	return piecesRemove
 }
 
@@ -473,7 +476,7 @@ func (c *Cache) setLoadPriority(ranges []Range) {
 		count := effectiveLimit / numReaders
 		if c.IsAggressive {
 			// V243: Safety - If cache is overfilled, disable aggressive expansion
-			if c.filled > c.capacity {
+			if atomic.LoadInt64(&c.filled) > c.capacity {
 				count = 1 // Fallback to minimal download
 			} else {
 				// V218: Aggressive but benevolent (80% rule).

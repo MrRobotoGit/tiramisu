@@ -122,11 +122,10 @@ func (b *StartupCacheBuilder) processDirectory(dirPath string, recursive bool) {
 			if !recursive && path != dirPath {
 				return filepath.SkipDir
 			}
-			// V133: Register directory in inode map
-			// Compute relative path from source for consistent inode generation
-			relPath, _ := filepath.Rel(b.sourcePath, path)
-			if relPath != "." && relPath != "" {
-				getDirInodeFromMap("/" + relPath)
+			// V133: Register directory in inode map, keyed by the full path the FUSE
+			// call sites look up — a relative key leaves an entry nobody reads.
+			if path != b.sourcePath {
+				getDirInodeFromMap(path)
 			}
 			return nil
 		}
