@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
-description: "Use to add a specific movie/TV release to Tiramisu by hand."
-version: 3.0.2
+description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
+version: 3.0.3
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -287,6 +287,17 @@ The size bands are calibrated for 2h+ features: for shorter content (<=2h docs,
 live shows) they may reject legitimate encodes, so relax the band manually for
 those and say so when reporting what was chosen.
 
+**A gate is not always the right answer, and this one in particular.** The gates
+reproduce what the unattended sync does, where nobody is around to ask. You are
+not in that position. When the only candidates carrying the preferred audio
+language fall outside the size band, while the in-band ones are missing it, do
+not silently drop the first group: the deployment declares it wants that
+language (`preferred_language` is a positive weight), so the tradeoff is real
+and it is the user's to make. Show both options with size and audio, and ask.
+
+The same applies whenever the gates leave nothing at all: report what was
+rejected and why, rather than concluding no release exists.
+
 ### TV scores differently
 
 TV reads `quality_scoring.tv` and the formula is NOT the movie one with other
@@ -534,6 +545,9 @@ is precisely what the blacklist is for. But say which ones they are: the operato
 may have wanted them.
 
 ## Fast-track (skip the engine API)
+
+This is about **adding**, not removing. Removal always goes through the FUSE
+mount, see [Bulk removal](#bulk-removal).
 
 If adding the magnet hangs or the API is unresponsive, create the stub directly
 from the release page: take the info hash (40-char hex), the target file index
