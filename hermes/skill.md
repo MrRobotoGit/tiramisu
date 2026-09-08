@@ -130,13 +130,66 @@ can change between versions.
 
 ## Search for candidates
 
-Query an indexer API for `TITLE YEAR`. The indexer returns per-release: title,
-info hash, seeders, leechers, size, publish date, indexer.
+Search by **IMDB id**, not by free text. Both indexers Tiramisu uses are keyed
+on it, and a title search is what makes generic one-word show names collect
+unrelated releases.
 
-If the main indexer is unreachable, a public JSON fallback works from scripts
-(e.g. The Pirate Bay apibay JSON endpoint, `q.php?q=<query>&cat=0`), returning
-name, info_hash, seeders, size. Use it to choose the release before adding the
-magnet. Prefer a full H.264 season pack over per-episode x265 releases when the
+### Prowlarr, through Tiramisu
+
+Do not call Prowlarr directly and do not go looking for its API key: Tiramisu
+already holds the credentials from its own config and exposes a search endpoint
+that uses them.
+
+```bash
+curl -s "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=movie&title=Some%20Title&year=2024"
+curl -s "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=series&title=Some%20Show"
+```
+
+- `imdb_id` is required, everything else is optional
+- `type` is `movie` (the default) or `series`
+- `title` and `year` are a secondary query for indexers that have no real IMDB
+  search. Pass `year` for movies; for a series it would be the year of season 1
+  and only hurts
+- the response is a JSON array of `{name, title, infoHash, behaviorHints}`
+- **an empty array `[]` with status 200 means Prowlarr is not configured on this
+  deployment**, not that the release does not exist. Fall through to Torrentio
+
+`title` is a multi-line string, and the extra lines are where seeders and size
+live. Scoring reads the whole thing, so keep it intact rather than splitting off
+the first line:
+
+```
+Brazil 1985 DC 4K HDR DV 2160p BDRemux Ita Eng x265 NAHOM
+👤 2 ⬇️ 10
+💾 83.24GB
+```
+
+Seeders are the number after the 👤 emoji (the engine matches exactly that).
+`name` is not the release name: it carries the indexer and a resolution tag,
+for example `Torrentio\n4k`.
+
+### Torrentio, directly
+
+Torrentio needs no credentials. Take the base URL from the config
+(`torrentio_url`, default `https://torrentio.strem.fun`) and query by IMDB id:
+
+```bash
+curl -s "{TORRENTIO}/{config}/stream/movie/tt1234567.json"
+curl -s "{TORRENTIO}/{config}/stream/series/tt1234567:2:5.json"    # season 2, episode 5
+```
+
+The `{config}` segment is the filter string the sync engine uses,
+`sort=qualitysize|qualityfilter=480p,720p,scr,cam`.
+
+### How the sync engine combines them
+
+Worth mirroring, because it is not a fallback chain: the engine queries
+**Prowlarr and Torrentio both**, concatenates the results, deduplicates by info
+hash, and only then filters and scores. A search counts as failed only when
+**every** indexer failed; if Prowlarr is simply not configured, that is not a
+failure and Torrentio alone carries the run.
+
+Finally, prefer a full H.264 season pack over per-episode x265 releases when the
 client cannot decode HEVC natively (no-transcode playback).
 
 ## Score candidates
