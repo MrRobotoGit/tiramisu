@@ -1045,6 +1045,11 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 	canTakeSlot := true
 	if !isHealthy {
 		scanLimit := gc().MasterConcurrencyLimit - 5
+		// Floor at 1: at MasterConcurrencyLimit<=5 the subtraction makes the saturation
+		// check below always true, and no new playback reaches IsHealthy without a slot.
+		if scanLimit < 1 {
+			scanLimit = 1
+		}
 		anyHealthyPlayback := false
 		playbackRegistry.Range(func(_, v interface{}) bool {
 			if ps, ok := v.(*PlaybackState); ok && ps.IsHealthy {
