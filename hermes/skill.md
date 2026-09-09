@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.0.1
+version: 4.0.2
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -617,6 +617,24 @@ the sync free to manage it again.
 The torrent behind the stub is dropped only once no other stub points at it: one
 season pack is a single torrent behind many episodes, so removing one episode
 does not break the others.
+
+**Replacing a release is a remove and an add, and the media server is the last
+to know.** `list` answers whether the stub exists, which is what it is the
+authority on. It says nothing about what a player would open: the library scan
+is asynchronous, and until it has run and settled the media server can still
+hold the old file, in the same entry, and play from it. When the point of the
+operation was an upgrade, say so and check the media server itself before
+calling it done:
+
+```bash
+# Plex: the Part under the entry must name the new stub
+curl -s "{plex.url}/library/sections/{plex.library_id}/all?X-Plex-Token={plex.token}" | \
+  tr '>' '>\n' | grep -A2 -i '<title fragment>' | grep '<Part'
+```
+
+Do not trigger a scan to hurry it along: `remove` and `add` already asked for
+one. If the old file is still there minutes later, that is worth reporting, not
+working around.
 
 ## Bulk removal
 

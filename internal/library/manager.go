@@ -67,6 +67,7 @@ type Manager struct {
 	showLocks *keyLocks // one per show: exclusive for packs, shared for single episodes
 
 	refreshPending map[int]bool
+	refreshDirty   map[int]bool
 }
 
 func New(cfg Config) *Manager {

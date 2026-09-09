@@ -28,8 +28,15 @@ func (m *Manager) scheduleRefresh(section int) {
 	m.mu.Lock()
 	if m.refreshPending == nil {
 		m.refreshPending = map[int]bool{}
+		m.refreshDirty = map[int]bool{}
 	}
 	if m.refreshPending[section] {
+		// A scan for this section is already coming. If it is the one being waited
+		// for, it will cover this request too; if it is already running, it cannot,
+		// so mark the section dirty and let it schedule another when it finishes.
+		// Dropping the request is how a remove and the add that replaces it end up
+		// sharing one scan that saw only half the change.
+		m.refreshDirty[section] = true
 		m.mu.Unlock()
 		return
 	}
@@ -38,18 +45,27 @@ func (m *Manager) scheduleRefresh(section int) {
 
 	go func() {
 		time.Sleep(delay)
+
+		// Requests that arrived during the wait are covered by the scan below.
+		m.mu.Lock()
+		delete(m.refreshDirty, section)
+		m.mu.Unlock()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		err := m.cfg.MediaServer.RefreshLibrary(ctx, section)
 
-		// The flag is cleared only now: adds arriving while a slow scan runs join the
-		// next window instead of queueing a scan each.
 		m.mu.Lock()
 		delete(m.refreshPending, section)
+		again := m.refreshDirty[section]
+		delete(m.refreshDirty, section)
 		m.mu.Unlock()
 
 		if err != nil {
 			m.cfg.Logger.Printf("[LibraryAPI] WARNING: library refresh failed: %v", err)
+		}
+		if again {
+			m.scheduleRefresh(section)
 		}
 	}()
 }
