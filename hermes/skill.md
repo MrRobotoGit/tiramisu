@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
-version: 3.0.3
+version: 3.0.4
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -21,18 +21,27 @@ On first execution, materialize them (section [Materialize the scripts](#0-mater
 then run. No host, IP or secret is embedded anywhere: fill the placeholders per
 deployment, never hardcode.
 
-Environment placeholders:
+**The only thing you need from the operator is `CTRL`**, the control API base
+(`http://<host>:9080` by default). The deployment describes itself from there:
+`GET {CTRL}/api/config` returns every other path and port, so ask for them only
+if that call fails.
 
-- `API` = Tiramisu engine API base URL, default `http://127.0.0.1:8090` on the
-  Tiramisu host (also overridable via `TIRAMISU_API` env var in the scripts)
-- `CTRL` = Tiramisu control/metrics base URL, default `http://127.0.0.1:9080`
-  (env var `TIRAMISU_CTRL`). This is a DIFFERENT port from `API` and is where
-  the running configuration is read from.
-- `LIB` = library root containing the `movies/` and `tv/` directories, on the
-  real filesystem
-- `FUSE` = the mount point where Tiramisu exposes the same tree as full-size
-  virtual files. A different path from `LIB`, and the one to delete through:
-  removing a file here also unregisters and blacklists its torrent
+| Name | Where it comes from | Example |
+|------|--------------------|---------|
+| `CTRL` | the operator, or the default `http://127.0.0.1:9080` | control API, config lives here |
+| `API` | `gostorm_url` | `http://127.0.0.1:8090`, the engine |
+| `LIB` | `physical_source_path` | `/mnt/torrserver`, real files, where stubs are written |
+| `FUSE` | `fuse_mount_path` | `/mnt/torrserver-go`, virtual files, **delete through here** |
+
+The same response also carries `tmdb_api_key`, the Prowlarr block,
+`torrentio_url`, `media_server_type` and the `plex` block with its library ids.
+Resolve them, do not ask for them.
+
+If `media_server_type` is empty, infer it: a populated `plex.url` means Plex.
+
+Deleting through `FUSE` rather than `LIB` is not a preference. The unlink handler
+there also unregisters and blacklists the torrent, which is what makes a removal
+stick.
 
 The engine API is the GoStorm-compatible torrents API (route `POST /torrents`,
 actions `add | get | set | rem | list | active | drop | wipe`).
@@ -242,7 +251,7 @@ reads the `quality_scoring` block of its config, and any value may have been
 tuned by the operator. Fetch the live profile first:
 
 ```bash
-python3 get_scoring.py            # prints the movie + TV profile in use
+python3 resolve_deployment.py     # paths, ports, media server, scoring profile
 ```
 
 When `quality_scoring` is absent from the config, no profile was configured and
@@ -333,11 +342,16 @@ with `python3 -m py_compile <file>.py`. Then run them from there.
 See [Resolve the IMDB id first](#resolve-the-imdb-id-first). Confirm the title
 and year that come back before going further.
 
-### 2. Read the deployment's scoring profile
+### 2. Resolve the deployment
+
+One call answers where everything is and how this deployment scores:
 
 ```bash
-python3 get_scoring.py
+python3 resolve_deployment.py            # or: resolve_deployment.py http://host:9080
 ```
+
+Take `API`, `LIB` and `FUSE` from its output rather than asking the operator.
+Only `CTRL` has to be given, and only when it is not the default.
 
 ### 3. Add the torrent
 
@@ -405,6 +419,8 @@ size band from the profile; skip featurettes/extras.
 
 ### 7. Write one stub per video file
 
+`LIB` comes from step 2, not from the operator.
+
 Movie (flat + imdb):
 
 ```bash
@@ -460,15 +476,19 @@ coming back means engine, FUSE and swarm are all doing their job.
 
 #### Trigger the library scan
 
-Credentials come from the config, not from the user. `media_server_type` says
-which of the two applies.
+Credentials come from the config, not from the user, and **both media servers
+read them from the same `plex` block**: `plex.url` and `plex.token` hold the URL
+and token whichever server is in use, because the engine passes exactly those
+two fields to either client. Do not go looking for a `jellyfin` block, there
+isn't one. `media_server_type` says which of the two to talk to, and when it is
+empty the deployment is on the Plex default.
 
 ```bash
 # Plex: one section at a time, id from plex.library_id (movies) or plex.tv_library_id
 curl -s "{plex.url}/library/sections/{id}/refresh?X-Plex-Token={plex.token}"
 
-# Jellyfin: refreshes every library, no id involved
-curl -s -X POST "{url}/Library/Refresh" -H "X-Emby-Token: {token}"
+# Jellyfin: same url and token, refreshes every library, no id involved
+curl -s -X POST "{plex.url}/Library/Refresh" -H "X-Emby-Token: {plex.token}"
 ```
 
 A `library_id` of `0` means the operator disabled the refresh deliberately. Do
@@ -593,26 +613,28 @@ Materialize them into a working directory when first needed (see step 0), do
 not keep permanent copies elsewhere. All read the API base from env vars or a
 positional arg; no IP or secret is hardcoded.
 
-### get_scoring.py
+### resolve_deployment.py
 
 ```python
 #!/usr/bin/env python3
-"""Print the scoring profile the running Tiramisu actually uses.
+"""Resolve a Tiramisu deployment from its control API: paths, ports, scoring.
 
 Usage:
-    python3 get_scoring.py [ctrl_base]
+    python3 resolve_deployment.py [ctrl_base]
 
 ctrl_base defaults to http://127.0.0.1:9080 (the control/metrics port, NOT the
-engine API port), overridable with TIRAMISU_CTRL.
+engine API port), overridable with TIRAMISU_CTRL. It is the ONLY value that has
+to come from the operator: the engine URL, the library root, the FUSE mount, the
+media server and the scoring weights all come back from GET {ctrl}/api/config.
 
-Weights are per-deployment configuration and may have been tuned by the
-operator, so they must be read, never assumed. When the config carries no
-quality_scoring block the engine falls back to its own built-in profile and
-this script says so instead of inventing numbers.
+Weights are per-deployment configuration and may have been tuned, so they must
+be read, never assumed. When the config carries no quality_scoring block the
+engine falls back to its own built-in profile and this script says so instead of
+inventing numbers.
 
 SECURITY: the config response also contains API keys and tokens in cleartext.
-This script extracts only the scoring block and the preferred-language terms;
-do not dump the whole response anywhere.
+This script prints only paths, ports and the scoring block, never the whole
+response. Do not dump it anywhere either.
 """
 import json
 import os
@@ -626,6 +648,20 @@ def main():
     )
     with urllib.request.urlopen(ctrl + "/api/config", timeout=15) as r:
         cfg = json.loads(r.read())
+
+    # Both Plex and Jellyfin read their url/token from the "plex" block: the engine
+    # hands those same two fields to whichever client media_server_type selects.
+    ms = cfg.get("plex") or {}
+    kind = cfg.get("media_server_type") or ("plex" if ms.get("url") else "unset")
+    print("--- deployment ---")
+    print(f"  API   (engine)      {cfg.get('gostorm_url')}")
+    print(f"  LIB   (real files)  {cfg.get('physical_source_path')}")
+    print(f"  FUSE  (virtual)     {cfg.get('fuse_mount_path')}")
+    print(f"  media server        {kind} {ms.get('url') or 'MISSING'}")
+    print(f"  media token         {'set' if ms.get('token') else 'MISSING'}")
+    print(f"  library ids         movies={ms.get('library_id')} tv={ms.get('tv_library_id')}  (0 = refresh off)")
+    print(f"  torrentio           {cfg.get('torrentio_url')}")
+    print(f"  tmdb key            {'set' if cfg.get('tmdb_api_key') else 'MISSING'}")
 
     q = cfg.get("quality_scoring") or {}
     lang = (cfg.get("language") or {}).get("preferred_terms")
