@@ -57,7 +57,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 ## Table of Contents
 
-- [The Setup: Tiramisu + Plex/Jellyfin/Infuse on Apple TV](#the-setup-tiramisu--plex--infuse-on-apple-tv)
+- [The Setup: Tiramisu + Plex/Jellyfin/Infuse on Apple TV](#the-setup-tiramisu--plexjellyfininfuse-on-apple-tv)
 - [How the Magic Works](#how-the-magic-works)
 - [AI Tiramisu Pilot - Experimental](https://github.com/MrRobotoGit/tiramisu/blob/main/ai/docs/ai-pilot.md)
 - [Architecture](#architecture)
@@ -71,7 +71,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - [Configuration Reference](#configuration-reference)
 - [Sync Engine](#sync-engine-go-native)
 - [Prowlarr Integration](#prowlarr-integration-resilience)
-- [Plex/Jellyfin & Samba Setup](#plex-and-samba-setup)
+- [Plex/Jellyfin & Samba Setup](#plexjellyfin-and-samba-setup)
 - [Build from Source](#build-from-source)
 - [Docker](#docker)
 - [API Reference](#api-quick-reference)
@@ -1119,10 +1119,11 @@ curl -s http://127.0.0.1:9080/api/config | jq '.quality_scoring'
 ## AI Agent Skill
 
 `hermes/skill.md` is a portable skill file for an AI agent. It was written for
-Hermes and follows the same `SKILL.md` convention as
-[OpenClaw](https://docs.openclaw.ai/tools/skills) and Claude Code: YAML
-frontmatter with a name and a description, then markdown instructions. Rename
-the file to `SKILL.md` and drop it in a skills directory to use it with those.
+[Hermes](https://github.com/NousResearch/hermes-agent) and follows the same
+`SKILL.md` convention as [OpenClaw](https://github.com/openclaw/openclaw) and
+Claude Code: YAML frontmatter with a name and a description, then markdown
+instructions. Rename the file to `SKILL.md` and drop it in a skills directory to
+use it with those.
 
 It teaches the agent how to add one specific release to the library by hand, for
 the times the automated sync misses something.
