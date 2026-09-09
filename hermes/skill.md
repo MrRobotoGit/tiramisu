@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
-version: 3.0.5
+version: 3.1.0
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -17,7 +17,7 @@ the sync engine uses. Deployment, operation and debugging live in
 
 This skill is a SINGLE self-contained file: the helper scripts are embedded in
 section [Helper scripts](#helper-scripts) below. They are NOT stored as files.
-On first execution, materialize them (section [Materialize the scripts](#0-materialize-the-scripts)),
+On first execution, materialize them (section [Materialize the scripts](#0-materialize-the-scripts-once-per-version)),
 then run. No host, IP or secret is embedded anywhere: fill the placeholders per
 deployment, never hardcode.
 
@@ -349,11 +349,28 @@ average at or above `season_skip_score` is skipped entirely.
 
 ## Worked procedure
 
-### 0. Materialize the scripts
+### 0. Materialize the scripts, once per version
 
-Write the five files from [Helper scripts](#helper-scripts) into a local
-working directory (or on the Tiramisu host), e.g. `/tmp/tiramisu-add/`. Verify
-with `python3 -m py_compile <file>.py`. Then run them from there.
+Use a working directory named after this skill's version, on the Tiramisu host:
+`/tmp/tiramisu-add/<version>/`, so `/tmp/tiramisu-add/3.1.0/` for this one.
+
+```bash
+DIR=/tmp/tiramisu-add/3.1.0
+[ -f "$DIR/.ok" ] || {          # already materialised for this version?
+  mkdir -p "$DIR"
+  # write the five files from Helper scripts into $DIR
+  ( cd "$DIR" && python3 -m py_compile *.py ) && touch "$DIR/.ok"
+}
+```
+
+**If `.ok` is there, run the scripts and move on.** Do not rewrite them, do not
+read them back, do not diff them against the skill: the version in the path
+already answers whether they are current. Rewriting identical files every round
+is the single most common waste in this flow.
+
+A different version means a different directory, so old copies never collide
+with new ones and there is nothing to reconcile. Delete stale version
+directories whenever you feel like it, nothing depends on them.
 
 ### 1. Resolve the IMDB id
 
@@ -370,6 +387,14 @@ python3 resolve_deployment.py            # or: resolve_deployment.py http://host
 
 Take `API`, `LIB` and `FUSE` from its output rather than asking the operator.
 Only `CTRL` has to be given, and only when it is not the default.
+
+The script writes what it resolved to `deployment.json` in its own directory and
+reuses it on later runs, so the config call happens once per version rather than
+once per round. Pass `--refresh` after changing the configuration.
+
+That file is the right place for deployment-local facts. **This skill file is
+not**: it is shared, published and version-controlled, and it says in its own
+opening that no host, IP or secret is embedded in it. Keep it that way.
 
 **Run the flow on the Tiramisu host.** `LIB` and `FUSE` are local paths that
 exist nowhere else, so the stubs have to be written there. The config also
@@ -636,6 +661,36 @@ triggers the engine to fetch it.
 - Delete in bulk without showing the full list first and having it confirmed
 - Run the whole flow when only a verification was asked (check, don't add)
 
+## When you learn something new
+
+You will hit things this file does not cover, or covers wrongly. Two rules for
+what to do with them.
+
+**Do not edit this skill on your own.** It is shared, published and versioned,
+and a wrong instruction written confidently is worse than a missing one. Every
+correction in this file so far came from the same loop: an agent reported what
+it observed, a human checked it against the engine source, the version went up.
+That verification step is why the corrections are trustworthy, and skipping it
+would fill the file with plausible mistakes.
+
+**Write findings down where they survive the round.** Append to `FINDINGS.md` in
+the working directory, next to the scripts:
+
+```
+## <date> <what you were doing>
+- observed: <exactly what happened, with the command and the output>
+- expected per the skill: <what this file led you to expect>
+- guess at cause: <optional, and label it as a guess>
+```
+
+Report those to the operator at the end of the run. Facts that turn out to be
+general belong in the next version of this skill; facts that are local to one
+deployment belong in `deployment.json`, never here.
+
+Say plainly when something did not work, including when you cannot tell why. An
+unexplained failure reported as such is useful; the same failure smoothed over
+is how a defect survives to the next round.
+
 ## Helper scripts
 
 The five scripts below are embedded here as the single source of truth.
@@ -669,16 +724,40 @@ response. Do not dump it anywhere either.
 import json
 import os
 import sys
+import time
 import urllib.parse
 import urllib.request
 
 
 def main():
+    refresh = "--refresh" in sys.argv
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
     ctrl = os.environ.get("TIRAMISU_CTRL") or (
-        sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:9080"
+        args[0] if args else "http://127.0.0.1:9080"
     )
-    with urllib.request.urlopen(ctrl + "/api/config", timeout=15) as r:
-        cfg = json.loads(r.read())
+
+    # Cached next to this script: the config rarely changes and re-fetching it every
+    # round is pure latency. --refresh after changing the configuration.
+    cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deployment.json")
+    cfg = None
+    if not refresh and os.path.exists(cache):
+        try:
+            with open(cache) as fh:
+                blob = json.load(fh)
+            if blob.get("ctrl") == ctrl:
+                cfg = blob["config"]
+                print(f"(cached from {blob.get('resolved_at')}, --refresh to re-read)")
+        except (ValueError, KeyError, OSError):
+            cfg = None
+    if cfg is None:
+        with urllib.request.urlopen(ctrl + "/api/config", timeout=15) as r:
+            cfg = json.loads(r.read())
+        try:
+            with open(cache, "w") as fh:
+                json.dump({"ctrl": ctrl, "resolved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                           "config": cfg}, fh)
+        except OSError:
+            pass  # cache is an optimisation, never a requirement
 
     # Both Plex and Jellyfin read their url/token from the "plex" block: the engine
     # hands those same two fields to whichever client media_server_type selects.
