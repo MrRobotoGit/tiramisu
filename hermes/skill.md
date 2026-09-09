@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
-version: 3.1.0
+version: 3.1.1
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -388,13 +388,11 @@ python3 resolve_deployment.py            # or: resolve_deployment.py http://host
 Take `API`, `LIB` and `FUSE` from its output rather than asking the operator.
 Only `CTRL` has to be given, and only when it is not the default.
 
-The script writes what it resolved to `deployment.json` in its own directory and
-reuses it on later runs, so the config call happens once per version rather than
-once per round. Pass `--refresh` after changing the configuration.
-
-That file is the right place for deployment-local facts. **This skill file is
-not**: it is shared, published and version-controlled, and it says in its own
-opening that no host, IP or secret is embedded in it. Keep it that way.
+**The config is never cached.** The response carries `plex.token`,
+`prowlarr.api_key` and `tmdb_api_key` in cleartext, so writing it to disk would
+leave secrets in a file any local user can read. One call costs milliseconds and
+is always current: make it every time, and keep in memory only the handful of
+fields you need.
 
 **Run the flow on the Tiramisu host.** `LIB` and `FUSE` are local paths that
 exist nowhere else, so the stubs have to be written there. The config also
@@ -674,18 +672,31 @@ That verification step is why the corrections are trustworthy, and skipping it
 would fill the file with plausible mistakes.
 
 **Write findings down where they survive the round.** Append to `FINDINGS.md` in
-the working directory, next to the scripts:
+the working directory, next to the scripts. Three kinds of thing belong there:
+
+- **the address you were given**, so the next round does not ask again: the
+  `CTRL` base, and the host if the flow runs remotely
+- **what the operator prefers**, learnt from how they answered: the audio
+  language they accept, whether they take an oversized remux, which library a
+  title should land in
+- **obstacles and how they were cleared**: an indexer that times out and needs a
+  control search, a season pack whose episode numbering does not follow the file
+  ids, a title whose TMDB match is ambiguous
 
 ```
 ## <date> <what you were doing>
 - observed: <exactly what happened, with the command and the output>
 - expected per the skill: <what this file led you to expect>
+- resolved by: <what actually worked>
 - guess at cause: <optional, and label it as a guess>
 ```
 
-Report those to the operator at the end of the run. Facts that turn out to be
-general belong in the next version of this skill; facts that are local to one
-deployment belong in `deployment.json`, never here.
+**Never put secrets there.** No tokens, no API keys, no config dumps. An address
+and a preference are notes; `prowlarr.api_key` is not.
+
+Report the findings to the operator at the end of the run. The ones that turn
+out to be general belong in the next version of this skill; the ones local to a
+deployment stay in that file.
 
 Say plainly when something did not work, including when you cannot tell why. An
 unexplained failure reported as such is useful; the same failure smoothed over
@@ -724,40 +735,21 @@ response. Do not dump it anywhere either.
 import json
 import os
 import sys
-import time
 import urllib.parse
 import urllib.request
 
 
 def main():
-    refresh = "--refresh" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     ctrl = os.environ.get("TIRAMISU_CTRL") or (
         args[0] if args else "http://127.0.0.1:9080"
     )
 
-    # Cached next to this script: the config rarely changes and re-fetching it every
-    # round is pure latency. --refresh after changing the configuration.
-    cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deployment.json")
-    cfg = None
-    if not refresh and os.path.exists(cache):
-        try:
-            with open(cache) as fh:
-                blob = json.load(fh)
-            if blob.get("ctrl") == ctrl:
-                cfg = blob["config"]
-                print(f"(cached from {blob.get('resolved_at')}, --refresh to re-read)")
-        except (ValueError, KeyError, OSError):
-            cfg = None
-    if cfg is None:
-        with urllib.request.urlopen(ctrl + "/api/config", timeout=15) as r:
-            cfg = json.loads(r.read())
-        try:
-            with open(cache, "w") as fh:
-                json.dump({"ctrl": ctrl, "resolved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                           "config": cfg}, fh)
-        except OSError:
-            pass  # cache is an optimisation, never a requirement
+    # Fetched fresh every time, and never written to disk. The response carries
+    # plex.token, prowlarr.api_key and tmdb_api_key in cleartext, so caching it would
+    # leave secrets in a file readable by any local user. One call costs milliseconds.
+    with urllib.request.urlopen(ctrl + "/api/config", timeout=15) as r:
+        cfg = json.loads(r.read())
 
     # Both Plex and Jellyfin read their url/token from the "plex" block: the engine
     # hands those same two fields to whichever client media_server_type selects.
