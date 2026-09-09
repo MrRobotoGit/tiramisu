@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
-version: 3.0.4
+version: 3.0.5
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -189,8 +189,26 @@ curl -s "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=series&title=Some%20S
   search. Pass `year` for movies; for a series it would be the year of season 1
   and only hurts
 - the response is a JSON array of `{name, title, infoHash, behaviorHints}`
-- **an empty array `[]` with status 200 means Prowlarr is not configured on this
-  deployment**, not that the release does not exist. Fall through to Torrentio
+**An empty `[]` has three different causes, and the status code separates only
+one of them.** Do not read it as a single condition:
+
+| What you get | What it means |
+|---|---|
+| `[]`, status 200 | Prowlarr is not configured on this deployment |
+| `[]`, status 200 | every query ran and genuinely found nothing |
+| `[]`, status 200 | **one query answered with nothing while the others timed out** |
+| HTTP 502, body `prowlarr search failed: all N Prowlarr queries failed: ...` | every query failed, usually `context deadline exceeded` |
+
+The third row is the trap. The client reports an error only when **all** queries
+fail; if one answers, the search counts as completed even when the rest died on
+the deadline, so a half-broken search is indistinguishable from a real "nothing
+found". A well known title coming back empty is the symptom.
+
+To tell them apart, run a control search on a title that certainly exists
+(`tt3659388`, The Martian) before concluding anything. Empty there too means the
+indexers are not answering, not that your title is missing. Either way fall
+through to Torrentio, but report which of the three it was: silently calling a
+broken indexer "no results" is how candidates get lost.
 
 **This endpoint queries Prowlarr and nothing else.** It is not the same search
 the sync engine performs, so its result is not the full candidate set: to see
@@ -353,10 +371,18 @@ python3 resolve_deployment.py            # or: resolve_deployment.py http://host
 Take `API`, `LIB` and `FUSE` from its output rather than asking the operator.
 Only `CTRL` has to be given, and only when it is not the default.
 
+**Run the flow on the Tiramisu host.** `LIB` and `FUSE` are local paths that
+exist nowhere else, so the stubs have to be written there. The config also
+reports `gostorm_url` as a loopback address in most deployments, which is
+correct on the host and meaningless anywhere else. When `CTRL` points at a
+remote host the script rewrites that host into `API` for you and says so, but
+the paths it cannot fix: writing stubs still means being on that machine, or
+having its filesystem mounted.
+
 ### 3. Add the torrent
 
 ```bash
-python3 add_torrent.py "magnet:?xt=urn:btih:<HASH>&dn=<name>&tr=udp://tracker.opentrackr.org:1337" "Title Year"
+python3 add_torrent.py "magnet:?xt=urn:btih:<HASH>&dn=<name>&tr=<tracker>&tr=<tracker>" "Title Year"
 ```
 
 ### 4. Poll until files resolve
@@ -364,6 +390,10 @@ python3 add_torrent.py "magnet:?xt=urn:btih:<HASH>&dn=<name>&tr=udp://tracker.op
 ```bash
 python3 list_torrent_files.py "<HASH>"
 ```
+
+The magnet here only has to get the engine started, so any working tracker list
+does. The one that matters is the one written into the stub, which must come
+from an existing stub in the same library.
 
 Repeat with short sleeps until it prints the video files. For TV, print the
 FULL paths: file ids are NOT guaranteed to follow episode order, map id ->
@@ -639,6 +669,7 @@ response. Do not dump it anywhere either.
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 
 
@@ -653,9 +684,19 @@ def main():
     # hands those same two fields to whichever client media_server_type selects.
     ms = cfg.get("plex") or {}
     kind = cfg.get("media_server_type") or ("plex" if ms.get("url") else "unset")
+    # gostorm_url is usually a loopback address: correct on the host, useless from
+    # anywhere else. If CTRL names a remote host, carry that host over.
+    api = cfg.get("gostorm_url") or ""
+    ctrl_host = urllib.parse.urlparse(ctrl).hostname or ""
+    api_parsed = urllib.parse.urlparse(api)
+    rewritten = False
+    if ctrl_host not in ("", "127.0.0.1", "localhost") and api_parsed.hostname in ("127.0.0.1", "localhost"):
+        api = api_parsed._replace(netloc=f"{ctrl_host}:{api_parsed.port}").geturl()
+        rewritten = True
+
     print("--- deployment ---")
-    print(f"  API   (engine)      {cfg.get('gostorm_url')}")
-    print(f"  LIB   (real files)  {cfg.get('physical_source_path')}")
+    print(f"  API   (engine)      {api}{'   (host taken from CTRL)' if rewritten else ''}")
+    print(f"  LIB   (real files)  {cfg.get('physical_source_path')}   (local to the host)")
     print(f"  FUSE  (virtual)     {cfg.get('fuse_mount_path')}")
     print(f"  media server        {kind} {ms.get('url') or 'MISSING'}")
     print(f"  media token         {'set' if ms.get('token') else 'MISSING'}")
