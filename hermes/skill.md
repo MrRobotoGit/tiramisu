@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
-version: 3.1.1
+version: 3.1.2
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -352,10 +352,14 @@ average at or above `season_skip_score` is skipped entirely.
 ### 0. Materialize the scripts, once per version
 
 Use a working directory named after this skill's version, on the Tiramisu host:
-`/tmp/tiramisu-add/<version>/`, so `/tmp/tiramisu-add/3.1.0/` for this one.
+`/tmp/tiramisu-add/<version>/`. Take `<version>` from the `version:` field in
+this file's frontmatter, never from a number written in the prose: a literal
+here would drift the moment the version changes, which is the very failure this
+section exists to prevent.
 
 ```bash
-DIR=/tmp/tiramisu-add/3.1.0
+VERSION=$(sed -n 's/^version: //p' <this skill file> | head -1)
+DIR=/tmp/tiramisu-add/$VERSION
 [ -f "$DIR/.ok" ] || {          # already materialised for this version?
   mkdir -p "$DIR"
   # write the five files from Helper scripts into $DIR
