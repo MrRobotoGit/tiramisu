@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
-description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
-version: 3.1.4
+description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, files it through the Library API (or writes the virtual MKV stub directly on older deployments) and verifies it."
+version: 3.2.5
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -46,6 +46,15 @@ stick.
 The engine API is the GoStorm-compatible torrents API (route `POST /torrents`,
 actions `add | get | set | rem | list | active | drop | wipe`).
 
+**Two routes into the library.** From v1.9.64 on, the control API files a title
+for you in one request: `POST {CTRL}/api/library/add` registers the torrent, waits
+for the file list, writes the stub and triggers the library scan. It needs no
+access to the filesystem, so the flow can run from anywhere that can reach
+`CTRL`. On older deployments that route answers 404 and the stubs have to be
+written by hand on the host, which is what most of this file describes. Probe
+once with `GET {CTRL}/api/library/list?type=movie` and take the branch the
+answer dictates.
+
 ## Core model
 
 Tiramisu libraries are virtual: each file Plex/Jellyfin sees is a small JSON stub
@@ -56,6 +65,93 @@ on the real filesystem, exposed by the FUSE layer with the declared full size.
 3. **Poll** until the engine returns the file list (id, path, length per file)
 4. **Write one JSON stub per video file** into the library
 5. The FUSE layer presents each stub as a full-size virtual file
+
+Steps 2 to 4 are exactly what `POST {CTRL}/api/library/add` does server-side.
+Read them anyway: choosing the release is still yours, and knowing what the one
+call does is what lets you tell a bad pick from a broken deployment.
+
+## Library API: the whole add in one call
+
+Available from v1.9.64 on, on the control port. It does what the sync engine does for
+one title: registers the torrent, waits for the file list, picks the file, writes
+the stub with the deployment's own naming, registers TV episodes in the state DB
+and asks the media server to rescan. No filesystem access, no stub written by
+hand, no scan call of your own.
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"type":"movie","hash":"<40 hex>","title":"Dune Part Two","year":2024,
+       "release_title":"Dune.Part.Two.2024.2160p.UHD.BluRay.REMUX.DV.Atmos-GRP",
+       "imdb":"tt15239678"}' \
+  "{CTRL}/api/library/add"
+```
+
+| Field | Meaning |
+|-------|---------|
+| `type` | `movie` (default) or `tv` |
+| `hash` / `magnet` | one of the two. With `hash` alone the server builds the magnet with its own default tracker list; a magnet's own trackers are kept as they are |
+| `title` | display title, and the folder name for a series |
+| `release_title` | the raw release name; the quality tags in the filename (`_DV`, `_Atmos`, `_REMUX`) are read from here. Defaults to `title`, which loses them |
+| `year` / `release_date` | either; the year ends up in the filename. Movies only |
+| `first_air_date` | TV. The `(YYYY)` in the series folder comes from here and from nowhere else: without it the show lands in `Series` instead of `Series (2024)`, which is a second entry in the media server |
+| `imdb` | written into a movie stub, and what bulk operations later filter on. **Ignored for TV**: episode stubs carry no id, because the webhook matcher pairs a Plex episode event with an open file by looking at the ones whose id is empty |
+| `is_4k` | overrides the resolution read from `release_title` |
+| `season`, `episode` | TV. `season` alone means "season pack": every file whose name carries SxxEyy is filed |
+| `file_index` | overrides the largest-video-file pick |
+| `quality_score` | stored in the TV registry, and what the next TV sync compares against. Left out it is zero, so the sync replaces the episode with the first release it scores above that. Pass the score you computed for the release you picked, the same number [Score candidates](#score-candidates) produces |
+| `metadata_wait` | seconds to wait for the file list, default 60, capped at 300 |
+
+Answers `201` with the stubs it created, or `200` with `"already_present": true`
+when the release was already filed. `--max-time` has to exceed `metadata_wait`:
+a cold swarm uses all of it.
+
+```json
+{"hash":"...","title":"Dune Part Two","type":"movie","already_present":false,
+ "files":[{"path":"/mnt/torrserver/movies/Dune_Part_Two_2024_2160p_DV_Atmos_REMUX_deadbeef.mkv",
+           "fuse_path":"movies/Dune_Part_Two_2024_2160p_DV_Atmos_REMUX_deadbeef.mkv",
+           "size":68719476736,"file_index":2}]}
+```
+
+Failures say which half broke: `400` the request, `422` the torrent holds no
+video file, `502` the engine refused it, `503` the state DB is unavailable (TV
+only: an episode that cannot be registered would be deleted by the next sync),
+`504` no metadata within `metadata_wait`. Every failure removes the torrent it
+added, so a failed call leaves nothing behind and can simply be retried.
+
+### What is already there
+
+```bash
+curl -s "{CTRL}/api/library/list?type=movie" | \
+  python3 -c 'import sys,json; [print(i["fuse_path"], i["hash"][-8:], i.get("imdb","")) for i in json.load(sys.stdin)]'
+```
+
+The slice is the half that appears in a movie filename; for `type=tv` print
+`i["hash"][:8]` instead. The full hash is in the JSON either way, so script
+against that rather than the fragment.
+
+One entry per stub, with `size`, `hash`, `imdb` and, for TV, `season`/`episode`.
+This is the dedup check: it reads the filesystem server-side, which is the only
+source that answers "will this look like a duplicate in Plex".
+
+### Removing
+
+```bash
+# take fuse_path from add or list
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"movies/Title_2024_1080p_e7f8a9b0.mkv","blacklist":true}' \
+  "{CTRL}/api/library/remove"
+```
+
+`{"hash":"<40 hex>"}` works too and removes every stub of that release.
+
+**`blacklist` is the difference between a removal that sticks and one that does
+not.** With it, the release is recorded the way the FUSE unlink handler records
+it, and the sync engines will not add the title back. Without it, they are free
+to, which is what you want when removing only to make room for a better release.
+
+The torrent behind a removed stub is dropped only when no other stub still points
+at it: one season pack is a single torrent behind many episodes, and removing one
+episode must not break the others.
 
 ## Engine API: add the torrent
 
@@ -108,11 +204,11 @@ Two more quirks worth knowing:
 ```
 {LIB}/
 ├── movies/
-│   └── <Title>_<Year>_<Resolution>[_<tags>]_<HASH8>.mkv     (flat, imdb set)
+│   └── <Title>_<Year>_<Resolution>[_<tags>]_<HASH8>.mkv     (flat, imdb set, LAST 8)
 └── tv/
     └── <Series_Name> (<Year>)/
         └── Season.NN/
-            └── <Series>_S<NN>E<XX>_<HASH8>.mkv       (nested, imdb EMPTY)
+            └── <Series>_S<NN>E<XX>_<HASH8>.mkv       (nested, imdb EMPTY, FIRST 8)
 ```
 
 - **Movies**: flat in `movies/`, filename `Title_Year_Resolution[_DV|_HDR][_Atmos|_5.1][_REMUX]_HASH8.mkv`, JSON stub carries the IMDB id (e.g. `tt0088196`)
@@ -123,8 +219,11 @@ Two more quirks worth knowing:
 - **TV**: nested `<LIB>/tv/<Series_Name> (<Year>)/Season.NN/...`, series name with
   underscores and year in parentheses (e.g. `Alley_Cats (2026)`), stub has EMPTY
   `imdb` field (`""`) as TV convention
-- **HASH8**: last 8 hex chars of the info hash, LOWERCASE, in both the filename
-  and the stream URL
+- **HASH8**: 8 hex chars of the info hash, LOWERCASE. **Movies use the LAST 8,
+  episodes the FIRST 8.** The two conventions predate this file and both engines
+  rely on them, so a stub named with the wrong half is a duplicate the sync will
+  not recognise. Verify against an existing stub whenever in doubt: the hash is
+  in the stream URL inside the file
 
 Stub JSON shape (same for movies and TV):
 
@@ -403,7 +502,28 @@ average at or above `season_skip_score` is skipped entirely.
 
 ## Worked procedure
 
+**Find the route first, before anything else.** It decides where you have to
+stand and what you have to set up, so it cannot wait until step 3:
+
+```bash
+curl -s -o /dev/null -m 10 -w '%{http_code}\n' "{CTRL}/api/library/list?type=movie"
+```
+
+- `200`: the Library API route. Skip step 0 except for `resolve_deployment.py`,
+  run from anywhere that reaches `CTRL`, and follow steps 1, 2, 3, 8, 9 (the
+  dedup check that step 5 performs is part of step 3 there).
+- `404`: the filesystem route. Run on the Tiramisu host and follow every step.
+- `000`, a timeout, or a 5xx: `CTRL` is wrong or the service is down. Neither
+  route works, so stop and say so rather than falling back to the other one.
+- anything else, `401` and `403` included: something in front of Tiramisu is
+  answering, not Tiramisu. That is an access problem for the operator to fix,
+  not a route answer, so stop there too.
+
 ### 0. Materialize the scripts, once per version
+
+**Filesystem route only**, apart from `resolve_deployment.py`, which the Library
+API route also uses to read the scoring profile. The other four write stubs by
+hand and have no job on that route.
 
 Use a working directory named after this skill's version, on the Tiramisu host:
 `/tmp/tiramisu-add/<version>/`. Take `<version>` from the `version:` field in
@@ -452,7 +572,8 @@ leave secrets in a file any local user can read. One call costs milliseconds and
 is always current: make it every time, and keep in memory only the handful of
 fields you need.
 
-**Run the flow on the Tiramisu host.** `LIB` and `FUSE` are local paths that
+**Filesystem route: run the flow on the Tiramisu host.** `LIB` and `FUSE` are
+local paths that
 exist nowhere else, so the stubs have to be written there. The config also
 reports `gostorm_url` as a loopback address in most deployments, which is
 correct on the host and meaningless anywhere else. When `CTRL` points at a
@@ -460,7 +581,74 @@ remote host the script rewrites that host into `API` for you and says so, but
 the paths it cannot fix: writing stubs still means being on that machine, or
 having its filesystem mounted.
 
-### 3. Add the torrent
+None of that applies on the Library API route: the server does the writing, so
+`LIB` and `FUSE` never have to be reachable from where you are and `API` is not
+called at all. Only `CTRL` is.
+
+### 3. Add
+
+The probe at the top of this section already told you which branch you are on.
+
+**With the Library API.** First check the title is not already there, which on
+this route means one call and has to happen before the add, not after:
+
+```bash
+# type is a filter, not a hint: movie lists the movie library, tv the series one,
+# and neither returns the other. Ask for the one you are about to write into.
+curl -s "{CTRL}/api/library/list?type=movie" | \
+  python3 -c 'import sys,json; [print(i["fuse_path"]) for i in json.load(sys.stdin)]' | grep -i '<title fragment>'
+
+# TV: entries carry season and episode, so check the episodes you are filling
+curl -s "{CTRL}/api/library/list?type=tv" | \
+  python3 -c 'import sys,json; [print(i["fuse_path"], i.get("season"), i.get("episode")) for i in json.load(sys.stdin)]' | grep -i '<series fragment>'
+```
+
+`add` answers `200` with `already_present` instead of filing a movie or a single
+episode twice, but that guard does not cover the two cases that matter here:
+
+- a **different release** of a title already in the library is filed, and the
+  media server then shows two versions. That is a decision for the user, exactly
+  as on the filesystem route
+- a **season pack** is never short-circuited, because which episodes it holds is
+  only known once its file list arrives. Re-adding one rewrites every episode it
+  names, deletes the stubs of the releases it replaces and drops their torrents,
+  and answers `201`. That is an upgrade, not a duplicate, but it is not a no-op:
+  do not re-send a pack to "check" whether it is there, use `list`
+
+One call does the add, the file pick, the stub and the library scan. See
+[Library API](#library-api-the-whole-add-in-one-call) for the full field list.
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"type":"movie","hash":"<HASH>","title":"<Title>","year":<YEAR>,
+       "release_title":"<the raw release name>","imdb":"<tt...>"}' \
+  "{CTRL}/api/library/add"
+```
+
+Pass `release_title` verbatim from the indexer result: it is what puts `_DV`,
+`_Atmos` and `_REMUX` in the filename, and `title` alone silently loses them.
+Then go to step 8, skipping steps 4 to 7 entirely: the response already carries
+the path and size of every stub written.
+
+A season pack, which files every episode the torrent names:
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' --max-time 180 \
+  -d '{"type":"tv","hash":"<HASH>","title":"<Series>","first_air_date":"<YYYY-MM-DD>",
+       "season":1,"release_title":"<the raw release name>","quality_score":<score>,
+       "metadata_wait":120}' \
+  "{CTRL}/api/library/add"
+```
+
+For a single episode add `"episode":<N>` and keep `"season"`: season alone is
+what makes it a pack. `first_air_date` is what puts the year in the folder name, and the
+score is what stops the next sync replacing your pick.
+
+Sending `hash` alone is enough. The server builds the magnet with its own
+default tracker list, so the torrent does not start DHT-only. Pass `magnet`
+instead when the indexer gave you one: its trackers are kept as they are.
+
+**Without it**, add the torrent to the engine and carry on with step 4:
 
 ```bash
 python3 add_torrent.py "magnet:?xt=urn:btih:<HASH>&dn=<name>&tr=<tracker>&tr=<tracker>" "Title Year"
@@ -482,6 +670,9 @@ SxxEyy from the filenames (never assume id 1 = E01), ignore .nfo/.txt noise.
 
 ### 5. Check it is not already there
 
+**Filesystem route.** On the Library API route this check is step 3, before the
+add, and it is one `list` call.
+
 Two different questions, two different sources. They disagree in normal
 operation, so check both.
 
@@ -502,8 +693,10 @@ curl -s -X POST -H 'Content-Type: application/json' \
   python3 -c 'import sys,json; print([t["title"] for t in json.load(sys.stdin) if t["hash"].lower().endswith("<hash8lower>")])'
 ```
 
-Note `endswith`: HASH8 is the **last** 8 characters of the info hash, which is
-also why it is what appears in the filenames.
+Note `endswith`: for a MOVIE the filename carries the **last** 8 characters of
+the info hash. For an EPISODE it carries the **first** 8, so match with
+`startswith` there. Getting this backwards is how a release already in the
+library is added a second time under another name.
 
 Do not treat the two as interchangeable. The engine DB and the library drift
 apart in normal use: a stub can outlive the torrent entry, and a registered
@@ -541,6 +734,7 @@ python3 create_mkv.py "$LIB" "movies/Title_2024_1080p_<HASH8>.mkv" "<HASH>" 3 46
 TV, one episode at a time (nested + empty imdb):
 
 ```bash
+# note: <HASH8> here is the FIRST 8 chars of the hash, unlike the movie above
 python3 create_mkv.py "$LIB" "tv/Series_Name (2024)/Season.01/Series_S01E01_<HASH8>.mkv" "<HASH>" 1 922746880 ""
 ```
 
@@ -559,14 +753,21 @@ Copy scripts to the host and run there rather than through ssh heredocs:
 heredocs containing single quotes corrupt the script silently (runtime
 NameError on a legitimate `r.get('key')`).
 
-### 8. Verify on both layers
+### 8. Verify
+
+On the Library API route the response is the receipt: it lists the path, the
+`fuse_path` and the declared size of every stub. Confirm with a `list` call that
+the entry is there, and stop: the scan was already triggered, and the checks
+below need shell access to the host, which that route deliberately does not
+assume. Only reach for them when something looks wrong and you do have that
+access.
 
 The stub is a small JSON file on disk, and the same path seen through the FUSE
 mount must report the declared size. Compare the two:
 
 ```bash
-stat -c '%s  %n' "$LIB/movies/Title_2024_1080p_a1b2c3d4.mkv"          # ~700 B
-stat -c '%s  %n' "$FUSE/movies/Title_2024_1080p_a1b2c3d4.mkv"          # full size
+stat -c '%s  %n' "$LIB/movies/Title_2024_1080p_e7f8a9b0.mkv"          # ~700 B
+stat -c '%s  %n' "$FUSE/movies/Title_2024_1080p_e7f8a9b0.mkv"          # full size
 ```
 
 `$FUSE` is the mount point, a different path from `$LIB`. If the FUSE side
@@ -586,6 +787,10 @@ That doubles as the strongest proof the stub works end to end: real codec data
 coming back means engine, FUSE and swarm are all doing their job.
 
 #### Trigger the library scan
+
+**Not on the Library API route: `add` and `remove` already ask for the scan**,
+and they coalesce the requests of a burst, so filing twenty titles asks for one
+scan rather than twenty. Calling it yourself here only adds load.
 
 Credentials come from the config, not from the user, and **both media servers
 read them from the same `plex` block**: `plex.url` and `plex.token` hold the URL
@@ -612,6 +817,20 @@ scan has completed and settled. A title missing from Plex right after the
 refresh is not evidence the stub is wrong: check the FUSE layer first.
 
 ### 9. Undo, if the stub was wrong
+
+On the Library API route:
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"<fuse_path from the add response>","blacklist":true}' \
+  "{CTRL}/api/library/remove"
+```
+
+`blacklist: true` is what makes the removal stick, exactly as the FUSE unlink
+below does. Leave it out only when the removal is a step towards a better
+release for the same title.
+
+Without the Library API:
 
 **Delete through the FUSE mount, not through `$LIB`.** One `rm` on the mount
 does the whole job:
@@ -647,7 +866,8 @@ selection is yours to build; only the deletion primitive is provided.
   nothing but a listing and a pattern
 - **Quality tags** are there too: `_2160p`, `_DV`, `_Atmos`, `_REMUX`
 - **Anything else**, director included, is not stored anywhere in Tiramisu. The
-  stub does carry the `imdb` id, which is the way in: resolve it through TMDB
+  stub does carry the `imdb` id, which `GET {CTRL}/api/library/list` reports for
+  every entry, and which is the way in: resolve it through TMDB
   (`/find/<imdb_id>?external_source=imdb_id`, then the credits) and filter on
   that. On a library of thousands this is thousands of API calls, so narrow the
   candidate list by filename first and only then resolve what is left
@@ -657,7 +877,12 @@ selection is yours to build; only the deletion primitive is provided.
 ### Delete
 
 ```bash
-rm "$FUSE/movies/<file>.mkv"      # one per title, always through the mount
+# Library API, no filesystem access needed
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"movies/<file>.mkv","blacklist":true}' "{CTRL}/api/library/remove"
+
+# without it: one per title, always through the mount
+rm "$FUSE/movies/<file>.mkv"
 ```
 
 Nothing else is needed: the unlink handler removes the torrent and blacklists it
@@ -677,8 +902,16 @@ may have wanted them.
 
 ## Fast-track (skip the engine API)
 
-This is about **adding**, not removing. Removal always goes through the FUSE
-mount, see [Bulk removal](#bulk-removal).
+**Filesystem route only.** On a deployment with the Library API there is nothing
+to fast-track: `add` already does the whole sequence, and a hand-written stub
+would miss the naming, the episode registration and the scan that it handles. A
+`504` from it means the swarm did not answer in `metadata_wait`; raise that
+value and retry, or pick another release. Do not write the stub yourself to get
+around it.
+
+This is about **adding**, not removing. On the filesystem route removal always
+goes through the FUSE mount; with the Library API it goes through
+`/api/library/remove`. See [Bulk removal](#bulk-removal).
 
 If adding the magnet hangs or the API is unresponsive, create the stub directly
 from the release page: take the info hash (40-char hex), the target file index
@@ -711,7 +944,13 @@ triggers the engine to fetch it.
 - Modify files that the automated pipeline manages
 - Guess the naming convention: read an existing stub first and copy it
 - Delete a stub from `$LIB`: it leaves the torrent registered and the removal
-  is not recorded, so the next sync brings the title back. Delete via `$FUSE`
+  is not recorded, so the next sync brings the title back. Delete via `$FUSE`,
+  or via `/api/library/remove` with `blacklist: true`
+- Trigger a library scan by hand after `/api/library/add`: it already asked for
+  one, and a burst of adds is coalesced into a single scan
+- Write stubs by hand on a deployment that has the Library API: the naming, the
+  episode registration and the scan are all handled there, and a hand-written
+  stub that gets one of them wrong is deleted by the next sync
 - Use `action=wipe`. It removes every torrent on the deployment, and no request
   phrased as "remove these films" ever means that
 - Delete in bulk without showing the full list first and having it confirmed
@@ -1023,8 +1262,9 @@ Usage:
     python3 create_mkv.py <library_root> <relative_target_path> <hash> <file_id> <size_bytes> [imdb] [trackers_from_stub]
 
 Examples:
-    # movie -> <lib>/movies/Title_2024_1080p_a1b2c3d4.mkv  (imdb required)
-    python3 create_mkv.py /mnt/library movies/Title_2024_1080p_a1b2c3d4.mkv \
+    # movie -> <lib>/movies/Title_2024_1080p_e7f8a9b0.mkv  (imdb required)
+    # e7f8a9b0 is the LAST 8 chars of the hash below; episodes use the FIRST 8
+    python3 create_mkv.py /mnt/library movies/Title_2024_1080p_e7f8a9b0.mkv \
         a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 3 4688122884 tt1234567
 
     # TV episode -> <lib>/tv/Series_Name (2024)/Season.01/Series_S01E01_a1b2c3d4.mkv (imdb EMPTY)
@@ -1034,8 +1274,9 @@ Examples:
 
 The stub is a tiny JSON file; the FUSE layer presents it as a full-size file.
 Layout conventions: movies flat with imdb id; TV nested per Season.NN with
-empty imdb. HASH8 (last 8 hash chars, lowercase) goes in filename and in the
-stream link. file_id is 1-BASED: the engine treats 0 as undefined.
+empty imdb. HASH8 (first 8 hash chars for episodes, last 8 for movies,
+lowercase) goes in the FILENAME only: the stream link always carries the full
+40-char hash. file_id is 1-BASED: the engine treats 0 as undefined.
 
 Trackers: pass the last argument as a comma-separated list copied from an
 existing stub in the SAME library, so the magnet matches that deployment. With
@@ -1168,7 +1409,7 @@ def main():
     )
 
     h_lower = h.lower()
-    h8 = h_lower[-8:]
+    h8 = h_lower[:8]   # TV: FIRST 8. Movies use the last 8, see the layout section
     slug = series.replace(" ", "_")
     tr = [x.strip() for x in trackers_arg.split(",") if x.strip()]
 

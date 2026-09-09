@@ -21,6 +21,7 @@ import (
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
 	"tiramisu/internal/config"
+	"tiramisu/internal/library"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -123,20 +124,19 @@ var (
 	reM1080p = regexp.MustCompile(`(?i)1080p|1080i|fhd`)
 	reM720p  = regexp.MustCompile(`(?i)720p|720i`)
 	// \b treats "_" as a word char, so "\bhdr\b" misses "_HDR_" - use a custom boundary.
-	reMHDR       = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?`)
-	reMDV        = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
-	reMAtmos     = regexp.MustCompile(`(?i)atmos`)
-	reM51        = regexp.MustCompile(`(?i)5\.1|dts|ddp5|ddp|dd\+|eac3|ac3`)
-	reMStereo    = regexp.MustCompile(`(?i)stereo|aac|mp3|2\.0`)
-	reMRemux     = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])remux(?:$|[^A-Za-z0-9])`)
-	reMGarbage   = regexp.MustCompile(`(?i)camrip|hdcam|hdts|telesync|\bts\b|telecine|\btc\b|\bscr\b|screener|webscreener`)
-	reMSeeders   = regexp.MustCompile(`👤\s*(\d+)`)
-	reMHashURL   = regexp.MustCompile(`link=([a-f0-9]{40})`)
-	reMMKVHash8  = regexp.MustCompile(`_([a-f0-9]{8})\.mkv$`)
-	reMYear      = regexp.MustCompile(`[._]((?:19|20)\d{2})[._]`)
-	reMNonWord   = regexp.MustCompile(`[^a-z0-9]`)
-	reMQuality   = regexp.MustCompile(`(?i)(2160p|1080p|720p|4k|uhd)`)
-	reMTitleYear = regexp.MustCompile(`(.+?)[._\s]\(?((?:19|20)\d{2})\)?`)
+	reMHDR      = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?`)
+	reMDV       = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
+	reMAtmos    = regexp.MustCompile(`(?i)atmos`)
+	reM51       = regexp.MustCompile(`(?i)5\.1|dts|ddp5|ddp|dd\+|eac3|ac3`)
+	reMStereo   = regexp.MustCompile(`(?i)stereo|aac|mp3|2\.0`)
+	reMRemux    = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])remux(?:$|[^A-Za-z0-9])`)
+	reMGarbage  = regexp.MustCompile(`(?i)camrip|hdcam|hdts|telesync|\bts\b|telecine|\btc\b|\bscr\b|screener|webscreener`)
+	reMSeeders  = regexp.MustCompile(`👤\s*(\d+)`)
+	reMHashURL  = regexp.MustCompile(`link=([a-f0-9]{40})`)
+	reMMKVHash8 = regexp.MustCompile(`_([a-f0-9]{8})\.mkv$`)
+	reMYear     = regexp.MustCompile(`[._]((?:19|20)\d{2})[._]`)
+	reMNonWord  = regexp.MustCompile(`[^a-z0-9]`)
+	reMQuality  = regexp.MustCompile(`(?i)(2160p|1080p|720p|4k|uhd)`)
 )
 
 // NewMovieGoEngine creates a new Go movie sync engine.
@@ -545,7 +545,16 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 	prowlarrOK, torrentioOK := false, false
 
 	if e.prowlarr != nil {
-		ps, err := e.prowlarr.FetchTorrents(imdbID, "movie", title, year)
+		// Gate before the hashes are resolved: each resolution is a serialised round
+		// trip through Prowlarr, and the gates below discard most candidates anyway.
+		// blacklist_hash cannot run yet (the hash is what we are avoiding fetching),
+		// so a blacklisted release survives here and is rejected by the same gates a
+		// moment later, in filterMovieStreams.
+		keep := func(s prowlarr.Stream) bool {
+			ms, _ := e.classifyMovieStream(s)
+			return ms != nil
+		}
+		ps, err := e.prowlarr.FetchTorrentsFiltered(imdbID, "movie", title, year, keep)
 		if err != nil {
 			e.logger.Printf("[MovieSync] Prowlarr search failed: %v", err)
 		} else {
@@ -766,47 +775,14 @@ func (e *MovieGoEngine) filterVideoFiles(files []FileStat, is4K bool) []FileStat
 }
 
 func (e *MovieGoEngine) buildMovieFilename(title, releaseDate string, stream MovieStream) string {
-	year := ""
-	if len(releaseDate) >= 4 {
-		year = releaseDate[:4]
-	} else if m := reMTitleYear.FindStringSubmatch(title); len(m) > 2 {
-		year = m[2]
-	}
-
-	base := e.sanitizeMovieFilename(title)
-	if year != "" {
-		base = fmt.Sprintf("%s_%s", base, year)
-	}
-
-	if stream.Is4K {
-		base += "_2160p"
-	} else {
-		base += "_1080p"
-	}
-
-	if reMDV.MatchString(stream.Title) {
-		base += "_DV"
-	} else if reMHDR.MatchString(stream.Title) {
-		base += "_HDR"
-	}
-
-	if reMAtmos.MatchString(stream.Title) {
-		base += "_Atmos"
-	} else if reM51.MatchString(stream.Title) {
-		base += "_5.1"
-	}
-
-	if reMRemux.MatchString(stream.Title) {
-		base += "_REMUX"
-	}
-
-	return fmt.Sprintf("%s_%s.mkv", base, stream.Hash[len(stream.Hash)-8:])
+	return library.BuildMovieFilename(library.MovieName{
+		Title: title, ReleaseDate: releaseDate, ReleaseTitle: stream.Title,
+		Is4K: stream.Is4K, Hash: stream.Hash,
+	})
 }
 
 func (e *MovieGoEngine) sanitizeMovieFilename(s string) string {
-	s = regexp.MustCompile(`[^a-zA-Z0-9._-]`).ReplaceAllString(s, "_")
-	s = regexp.MustCompile(`_+`).ReplaceAllString(s, "_")
-	return strings.Trim(s, "_")
+	return library.SanitizeMovieName(s)
 }
 
 func (e *MovieGoEngine) resolveIMDB(ctx context.Context, tmdbID int, title string) string {
@@ -1080,18 +1056,5 @@ func (e *MovieGoEngine) saveIMDBCache(file string, data map[string]IMDBCacheEntr
 }
 
 func (e *MovieGoEngine) createMKV(path, streamURL string, fileSize int64, magnet, imdbID string) bool {
-	data := map[string]interface{}{
-		"url":    streamURL,
-		"size":   fileSize,
-		"magnet": magnet,
-		"imdb":   imdbID,
-	}
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return false
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return false
-	}
-	return os.WriteFile(path, jsonData, 0644) == nil
+	return library.WriteStub(path, streamURL, fileSize, magnet, imdbID) == nil
 }

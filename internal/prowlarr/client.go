@@ -63,11 +63,23 @@ func (c *Client) FetchTorrents(imdbID, contentType, title string, year int, seas
 	if c == nil {
 		return []Stream{}, nil
 	}
+	return c.FetchTorrentsFiltered(imdbID, contentType, title, year, nil, seasons...)
+}
+
+// FetchTorrentsFiltered is FetchTorrents with a gate applied before the info hashes are
+// resolved. Callers that already know which releases they will discard should pass it:
+// each resolution is a serialised round trip through Prowlarr, so gating afterwards
+// pays for candidates that are thrown away moments later. A nil keep behaves exactly
+// like FetchTorrents.
+func (c *Client) FetchTorrentsFiltered(imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, error) {
+	if c == nil {
+		return []Stream{}, nil
+	}
 	results, err := c.fetchFromProwlarr(imdbID, contentType, title, year, seasons...)
 	if err != nil {
 		return []Stream{}, err
 	}
-	return c.mapToStremioFormat(results), nil
+	return c.mapToStremioFiltered(results, keep), nil
 }
 
 // fetchFromProwlarr executes an API query using the IMDb ID and merges results by infoHash.
@@ -219,6 +231,33 @@ func (c *Client) queryCtx(ctx context.Context, params map[string]string) ([]Prow
 // lightweight GET request that follows Prowlarr's 301→magnet redirect.
 // Resolution is performed concurrently (up to 5 goroutines).
 func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
+	return c.mapToStremioFiltered(results, nil)
+}
+
+// toStream builds the Stream a result maps to. Everything except InfoHash is known
+// before resolution, which is what lets a caller gate on it first.
+func (c *Client) toStream(res ProwlarrResult) Stream {
+	resTag := resolveResolution(res.Quality.Quality.Resolution, res.Title)
+	sizeGB := float64(res.Size) / (1024 * 1024 * 1024)
+	return Stream{
+		Name: fmt.Sprintf("Torrentio\n%s", resTag),
+		Title: fmt.Sprintf("%s\n👤 %d ⬇️ %d\n💾 %.2fGB",
+			res.Title, res.Seeders, res.Leechers, sizeGB),
+		InfoHash:      res.InfoHash,
+		SizeGB:        sizeGB,
+		BehaviorHints: BehaviorHints{BingeGroup: fmt.Sprintf("prowlarr-%s", resTag)},
+	}
+}
+
+// mapToStremioFiltered is mapToStremioFormat with an optional gate applied BEFORE the
+// hashes are resolved. Resolution is a serialised round trip through Prowlarr (the
+// proxy handles one at a time), so resolving a release the caller will discard a
+// moment later is the dominant cost of a search: on a real query 68 of 78 results
+// were rejected by the engine's own gates after being resolved.
+//
+// keep receives the Stream as it will be returned, with InfoHash still empty for the
+// ones that need resolving. A nil keep resolves everything, which is the old behaviour.
+func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream) bool) []Stream {
 	if len(results) == 0 {
 		return []Stream{}
 	}
@@ -240,6 +279,9 @@ func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
 
 	for i, res := range results {
 		if garbageRe.MatchString(res.Title) {
+			continue
+		}
+		if keep != nil && !keep(c.toStream(res)) {
 			continue
 		}
 		if res.InfoHash != "" {
@@ -277,19 +319,7 @@ func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
 
 	streams := make([]Stream, 0, len(ready))
 	for _, res := range ready {
-		resTag := resolveResolution(res.Quality.Quality.Resolution, res.Title)
-		sizeGB := float64(res.Size) / (1024 * 1024 * 1024)
-		formattedTitle := fmt.Sprintf("%s\n👤 %d ⬇️ %d\n💾 %.2fGB",
-			res.Title, res.Seeders, res.Leechers, sizeGB)
-		streams = append(streams, Stream{
-			Name:     fmt.Sprintf("Torrentio\n%s", resTag),
-			Title:    formattedTitle,
-			InfoHash: res.InfoHash,
-			SizeGB:   sizeGB,
-			BehaviorHints: BehaviorHints{
-				BingeGroup: fmt.Sprintf("prowlarr-%s", resTag),
-			},
-		})
+		streams = append(streams, c.toStream(res))
 	}
 	return streams
 }

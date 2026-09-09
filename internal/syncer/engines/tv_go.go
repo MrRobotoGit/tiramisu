@@ -20,6 +20,7 @@ import (
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
 	"tiramisu/internal/config"
+	"tiramisu/internal/library"
 	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
@@ -138,12 +139,8 @@ var (
 	reTVSeasonW      = regexp.MustCompile(`\bseasons?\s*(\d{1,2})\s*[-–]\s*(\d{1,2})\b`)
 	reTVCompleteS    = regexp.MustCompile(`(?i)\b(complete\s+series|all\s+seasons|full\s+series)\b`)
 	reTVEpNum        = regexp.MustCompile(`[Ss](\d+)[Ee](\d+)`)
-	reTV1xEp         = regexp.MustCompile(`(\d+)x(\d+)`)
 	reTVFileName     = regexp.MustCompile(`(.+)_S(\d+)E(\d+)_([a-f0-9]{8})\.mkv$`)
 	reTVNonWord      = regexp.MustCompile(`[^a-z0-9]`)
-	reTVSanitize     = regexp.MustCompile(`[<>:"/\\|?*'"&]`)
-	reTVSpaces       = regexp.MustCompile(`\s+`)
-	reTVUnders       = regexp.MustCompile(`_+`)
 	reTVYear         = regexp.MustCompile(`\(?(\d{4})\)?`)
 	reTVQuality      = regexp.MustCompile(`\b(2160p|1080p|720p|4k|uhd|hdr|dv|dovi|web|bluray|remux)\b.*`)
 	reTVHashURL      = regexp.MustCompile(`link=([a-f0-9]{40})`)
@@ -446,8 +443,7 @@ func (e *TVGoEngine) registryByPath(path string) (string, bool) {
 }
 
 func (e *TVGoEngine) episodeKey(show string, season, episode int) string {
-	normalized := reTVNonWord.ReplaceAllString(strings.ToLower(show), "")
-	return fmt.Sprintf("%s_s%02de%02d", normalized, season, episode)
+	return library.EpisodeKey(show, season, episode)
 }
 
 func (e *TVGoEngine) registerEpisode(key string, score int, hash, path, source string) {
@@ -1471,69 +1467,30 @@ func (e *TVGoEngine) cleanupOrphanedTorrents(ctx context.Context) {
 }
 
 func (e *TVGoEngine) isVideoFile(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	return ext == ".mkv" || ext == ".mp4" || ext == ".avi" || ext == ".mov" || ext == ".m4v"
+	return library.IsVideoFile(path)
 }
 
 func (e *TVGoEngine) extractEpisodeFromFilename(filename string) [2]int {
-	m := reTVEpNum.FindStringSubmatch(filename)
-	if len(m) >= 3 {
-		s, _ := strconv.Atoi(m[1])
-		ep, _ := strconv.Atoi(m[2])
-		return [2]int{s, ep}
-	}
-	m = reTV1xEp.FindStringSubmatch(filename)
-	if len(m) >= 3 {
-		s, _ := strconv.Atoi(m[1])
-		ep, _ := strconv.Atoi(m[2])
-		return [2]int{s, ep}
-	}
-	return [2]int{0, 0}
+	season, episode := library.ParseSeasonEpisode(filename)
+	return [2]int{season, episode}
 }
 
 func (e *TVGoEngine) sanitizeName(name string) string {
-	clean := reTVSanitize.ReplaceAllString(name, "")
-	clean = reTVSpaces.ReplaceAllString(clean, "_")
-	clean = reTVUnders.ReplaceAllString(clean, "_")
-	return strings.Trim(clean, "_")
+	return library.SanitizeShowName(name)
 }
 
 func (e *TVGoEngine) getShowFolderName(showName, firstAirDate string) string {
-	cleanName := e.sanitizeName(showName)
-	year := ""
-	if len(firstAirDate) >= 4 {
-		year = firstAirDate[:4]
-	}
-	if year != "" {
-		return fmt.Sprintf("%s (%s)", cleanName, year)
-	}
-	return cleanName
+	return library.ShowFolderName(showName, firstAirDate)
 }
 
 func (e *TVGoEngine) buildFilename(show string, season, episode int, hash8 string) string {
-	cleanShow := e.sanitizeName(show)
-	return fmt.Sprintf("%s_S%02dE%02d_%s.mkv", cleanShow, season, episode, hash8)
+	return library.EpisodeFilename(show, season, episode, hash8)
 }
 
 func (e *TVGoEngine) createMKV(path, streamURL string, fileSize int64, magnet string) bool {
-	data := map[string]interface{}{
-		"url":    streamURL,
-		"size":   fileSize,
-		"magnet": magnet,
-		"imdb":   "",
-	}
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return false
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return false
-	}
-	return os.WriteFile(path, jsonData, 0644) == nil
+	return library.WriteStub(path, streamURL, fileSize, magnet, "") == nil
 }
 
-// showKnownTitles returns every title the show is released under. Cached until
-// restart: see knownTitles.
 func (e *TVGoEngine) showKnownTitles(ctx context.Context, tmdbID int, details *tmdb.TVDetail) []string {
 	if t, ok := e.knownTitles[tmdbID]; ok {
 		return t

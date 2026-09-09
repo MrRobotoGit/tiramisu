@@ -75,6 +75,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 - [Build from Source](#build-from-source)
 - [Docker](#docker)
 - [API Reference](#api-quick-reference)
+- [Library API](#library-api-9080)
 - [AI Agent Skill](#ai-agent-skill)
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
@@ -1109,6 +1110,64 @@ curl -s "http://127.0.0.1:9080/api/prowlarr/search?imdb_id=tt0088196&type=movie&
 curl -s http://127.0.0.1:9080/api/config | jq '.quality_scoring'
 ```
 
+### Library API (`:9080`)
+
+Files one title into the library in a single request. It does what the sync
+engine does for one release: registers the torrent, waits for the file list,
+picks the file, writes the virtual `.mkv` with the same naming convention,
+registers TV episodes in the state DB and asks the media server to rescan. No
+access to the filesystem is needed, which is what makes it usable from a client
+or an AI agent that only reaches the control port.
+
+```bash
+# Add a movie. release_title is the raw release name: the quality tags in the
+# filename (_DV, _Atmos, _REMUX) are read from it.
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"type":"movie","hash":"<infohash>","title":"Dummy Bunny","year":2024,
+       "release_title":"Dummy.Bunny.2024.2160p.UHD.BluRay.REMUX.DV.Atmos-GRP",
+       "imdb":"tt1234567"}' \
+  http://127.0.0.1:9080/api/library/add
+
+# Add one episode, or a whole season pack by leaving "episode" out
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"type":"tv","hash":"<infohash>","title":"Dummy Bunny","first_air_date":"2015-06-24",
+       "season":1,"episode":2,"release_title":"Dummy.Bunny.S01E02.1080p"}' \
+  http://127.0.0.1:9080/api/library/add
+
+# What the library already holds, one entry per stub. type is a filter: movie
+# lists the movie library, tv the series one, and neither returns the other.
+curl -s 'http://127.0.0.1:9080/api/library/list?type=movie' | jq '.[] | {fuse_path, size, hash, imdb}'
+curl -s 'http://127.0.0.1:9080/api/library/list?type=tv' | jq '.[] | {fuse_path, season, episode}'
+
+# Remove. blacklist:true records the release the way the FUSE unlink handler
+# does, so the sync will not add the title back.
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"movies/Dummy_Bunny_2024_2160p_DV_Atmos_REMUX_e7f8a9b0.mkv","blacklist":true}' \
+  http://127.0.0.1:9080/api/library/remove
+```
+
+`add` answers `201` with the path, `fuse_path` and declared size of every stub it
+wrote, or `200` with `"already_present": true` when the release was already
+filed. A season pack is never short-circuited that way, because which episodes it
+holds is only known once its file list arrives: re-adding one rewrites the
+episodes it names and replaces the releases they came from.
+
+For TV, `first_air_date` is what puts the year in the series folder name, and
+`quality_score` is what the next sync compares against before replacing the
+episode. `imdb` is written into movie stubs only: episode stubs carry no id, the
+same convention the sync engine follows. `magnet` can replace `hash`; `is_4k`, `file_index` and `quality_score`
+override what would otherwise be inferred, and `metadata_wait` (default 60
+seconds, capped at 300) is how long the call waits for the swarm to answer, so
+keep the client timeout above it.
+
+Errors say which half broke: `400` the request, `422` the torrent holds no video
+file, `502` the engine refused it, `503` the state DB is unavailable, `504` no
+metadata in time. Every failure removes the torrent it added, so a failed call
+leaves nothing behind.
+
+The torrent behind a removed stub is dropped only once no other stub points at
+it: one season pack is a single torrent behind many episodes.
+
 > [!WARNING]
 > `/api/config` returns the whole configuration, API keys and tokens included,
 > and accepts a POST that rewrites it. There is no authentication on it. Keep
@@ -1129,10 +1188,13 @@ It teaches the agent how to add one specific release to the library by hand, for
 the times the automated sync misses something.
 
 The skill covers the whole flow: reading the deployment's own scoring profile
-from `/api/config`, adding the magnet, waiting for metadata, mapping torrent
-files to episodes, writing the virtual `.mkv` stubs, verifying them on both the
-physical and the FUSE layer, and undoing the change if the wrong release was
-picked. The five helper scripts are embedded in the file itself, so there is
+from `/api/config`, choosing a release, and filing it. Where the [Library
+API](#library-api-9080) is available it is one call and the agent needs nothing
+but the control port; on older builds the skill falls back to writing the stubs
+itself, which is why it also documents adding the magnet, waiting for metadata,
+mapping torrent files to episodes, verifying the stub on both the physical and
+the FUSE layer, and undoing the change if the wrong release was picked. The five
+helper scripts for that route are embedded in the file itself, so there is
 nothing else to install.
 
 It hardcodes no hosts, no ports and no scoring weights. Quality weights, seeder

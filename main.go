@@ -32,6 +32,7 @@ import (
 	"tiramisu/internal/ai"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
+	"tiramisu/internal/catalog/mediaserver"
 	"tiramisu/internal/config"
 	server "tiramisu/internal/gostorm"
 	"tiramisu/internal/gostorm/native"
@@ -41,6 +42,7 @@ import (
 	torrutils "tiramisu/internal/gostorm/torr/utils"
 	tsutils "tiramisu/internal/gostorm/utils"
 	"tiramisu/internal/gostorm/web"
+	"tiramisu/internal/library"
 	"tiramisu/internal/lockmgr"
 	"tiramisu/internal/metadb"
 	"tiramisu/internal/monitor/collector"
@@ -4524,6 +4526,41 @@ func main() {
 		} else {
 			logger.Printf("[Scheduler] auto-run disabled, manual API available")
 		}
+	}
+
+	// Library API (external clients)
+	// Same work the sync engines do for one title, without the discovery: register the
+	// torrent, wait for its file list, write the stub. It exists so an agent that has
+	// no access to the filesystem can still file a title into the library.
+	{
+		var registry library.EpisodeRegistry
+		if stateDB != nil {
+			registry = stateDB
+		}
+		libMgr := library.New(library.Config{
+			MoviesDir:      filepath.Join(gc().PhysicalSourcePath, "movies"),
+			TVDir:          filepath.Join(gc().PhysicalSourcePath, "tv"),
+			GoStormURL:     gc().GoStormBaseURL,
+			GoStorm:        engines.NewGoStormClient(gc().GoStormBaseURL),
+			Registry:       registry,
+			InvalidatePath: invalidateSyncRemovedPath,
+			// Same record the FUSE unlink handler writes: without it the sync engines
+			// add the title back on their next run.
+			Blacklist: func(path, hash string) {
+				if globalTorrentRemover == nil || len(hash) != 40 {
+					return
+				}
+				globalTorrentRemover.addToBlacklist(hash, globalTorrentRemover.deriveTitleFromPath(path))
+			},
+			Logger:       logger,
+			MediaServer:  mediaserver.New(gc().MediaServerType, gc().Plex.URL, gc().Plex.Token),
+			MovieSection: gc().Plex.LibraryID,
+			TVSection:    gc().Plex.TVLibraryID,
+		})
+		libHandler := library.NewHandler(libMgr)
+		http.HandleFunc("/api/library/add", libHandler.Add)
+		http.HandleFunc("/api/library/remove", libHandler.Remove)
+		http.HandleFunc("/api/library/list", libHandler.List)
 	}
 
 	// Health Monitor + Dashboard (Fase 5)

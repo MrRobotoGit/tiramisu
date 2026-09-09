@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"tiramisu/internal/catalog"
+	"tiramisu/internal/library"
 )
 
 // GoStormClient handles HTTP operations with the GoStorm engine.
@@ -37,21 +37,12 @@ func NewGoStormClient(baseURL string) *GoStormClient {
 	}
 }
 
-// TorrentStats holds torrent information from GoStorm.
-type TorrentStats struct {
-	Hash        string     `json:"hash"`
-	Title       string     `json:"title"`
-	Length      int64      `json:"length"`
-	ActivePeers int        `json:"active_peers"`
-	FileStats   []FileStat `json:"file_stats"`
-}
+// TorrentStats and FileStat live in internal/library: the same shapes are returned by
+// the /api/library endpoints, and aliasing them lets *GoStormClient satisfy
+// library.GoStorm with no adapter.
+type TorrentStats = library.TorrentStats
 
-// FileStat holds file information from GoStorm.
-type FileStat struct {
-	ID     int    `json:"id"`
-	Path   string `json:"path"`
-	Length int64  `json:"length"`
-}
+type FileStat = library.FileStat
 
 // AddTorrent adds a magnet URL to GoStorm via POST /torrents {"action":"add"}.
 // Returns the 40-char info hash or empty string on failure.
@@ -220,28 +211,13 @@ func TitleFromFilename(filename string) string {
 	return strings.TrimSpace(s)
 }
 
-// BuildMagnet creates a magnet URL from an info hash and optional trackers.
+// BuildMagnet and DefaultTrackers live in internal/library, shared with the
+// /api/library endpoints.
 func BuildMagnet(infoHash, name string, trackers []string) string {
-	magnet := fmt.Sprintf("magnet:?xt=urn:btih:%s", infoHash)
-	if name != "" {
-		magnet += fmt.Sprintf("&dn=%s", url.QueryEscape(name))
-	}
-	for _, tr := range trackers {
-		magnet += fmt.Sprintf("&tr=%s", url.QueryEscape(tr))
-	}
-	return magnet
+	return library.BuildMagnet(infoHash, name, trackers)
 }
 
-// DefaultTrackers returns the fallback tracker list.
-func DefaultTrackers() []string {
-	return []string{
-		"udp://tracker.opentrackr.org:1337/announce",
-		"udp://open.stealth.si:80/announce",
-		"udp://tracker.torrent.eu.org:451/announce",
-		"udp://exodus.desync.com:6969/announce",
-		"udp://tracker.openbittorrent.com:6969/announce",
-	}
-}
+func DefaultTrackers() []string { return library.DefaultTrackers() }
 
 func min(a, b int) int {
 	if a < b {
