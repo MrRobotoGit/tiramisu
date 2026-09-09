@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.0.0
+version: 4.0.1
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -328,6 +328,28 @@ curl -s "{TORRENTIO}/{config}/stream/series/tt1234567:2:5.json"    # season 2, e
 
 The `{config}` segment is the filter string the sync engine uses,
 `sort=qualitysize|qualityfilter=480p,720p,scr,cam`.
+
+**The numbers are in `title`, not in `name`.** Torrentio answers
+`{"streams":[...]}`, and each stream carries the release name on the first line
+of `title`, the counters on the second and, for some indexers, flags on a third.
+`name` holds the indexer and the resolution tag, never the seeders or the size.
+Parse the fields, do not eyeball them:
+
+```bash
+curl -s "{TORRENTIO}/{config}/stream/movie/tt1234567.json" | python3 -c '
+import sys, json, re
+for x in json.load(sys.stdin).get("streams", []):
+    t = x.get("title", "")
+    name = t.split("\n")[0]
+    seeders = int(re.search(r"\U0001F464 (\d+)", t).group(1)) if re.search(r"\U0001F464 (\d+)", t) else 0
+    size = float(re.search(r"([0-9.]+) GB", t).group(1)) if re.search(r"([0-9.]+) GB", t) else 0.0
+    print(f"{seeders:4d} {size:6.2f}GB {x.get('infoHash','')} {name[:70]}")
+'
+```
+
+The same shape comes back from `/api/prowlarr/search`, which formats its results
+the Torrentio way on purpose, so one parser serves both. A stream whose size is
+reported in MB rather than GB is not a video file.
 
 ### How the sync engine combines them
 

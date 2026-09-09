@@ -124,12 +124,14 @@ var (
 	reM1080p = regexp.MustCompile(`(?i)1080p|1080i|fhd`)
 	reM720p  = regexp.MustCompile(`(?i)720p|720i`)
 	// \b treats "_" as a word char, so "\bhdr\b" misses "_HDR_" - use a custom boundary.
-	reMHDR      = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?`)
-	reMDV       = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
-	reMAtmos    = regexp.MustCompile(`(?i)atmos`)
-	reM51       = regexp.MustCompile(`(?i)5\.1|dts|ddp5|ddp|dd\+|eac3|ac3`)
-	reMStereo   = regexp.MustCompile(`(?i)stereo|aac|mp3|2\.0`)
-	reMRemux    = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])remux(?:$|[^A-Za-z0-9])`)
+	reMHDR    = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?`)
+	reMDV     = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
+	reMAtmos  = regexp.MustCompile(`(?i)atmos`)
+	reM51     = regexp.MustCompile(`(?i)5\.1|dts|ddp5|ddp|dd\+|eac3|ac3`)
+	reMStereo = regexp.MustCompile(`(?i)stereo|aac|mp3|2\.0`)
+	// Same rule as library.BuildMovieFilename: no separator required before the word,
+	// so "BDRemux" and "UHDRemux" count as the remux they are.
+	reMRemux    = regexp.MustCompile(`(?i)remux(?:$|[^A-Za-z0-9])`)
 	reMGarbage  = regexp.MustCompile(`(?i)camrip|hdcam|hdts|telesync|\bts\b|telecine|\btc\b|\bscr\b|screener|webscreener`)
 	reMSeeders  = regexp.MustCompile(`👤\s*(\d+)`)
 	reMHashURL  = regexp.MustCompile(`link=([a-f0-9]{40})`)

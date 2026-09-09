@@ -16,11 +16,13 @@ import (
 )
 
 var (
-	reHDR       = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?`)
-	reDV        = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
-	reAtmos     = regexp.MustCompile(`(?i)atmos`)
-	re51        = regexp.MustCompile(`(?i)5\.1|dts|ddp5|ddp|dd\+|eac3|ac3`)
-	reRemux     = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])remux(?:$|[^A-Za-z0-9])`)
+	reHDR   = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])hdr(?:$|[^A-Za-z0-9])|hdr10\+?`)
+	reDV    = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])dv(?:$|[^A-Za-z0-9])|dovi|dolby.?vision`)
+	reAtmos = regexp.MustCompile(`(?i)atmos`)
+	re51    = regexp.MustCompile(`(?i)5\.1|dts|ddp5|ddp|dd\+|eac3|ac3`)
+	// No separator required before the word: "BDRemux" and "UHDRemux" are common
+	// spellings, and requiring one dropped the tag from names that announce it.
+	reRemux     = regexp.MustCompile(`(?i)remux(?:$|[^A-Za-z0-9])`)
 	reTitleYear = regexp.MustCompile(`(.+?)[._\s]\(?((?:19|20)\d{2})\)?`)
 
 	reMovieUnsafe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)

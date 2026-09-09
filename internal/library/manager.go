@@ -160,6 +160,7 @@ type Item struct {
 var (
 	reStubHash  = regexp.MustCompile(`link=([a-f0-9]{40})`)
 	reStubIndex = regexp.MustCompile(`index=(\d+)`)
+	reStubIMDB  = regexp.MustCompile(`tt\d{7,10}`)
 )
 
 // cleanupCtx is what the rollback paths use: the request context may already be
@@ -905,7 +906,19 @@ func readStub(path string) stub {
 		}
 		url, out.Size, out.IMDB = obj.URL, obj.Size, obj.IMDB
 	} else {
-		url = strings.SplitN(content, "\n", 2)[0]
+		// Legacy line-based stub: URL, size, magnet, imdb id, one per line. The size
+		// is there like in the JSON form, so reading only the URL would report every
+		// one of these as a zero-byte entry with no id.
+		lines := strings.Split(content, "\n")
+		url = strings.TrimSpace(lines[0])
+		if len(lines) > 1 {
+			out.Size, _ = strconv.ParseInt(strings.TrimSpace(lines[1]), 10, 64)
+		}
+		if len(lines) > 3 && strings.HasPrefix(strings.TrimSpace(lines[3]), "tt") {
+			out.IMDB = strings.TrimSpace(lines[3])
+		} else if m := reStubIMDB.FindString(content); m != "" {
+			out.IMDB = m
+		}
 	}
 
 	if m := reStubHash.FindStringSubmatch(url); len(m) > 1 {
