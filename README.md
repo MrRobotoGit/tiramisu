@@ -1072,25 +1072,60 @@ curl -X POST -H 'Content-Type: application/json' \
   -d '{"action":"rem","hash":"<infohash>"}' http://127.0.0.1:8090/torrents
 ```
 
-### Tiramisu Metrics API (`:9080`)
+The engine also accepts `drop` (unload from RAM, keep in the DB) and `wipe`
+(remove every torrent, rarely what you want).
+
+To delete a title, do not remove the stub from the source directory: delete it
+through the FUSE mount instead. The unlink handler closes open handles, removes
+the torrent from the engine and blacklists it, so the sync will not add it back.
 
 ```bash
-# Full metrics
-curl -s http://127.0.0.1:9080/metrics | jq
+rm /mnt/tiramisu-mkv-virtual/movies/<file>.mkv
+```
 
-# Key fields
+### Tiramisu API (`:9080`)
+
+```bash
+# Key metrics fields
 curl -s http://127.0.0.1:9080/metrics | \
   jq '{version, uptime, read_ahead_active_bytes, config_source}'
+
+# Playback quality: time to first byte, stalls, seek latency
+curl -s http://127.0.0.1:9080/metrics/ttff | jq
+
+# Blocklist status
+curl -s http://127.0.0.1:9080/metrics/blocklist | jq
+
+# Health check and scheduler state
+curl -s http://127.0.0.1:9080/api/health | jq
+curl -s http://127.0.0.1:9080/api/scheduler/status | jq
+
+# Search indexers by IMDB id, using the Prowlarr credentials from the config.
+# Queries Prowlarr only: the sync engine also queries Torrentio and merges.
+# An empty array means Prowlarr is not configured, not that nothing was found.
+curl -s "http://127.0.0.1:9080/api/prowlarr/search?imdb_id=tt0088196&type=movie&year=1985" | jq
+
+# Running configuration, including the quality_scoring profile in use
+curl -s http://127.0.0.1:9080/api/config | jq '.quality_scoring'
 ```
+
+> [!WARNING]
+> `/api/config` returns the whole configuration, API keys and tokens included,
+> and accepts a POST that rewrites it. There is no authentication on it. Keep
+> `:9080` on a trusted network, or behind a reverse proxy that requires one.
 
 ---
 
 ## AI Agent Skill
 
 `hermes/skill.md` is a portable skill file for an AI agent. It was written for
-Hermes but works with any agent that loads markdown skills. It teaches the agent
-how to add one specific release to the library by hand, for the times the
-automated sync misses something.
+Hermes and follows the same `SKILL.md` convention as
+[OpenClaw](https://docs.openclaw.ai/tools/skills) and Claude Code: YAML
+frontmatter with a name and a description, then markdown instructions. Rename
+the file to `SKILL.md` and drop it in a skills directory to use it with those.
+
+It teaches the agent how to add one specific release to the library by hand, for
+the times the automated sync misses something.
 
 The skill covers the whole flow: reading the deployment's own scoring profile
 from `/api/config`, adding the magnet, waiting for metadata, mapping torrent
