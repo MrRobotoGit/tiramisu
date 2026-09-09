@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
-version: 3.1.2
+version: 3.1.3
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -174,9 +174,13 @@ unrelated releases.
 
 ### Prowlarr, through Tiramisu
 
-Do not call Prowlarr directly and do not go looking for its API key: Tiramisu
-already holds the credentials from its own config and exposes a search endpoint
-that uses them.
+For searching, go through Tiramisu: it already holds the credentials and exposes
+an endpoint that uses them, so there is no need to hunt for an API key.
+
+That is the default, not an absolute. When the endpoint returns nothing and the
+timing points at the deadline, calling Prowlarr directly with `prowlarr.url` and
+`prowlarr.api_key` from the config is the correct move, and often the only way
+to get the candidates at all. Use the key for that, never print it.
 
 ```bash
 curl -s "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=movie&title=Some%20Title&year=2024"
@@ -189,6 +193,7 @@ curl -s "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=series&title=Some%20S
   search. Pass `year` for movies; for a series it would be the year of season 1
   and only hurts
 - the response is a JSON array of `{name, title, infoHash, behaviorHints}`
+
 **An empty `[]` has three different causes, and the status code separates only
 one of them.** Do not read it as a single condition:
 
@@ -204,11 +209,33 @@ fail; if one answers, the search counts as completed even when the rest died on
 the deadline, so a half-broken search is indistinguishable from a real "nothing
 found". A well known title coming back empty is the symptom.
 
-To tell them apart, run a control search on a title that certainly exists
-(`tt3659388`, The Martian) before concluding anything. Empty there too means the
-indexers are not answering, not that your title is missing. Either way fall
-through to Torrentio, but report which of the three it was: silently calling a
-broken indexer "no results" is how candidates get lost.
+**Time the call: that is the discriminator.** A genuine "nothing found" comes
+back quickly. An empty array that arrives at almost exactly the deadline is the
+deadline, not an answer.
+
+```bash
+curl -s -o /dev/null -w '%{time_total}s\n' "{CTRL}/api/prowlarr/search?imdb_id=..."
+```
+
+Measured on a real deployment: a title with 57 results on Prowlarr came back as
+`[]` from this endpoint after `45.024s`. The indexers were healthy and answering;
+the search was simply cut off.
+
+When the timing says deadline, **query Prowlarr directly to confirm and to
+recover the candidates**. Take `prowlarr.url` and `prowlarr.api_key` from the
+config for this:
+
+```bash
+curl -s -H "X-Api-Key: {prowlarr.api_key}" \
+  "{prowlarr.url}/api/v1/search?query=<title>&categories=2000"
+```
+
+Results there and none through the endpoint means the deadline, full stop: keep
+the direct results and say the endpoint timed out. Nothing in either place means
+the indexers really have nothing.
+
+Either way fall through to Torrentio as well, and report which of the causes it
+was. Silently calling a timeout "no results" is how candidates get lost.
 
 **This endpoint queries Prowlarr and nothing else.** It is not the same search
 the sync engine performs, so its result is not the full candidate set: to see
