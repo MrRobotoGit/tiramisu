@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring, writes the virtual MKV stub and verifies it."
-version: 3.1.3
+version: 3.1.4
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
@@ -183,8 +183,9 @@ timing points at the deadline, calling Prowlarr directly with `prowlarr.url` and
 to get the candidates at all. Use the key for that, never print it.
 
 ```bash
-curl -s "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=movie&title=Some%20Title&year=2024"
-curl -s "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=series&title=Some%20Show"
+# --max-time 180: this endpoint routinely takes minutes, see below
+curl -s --max-time 180 "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=movie&title=Some%20Title&year=2024"
+curl -s --max-time 180 "{CTRL}/api/prowlarr/search?imdb_id=tt1234567&type=series&title=Some%20Show"
 ```
 
 - `imdb_id` is required, everything else is optional
@@ -209,17 +210,43 @@ fail; if one answers, the search counts as completed even when the rest died on
 the deadline, so a half-broken search is indistinguishable from a real "nothing
 found". A well known title coming back empty is the symptom.
 
-**Time the call: that is the discriminator.** A genuine "nothing found" comes
-back quickly. An empty array that arrives at almost exactly the deadline is the
-deadline, not an answer.
+### Give it minutes, not seconds
+
+**This endpoint is slow by construction, and a short client timeout is the most
+common way to misjudge it.** Allow at least 180s before calling it broken.
+
+The call has two phases and only the first is bounded:
+
+1. **querying the indexers**, capped at 45s
+2. **resolving the info hashes**, with no overall cap
+
+Phase 2 exists because some indexers, 1337x among them, do not return an
+`infoHash` inline: each such result needs a redirect followed through Prowlarr's
+download proxy. That runs 5 at a time with a 20s budget each, so 40-odd results
+needing resolution is minutes of legitimate work, not a hang.
+
+Measured on a real deployment: `HTTP 200 in 129.9s` with 55 results, on the same
+query where a direct Prowlarr search answered in 29.4s. **The direct search is
+faster because it does not resolve hashes at all** — and those hashes are exactly
+what you need to add anything. Faster there does not mean better.
+
+A client timeout below the total is indistinguishable from a dead endpoint: you
+get no status and no body, and conclude the service is broken while it is still
+working. If you cut a call short, say so as "I did not wait long enough", never
+as "the endpoint does not respond".
+
+### Telling a timeout from an empty answer
+
+**Time the call.** A genuine "nothing found" comes back quickly. An empty array
+that arrives at almost exactly 45s is phase 1 being cut off, not an answer.
 
 ```bash
-curl -s -o /dev/null -w '%{time_total}s\n' "{CTRL}/api/prowlarr/search?imdb_id=..."
+curl -s -o /dev/null -w '%{time_total}s\n' --max-time 180 "{CTRL}/api/prowlarr/search?imdb_id=..."
 ```
 
-Measured on a real deployment: a title with 57 results on Prowlarr came back as
-`[]` from this endpoint after `45.024s`. The indexers were healthy and answering;
-the search was simply cut off.
+Measured on the same deployment: a title with 57 results on Prowlarr came back as
+`[]` after `45.024s`. The indexers were healthy and answering; phase 1 was simply
+cut off.
 
 When the timing says deadline, **query Prowlarr directly to confirm and to
 recover the candidates**. Take `prowlarr.url` and `prowlarr.api_key` from the
@@ -247,9 +274,9 @@ Two things that mislead when reading the response:
 
 - `name` is literally `"Torrentio\n<resolution>"` even for Prowlarr results. It
   is a Stremio format label, not the source. Torrentio has NOT been consulted
-- the search has a 45 second deadline against indexers that can be slower under
-  load, so the same query can return a different number of results minute to
-  minute. Few results is not proof that few exist
+- the 45 second deadline applies to the indexer queries only, not to the whole
+  call, which routinely runs far longer. The same query can return a different
+  number of results minute to minute, so few results is not proof that few exist
 
 `title` is a multi-line string, and the extra lines are where seeders and size
 live. Scoring reads the whole thing, so keep it intact rather than splitting off
