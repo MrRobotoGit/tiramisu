@@ -204,7 +204,7 @@ BitTorrent Peers ←→ GoStorm Engine (:8090)
 | Port | Purpose |
 |------|---------|
 | `:8090` | GoStorm API, JSON torrent management |
-| `:9080` | Control Panel, Metrics, Dashboard, Webhook, Scheduler |
+| `:9080` | Control Panel, Metrics, Dashboard, Webhook, Scheduler, Library API |
 
 ---
 
@@ -1047,72 +1047,9 @@ For Windows users, a dedicated installer generates a ready-to-use [Dockge](https
 
 ## API Quick Reference
 
-### GoStorm API (`:8090`)
-
-```bash
-# List all torrents (count)
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"list"}' http://127.0.0.1:8090/torrents | jq length
-
-# Add a torrent
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"add","link":"magnet:?xt=urn:btih:...","title":"Film Title (Year)"}' \
-  http://127.0.0.1:8090/torrents
-
-# Active torrents (in RAM, not DB)
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"active"}' http://127.0.0.1:8090/torrents | \
-  jq '.[] | {title: .title[:50], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
-
-# Read settings
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"get"}' http://127.0.0.1:8090/settings | jq
-
-# Remove a torrent
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"rem","hash":"<infohash>"}' http://127.0.0.1:8090/torrents
-```
-
-The engine also accepts `drop` (unload from RAM, keep in the DB) and `wipe`
-(remove every torrent, rarely what you want).
-
-To delete a title, do not remove the stub from the source directory: delete it
-through the FUSE mount instead. The unlink handler closes open handles, removes
-the torrent from the engine and blacklists it, so the sync will not add it back.
-
-```bash
-rm /mnt/tiramisu-mkv-virtual/movies/<file>.mkv
-```
-
-### Tiramisu API (`:9080`)
-
-```bash
-# Key metrics fields
-curl -s http://127.0.0.1:9080/metrics | \
-  jq '{version, uptime, read_ahead_active_bytes, config_source}'
-
-# Playback quality: time to first byte, stalls, seek latency
-curl -s http://127.0.0.1:9080/metrics/ttff | jq
-
-# Blocklist status
-curl -s http://127.0.0.1:9080/metrics/blocklist | jq
-
-# Health check and scheduler state
-curl -s http://127.0.0.1:9080/api/health | jq
-curl -s http://127.0.0.1:9080/api/scheduler/status | jq
-
-# Search indexers by IMDB id, using the Prowlarr credentials from the config.
-# Queries Prowlarr only: the sync engine also queries Torrentio and merges.
-# An empty array means Prowlarr is not configured, not that nothing was found.
-curl -s "http://127.0.0.1:9080/api/prowlarr/search?imdb_id=tt0088196&type=movie&year=1985" | jq
-
-# Running configuration, including the quality_scoring profile in use
-curl -s http://127.0.0.1:9080/api/config | jq '.quality_scoring'
-```
-
 ### Library API (`:9080`)
 
-Files one title into the library in a single request. It does what the sync
+**The way to add or remove a title.** Files one title into the library in a single request. It does what the sync
 engine does for one release: registers the torrent, waits for the file list,
 picks the file, writes the virtual `.mkv` with the same naming convention,
 registers TV episodes in the state DB and asks the media server to rescan. No
@@ -1168,10 +1105,87 @@ leaves nothing behind.
 The torrent behind a removed stub is dropped only once no other stub points at
 it: one season pack is a single torrent behind many episodes.
 
+### GoStorm API (`:8090`)
+
+The engine underneath. Adding a torrent here registers it for streaming but
+writes no virtual file, so nothing appears in the library: use the Library API
+above for that, and these calls to inspect or operate on the engine itself.
+
+```bash
+# List all torrents (count)
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"list"}' http://127.0.0.1:8090/torrents | jq length
+
+# Add a torrent to the engine only, with no stub and no library entry
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"add","link":"magnet:?xt=urn:btih:...","title":"Film Title (Year)"}' \
+  http://127.0.0.1:8090/torrents
+
+# Active torrents (in RAM, not DB)
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"active"}' http://127.0.0.1:8090/torrents | \
+  jq '.[] | {title: .title[:50], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
+
+# Read settings
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"get"}' http://127.0.0.1:8090/settings | jq
+
+# Remove a torrent
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"rem","hash":"<infohash>"}' http://127.0.0.1:8090/torrents
+```
+
+The engine also accepts `drop` (unload from RAM, keep in the DB) and `wipe`
+(remove every torrent, rarely what you want).
+
+Removing a title means removing its stub, not just its torrent. Two ways do it
+properly, and deleting the stub from the source directory is neither: that
+leaves the torrent registered and records nothing, so the next sync brings the
+title back.
+
+```bash
+# through the Library API, with the same effect as the unlink below
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"movies/<file>.mkv","blacklist":true}' \
+  http://127.0.0.1:9080/api/library/remove
+
+# or through the FUSE mount: the unlink handler closes open handles, removes the
+# torrent from the engine and blacklists it
+rm /mnt/tiramisu-mkv-virtual/movies/<file>.mkv
+```
+
+### Tiramisu API (`:9080`)
+
+```bash
+# Key metrics fields
+curl -s http://127.0.0.1:9080/metrics | \
+  jq '{version, uptime, read_ahead_active_bytes, config_source}'
+
+# Playback quality: time to first byte, stalls, seek latency
+curl -s http://127.0.0.1:9080/metrics/ttff | jq
+
+# Blocklist status
+curl -s http://127.0.0.1:9080/metrics/blocklist | jq
+
+# Health check and scheduler state
+curl -s http://127.0.0.1:9080/api/health | jq
+curl -s http://127.0.0.1:9080/api/scheduler/status | jq
+
+# Search indexers by IMDB id, using the Prowlarr credentials from the config.
+# Queries Prowlarr only: the sync engine also queries Torrentio and merges.
+# An empty array means Prowlarr is not configured, not that nothing was found.
+curl -s "http://127.0.0.1:9080/api/prowlarr/search?imdb_id=tt0088196&type=movie&year=1985" | jq
+
+# Running configuration, including the quality_scoring profile in use
+curl -s http://127.0.0.1:9080/api/config | jq '.quality_scoring'
+```
+
 > [!WARNING]
-> `/api/config` returns the whole configuration, API keys and tokens included,
-> and accepts a POST that rewrites it. There is no authentication on it. Keep
-> `:9080` on a trusted network, or behind a reverse proxy that requires one.
+> Nothing on `:9080` is authenticated. `/api/config` returns the whole
+> configuration, API keys and tokens included, and accepts a POST that rewrites
+> it; `/api/library/add` and `/api/library/remove` write and delete files in the
+> library. Keep the port on a trusted network, or behind a reverse proxy that
+> requires authentication.
 
 ---
 
