@@ -1202,14 +1202,12 @@ It teaches the agent how to add one specific release to the library by hand, for
 the times the automated sync misses something.
 
 The skill covers the whole flow: reading the deployment's own scoring profile
-from `/api/config`, choosing a release, and filing it. Where the [Library
-API](#library-api-9080) is available it is one call and the agent needs nothing
-but the control port; on older builds the skill falls back to writing the stubs
-itself, which is why it also documents adding the magnet, waiting for metadata,
-mapping torrent files to episodes, verifying the stub on both the physical and
-the FUSE layer, and undoing the change if the wrong release was picked. The five
-helper scripts for that route are embedded in the file itself, so there is
-nothing else to install.
+from `/api/config`, searching the indexers, scoring the candidates the way the
+sync engine would, filing the winner through the [Library
+API](#library-api-9080), and undoing it if the pick was wrong. Everything goes
+over HTTP against the control port, so the agent needs no access to the host and
+nothing to install. It requires v1.9.64 or later, which is the release that
+added those endpoints.
 
 It hardcodes no hosts, no ports and no scoring weights. Quality weights, seeder
 minimums and size bands are read from the running configuration, so the same
