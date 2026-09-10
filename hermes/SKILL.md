@@ -1,9 +1,9 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.1.1
+version: 4.1.2
 author: MrRobotoGit
-license: GPL-3.0-or-later
+license: GPL-3.0-only
 metadata:
   hermes:
     tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
