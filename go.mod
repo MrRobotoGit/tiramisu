@@ -2,7 +2,7 @@ module tiramisu
 
 go 1.24.0
 
-require github.com/hanwen/go-fuse/v2 v2.9.0
+require github.com/hanwen/go-fuse/v2 v2.11.0
 
 replace (
 	github.com/anacrolix/torrent => ./internal/anacrolix-torrent
@@ -25,6 +25,7 @@ require (
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/exp v0.0.0-20251125195548-87e1e737ad39
 	golang.org/x/sys v0.38.0
+	golang.org/x/text v0.31.0
 	golang.org/x/time v0.14.0
 	modernc.org/sqlite v1.21.1
 )
@@ -112,7 +113,6 @@ require (
 	golang.org/x/mod v0.30.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
 	golang.org/x/tools v0.39.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	lukechampine.com/uint128 v1.2.0 // indirect
