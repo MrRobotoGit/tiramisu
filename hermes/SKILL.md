@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.1.2
+version: 4.2.0
 author: MrRobotoGit
 license: GPL-3.0-only
 metadata:
@@ -440,6 +440,7 @@ not collect both bonuses.
 1. **garbage** release tags: camrip, hdcam, hdts, telesync, TS, telecine, TC,
    SCR, screener, webscreener
 2. **excluded language** matched in the title, from `language.excluded_flags`
+   (see [What the language gate actually does](#what-the-language-gate-actually-does))
 3. **blacklisted title**, then **blacklisted hash**, if the deployment keeps a
    blacklist
 4. **seeders below `min_seeders`**
@@ -464,6 +465,39 @@ and it is the user's to make. Show both options with size and audio, and ask.
 
 The same applies whenever the gates leave nothing at all: report what was
 rejected and why, rather than concluding no release exists.
+
+Filing a release the gates rejected is a departure from the deployment's own
+policy, so it takes the operator's explicit go-ahead, never your judgement
+alone. When it happens, say in the report which gate was overridden and what
+follows from it: the unattended sync would not have picked this release, and a
+later discovery run can still replace it once something scores above the upgrade
+threshold.
+
+### What the language gate actually does
+
+It is a blacklist, and it reads only the title.
+
+- It matches **flag emoji and language words alike**: `excluded_flags: ["ES"]`
+  rejects a title carrying 🇪🇸 and one carrying `SPANISH`, `CASTELLANO` or
+  `LATINO`. So a multi-language release is rejected for the language you do not
+  want even when it also carries the one you do
+- The **preferred language is the opposite kind of rule**: a positive weight, not
+  a requirement, and it is scored over the title *and* the indexer name. Nothing
+  is ever kept because it announces your language, and nothing is ever rejected
+  for lacking it
+
+The consequence is worth stating out loud when it bites: a Torrentio release
+listing 🇮🇹 alongside 🇫🇷 disappears silently, and the operator never learns it
+existed. That is the same tradeoff as the size band above, and it deserves the
+same treatment: show it and ask.
+
+**A flag is not an audio track.** Torrentio lists the languages of a release
+without separating audio from subtitles, so a WEB-DL announcing twenty-seven of
+them is mostly subtitles. Never tell the operator "it has Italian audio" on the
+strength of a flag, and do not read the `preferred_language` bonus as evidence
+either: it is a heuristic over a filename. The only thing that settles it is
+reading the real stream layout, which is [what the ffprobe check does](#4-verify)
+once the stub exists.
 
 ### TV scores differently
 
@@ -601,6 +635,29 @@ score is what stops the next sync replacing your pick.
 Sending `hash` alone is enough. The server builds the magnet with its own
 default tracker list, so the torrent does not start DHT-only. Pass `magnet`
 instead when the indexer gave you one: its trackers are kept as they are.
+
+**Build the payload as a file, not inline.** One apostrophe in a title closes
+the shell string and the call dies on `unexpected EOF while looking for matching
+quote`. In a library that is not English-only this is the common case, not an
+edge one: `L'immortale`, `Non c'è altra scelta`.
+
+```bash
+python3 -c '
+import json
+json.dump({"type":"movie","hash":"<HASH>","title":"Non c'"'"'è altra scelta",
+           "year":2024,"release_title":"<raw release name>","imdb":"tt..."},
+          open("/tmp/add.json","w"), ensure_ascii=False)
+'
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  --data-binary @/tmp/add.json "{CTRL}/api/library/add"
+```
+
+Send the title as the operator wrote it, accents included, and do not clean it
+up first: the server sanitises the filename itself and anything outside
+`[a-zA-Z0-9._-]` becomes `_`, so `Non c'è altra scelta` is filed as
+`Non_c_altra_scelta_<year>_...`. Note what that means: an accented letter is
+dropped, not transliterated. The name in the response is the truth, and it is
+what a later `list` will match on.
 
 ### 4. Verify
 
@@ -765,6 +822,9 @@ touching files.
 - Run the whole flow when only a verification was asked (check, don't add)
 - Narrate the run: present the choice, then the outcome, then anything that
   deviated — not the searches in between
+- File a release the gates rejected without the operator's explicit go-ahead,
+  or report it afterwards as if it were an ordinary pick
+- Call a language present because a flag says so: flags cover subtitles too
 
 ## When you learn something new
 
