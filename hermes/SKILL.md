@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.0.3
+version: 4.1.0
 author: MrRobotoGit
 license: GPL-3.0-or-later
 metadata:
@@ -60,6 +60,34 @@ on the real filesystem, exposed by the FUSE layer with the declared full size.
 
 Step 3 is one HTTP call. Knowing what it does server-side is still worth it: it
 is what lets you tell a bad pick from a broken deployment.
+
+## What to report
+
+Three things, and nothing else.
+
+**The choice, when there is one.** Once the candidates are scored, say what
+survived and ask which release to file. One line each: the release name as the
+indexer gives it, its size, its seeders, and whatever would change the decision
+(a cut that is not labelled, a swarm that has gone cold). Ask once, with the
+options and your recommendation. The candidates the gates rejected, the scoring
+behind the order and the searches that produced them are not part of the
+question.
+
+**The outcome, in one line.** What `add` returned: the stub that was written, or
+the error. Nothing about the calls that led there.
+
+**Anything that did not go as this file describes.** An indexer suspended, every
+candidate rejected by the same gate, a release that turned out to be
+unreachable, a reply that does not match the documented one. Say what came back,
+as it came back.
+
+A run that narrows thirty candidates to one is reported by the one. The log costs
+the reader the time the run was meant to save, and buries the two lines they
+need: what to choose, and what happened.
+
+Everything you leave out you still keep: rejected candidates, individual scores,
+timings, raw responses. Hand any of it over the moment it is asked for, without
+making the operator ask twice.
 
 ## Library API: the whole add in one call
 
@@ -725,6 +753,8 @@ touching files.
   as "remove these films" ever means that
 - Delete in bulk without showing the full list first and having it confirmed
 - Run the whole flow when only a verification was asked (check, don't add)
+- Narrate the run: present the choice, then the outcome, then anything that
+  deviated — not the searches in between
 
 ## When you learn something new
 
@@ -761,9 +791,10 @@ in your working directory. Three kinds of thing belong there:
 **Never put secrets there.** No tokens, no API keys, no config dumps. An address
 and a preference are notes; `prowlarr.api_key` is not.
 
-Report the findings to the operator at the end of the run. The ones that turn
-out to be general belong in the next version of this skill; the ones local to a
-deployment stay in that file.
+Report the findings to the operator at the end of the run: they are the third of
+the [three things worth reporting](#what-to-report), so a run with none of them
+ends at the outcome line. The ones that turn out to be general belong in the next
+version of this skill; the ones local to a deployment stay in that file.
 
 Say plainly when something did not work, including when you cannot tell why. An
 unexplained failure reported as such is useful; the same failure smoothed over
