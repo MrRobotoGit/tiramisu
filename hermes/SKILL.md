@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.1.0
+version: 4.1.1
 author: MrRobotoGit
 license: GPL-3.0-or-later
 metadata:
@@ -63,7 +63,11 @@ is what lets you tell a bad pick from a broken deployment.
 
 ## What to report
 
-Three things, and nothing else.
+Three things, and nothing else. Brevity is never the rule before something
+destructive: what [Before deleting anything](#before-deleting-anything)
+prescribes, the full list with a count and what could not be resolved, stands
+whole. Trimming a report costs the reader time; trimming the list they are about
+to approve costs them files.
 
 **The choice, when there is one.** Once the candidates are scored, say what
 survived and ask which release to file. One line each: the release name as the
@@ -72,6 +76,12 @@ indexer gives it, its size, its seeders, and whatever would change the decision
 options and your recommendation. The candidates the gates rejected, the scoring
 behind the order and the searches that produced them are not part of the
 question.
+
+One surviving candidate is still a choice: present it and wait. The confirmation
+is not about which release wins, it is about writing into a library that is not
+yours, and it is worth one line even when the answer looks obvious. A candidate
+that only just cleared the gates, or one you would not have picked yourself, is
+exactly the case where the operator wants to see it before it is filed.
 
 **The outcome, in one line.** What `add` returned: the stub that was written, or
 the error. Nothing about the calls that led there.
