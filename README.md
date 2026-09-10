@@ -1191,12 +1191,12 @@ curl -s http://127.0.0.1:9080/api/config | jq '.quality_scoring'
 
 ## AI Agent Skill
 
-`hermes/skill.md` is a portable skill file for an AI agent. It was written for
+`hermes/SKILL.md` is a portable skill file for an AI agent. It was written for
 [Hermes](https://github.com/NousResearch/hermes-agent) and follows the same
 `SKILL.md` convention as [OpenClaw](https://github.com/openclaw/openclaw) and
-Claude Code: YAML frontmatter with a name and a description, then markdown
-instructions. Rename the file to `SKILL.md` and drop it in a skills directory to
-use it with those.
+Claude Code: YAML frontmatter with a name, a description, a version, an author
+and a license, then markdown instructions. Drop it in a skills directory to use
+it with any of them.
 
 It teaches the agent how to add one specific release to the library by hand, for
 the times the automated sync misses something.
