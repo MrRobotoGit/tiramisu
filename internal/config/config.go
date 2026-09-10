@@ -172,6 +172,11 @@ type Config struct {
 	EntryTimeoutSeconds    float64 `json:"entry_timeout_seconds"`
 	NegativeTimeoutSeconds float64 `json:"negative_timeout_seconds"`
 
+	// FuseMaxInflightMB caps the RAM go-fuse checks out for in-flight requests.
+	// Each request reserves ~MaxWrite (4MB), so a scan storm is unbounded at 0.
+	// Backpressure: past the cap go-fuse stops reading /dev/fuse. 0 = unlimited.
+	FuseMaxInflightMB int64 `json:"fuse_max_inflight_mb"`
+
 	// --- HTTP Resilience ---
 	MaxRetryAttempts         int `json:"max_retry_attempts"`
 	RetryDelayMS             int `json:"retry_delay_ms"`
@@ -314,6 +319,7 @@ func LoadConfig() Config {
 		AttrTimeoutSeconds:     1.0,
 		EntryTimeoutSeconds:    1.0,
 		NegativeTimeoutSeconds: 0.0,
+		FuseMaxInflightMB:      0, // off: config.json-only knob, matches go-fuse's own default
 
 		MaxRetryAttempts: 6,
 		RetryDelayMS:     500,
@@ -548,6 +554,14 @@ func (c *Config) finalize() {
 		c.ReadAheadBudget = c.ReadAheadBase
 	}
 
+	// A cap below a handful of requests (~4MB each) serialises FUSE instead of
+	// bounding it: go-fuse stops reading /dev/fuse until one completes.
+	if c.FuseMaxInflightMB < 0 {
+		c.FuseMaxInflightMB = 0
+	} else if c.FuseMaxInflightMB > 0 && c.FuseMaxInflightMB < 16 {
+		c.FuseMaxInflightMB = 16
+	}
+
 	// Calculate MetadataCacheSize in bytes
 	c.MetadataCacheSize = c.MetadataCacheSizeMB * 1024 * 1024
 	if c.MetadataCacheSize < 1*1024*1024 {
@@ -592,6 +606,11 @@ func (c *Config) LogConfig(logger *log.Logger) {
 	logger.Printf("LogLevel: %s", c.LogLevel)
 	logger.Printf("GoStormBaseURL: %s", c.GoStormBaseURL)
 	logger.Printf("FUSE Timeouts (Attr/Entry/Neg): %.1f/%.1f/%.1f", c.AttrTimeoutSeconds, c.EntryTimeoutSeconds, c.NegativeTimeoutSeconds)
+	if c.FuseMaxInflightMB > 0 {
+		logger.Printf("FUSE MaxInflightRequestBytes: %d MB", c.FuseMaxInflightMB)
+	} else {
+		logger.Printf("FUSE MaxInflightRequestBytes: unlimited")
+	}
 	logger.Printf("HTTP Retries: %d, Delay: %dms", c.MaxRetryAttempts, c.RetryDelayMS)
 	logger.Printf("Preload Engine: Workers=%d, Delay=%dms", c.PreloadWorkersCount, c.PreloadInitialDelayMS)
 

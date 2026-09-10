@@ -10,6 +10,7 @@
   "attr_timeout_seconds": 1,
   "entry_timeout_seconds": 1,
   "negative_timeout_seconds": 0,
+  "fuse_max_inflight_mb": 0,
   "http_client_timeout_seconds": 30,
   "max_retry_attempts": 6,
   "retry_delay_ms": 500,

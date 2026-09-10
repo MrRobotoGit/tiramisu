@@ -4656,12 +4656,17 @@ func main() {
 	entryTimeout := time.Duration(gc().EntryTimeoutSeconds * float64(time.Second))
 	negativeTimeout := time.Duration(gc().NegativeTimeoutSeconds * float64(time.Second))
 
+	// go-fuse checks out ~MaxWrite per in-flight request; 0 leaves that unbounded.
+	// Past the cap it stops reading /dev/fuse, so this trades RAM for latency.
+	maxInflight := int(gc().FuseMaxInflightMB * 1024 * 1024)
+
 	server, err = fs.Mount(mount, rootData, &fs.Options{
 		AttrTimeout: &attrTimeout, EntryTimeout: &entryTimeout,
 		NegativeTimeout: &negativeTimeout,
 		MountOptions: fuse.MountOptions{
-			AllowOther:    true,
-			MaxBackground: gc().ConcurrencyLimit,
+			MaxInflightRequestBytes: maxInflight,
+			AllowOther:              true,
+			MaxBackground:           gc().ConcurrencyLimit,
 			// MaxWrite:                 1024 * 1024,
 			MaxWrite: 4 * 1024 * 1024, // Samba Turbo: 4MB write buffer
 			// MaxReadAhead:             1024 * 1024,
