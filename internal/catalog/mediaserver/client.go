@@ -87,7 +87,8 @@ func (c *JellyfinClient) RefreshLibrary(ctx context.Context, _ int) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Emby-Token", c.Token)
+	// Jellyfin 12.0 stopped parsing X-Emby-Token; the MediaBrowser scheme works on 10.x too.
+	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=%q", c.Token))
 
 	resp, err := catalog.Do(ctx, c.http, req)
 	if err != nil {
