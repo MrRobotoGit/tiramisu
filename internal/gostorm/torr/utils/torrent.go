@@ -2,6 +2,7 @@ package utils
 
 import (
 	"encoding/base32"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -46,7 +47,28 @@ var (
 	trackersOnce   sync.Once
 )
 
-const trackersListURL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best_ip.txt"
+// trackersListURLs is the built-in mirror chain for the remote tracker list,
+// tried in order until one answers. A single URL (raw.githubusercontent.com)
+// is blocked or rate-limited often enough that one failed fetch used to leave
+// the run on the built-in trackers alone; mirrors on different hosts survive
+// exactly that.
+var trackersListURLs = []string{
+	"https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best_ip.txt",
+	"https://ngosang.github.io/trackerslist/trackers_best_ip.txt",
+	"https://cdn.jsdelivr.net/gh/ngosang/trackerslist@master/trackers_best_ip.txt",
+	"https://raw.githack.com/ngosang/trackerslist/master/trackers_best_ip.txt",
+}
+
+// trackersFetchTimeout bounds each mirror attempt, not the whole chain: with a
+// per-mirror timeout the failover to the next host costs seconds, while one
+// shared timeout would make a hung first mirror eat the retry window.
+var trackersFetchTimeout = 5 * time.Second
+
+// trackersRefreshInterval is how often the remote list is reloaded once the
+// first fetch has succeeded. Without it the list stayed frozen at whatever was
+// served at boot: on a process that runs for weeks, entries that disappear from
+// the upstream list keep being offered, and new ones are never picked up.
+var trackersRefreshInterval = 12 * time.Hour
 
 func GetTrackerFromFile() []string {
 	name := filepath.Join(settings.Path, "trackers.txt")
@@ -68,7 +90,7 @@ func GetTrackerFromFile() []string {
 }
 
 func GetDefTrackers() []string {
-	trackersOnce.Do(func() { go retryLoadTrackers() })
+	trackersOnce.Do(func() { go retryLoadTrackers(nil) })
 
 	trackersMu.Lock()
 	defer trackersMu.Unlock()
@@ -81,38 +103,89 @@ func GetDefTrackers() []string {
 // retryLoadTrackers keeps trying until the list is in. A single failed fetch at
 // startup used to leave the client on the built-in trackers for the whole run,
 // silently: those cover far fewer swarms, so torrents look peerless and time out.
-func retryLoadTrackers() {
+// After the first success it keeps the list fresh, reloading every
+// trackersRefreshInterval; a failed refresh keeps the previous list, and the
+// exponential backoff doubles again until one succeeds.
+func retryLoadTrackers(stop <-chan struct{}) {
 	delay := 30 * time.Second
-	for attempt := 1; ; attempt++ {
+	attempt := 1
+	for {
 		if err := loadNewTracker(); err == nil {
 			trackersMu.Lock()
 			n := len(loadedTrackers)
 			trackersMu.Unlock()
 			log.TLogln("Tracker list loaded:", n, "trackers")
-			return
+			delay = 30 * time.Second
+			attempt = 1
+			if !waitOrStop(trackersRefreshInterval, stop) {
+				return
+			}
+			continue
 		} else {
-			log.TLogln("Tracker list download failed (attempt", attempt, "):", err, "— using", len(defTrackers), "built-in trackers, retrying in", delay)
+			trackersMu.Lock()
+			loaded := len(loadedTrackers)
+			trackersMu.Unlock()
+			if loaded > 0 {
+				log.TLogln("Tracker list refresh failed (attempt", attempt, "):", err, "— keeping", loaded, "loaded trackers, retrying in", delay)
+			} else {
+				log.TLogln("Tracker list download failed (attempt", attempt, "):", err, "— using", len(defTrackers), "built-in trackers, retrying in", delay)
+			}
 		}
-		time.Sleep(delay)
+		if !waitOrStop(delay, stop) {
+			return
+		}
 		if delay < 30*time.Minute {
 			delay *= 2
 		}
+		attempt++
 	}
 }
 
+// waitOrStop sleeps for d, returning false when stop fires first. A nil stop
+// never fires, which is how the production loop runs for the process lifetime.
+func waitOrStop(d time.Duration, stop <-chan struct{}) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-stop:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// loadNewTracker walks the mirror chain and returns on the first mirror that
+// answers with a usable list. The loaded list is replaced only on success, so a
+// chain where every mirror fails leaves the previous list in place.
 func loadNewTracker() error {
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(trackersListURL)
+	var errs []error
+	for _, url := range trackersListURLs {
+		ret, err := fetchTrackersFromURL(url)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", url, err))
+			continue
+		}
+		trackersMu.Lock()
+		loadedTrackers = append(ret, defTrackers...)
+		trackersMu.Unlock()
+		return nil
+	}
+	return fmt.Errorf("all %d mirrors failed: %w", len(trackersListURLs), errors.Join(errs...))
+}
+
+func fetchTrackersFromURL(url string) ([]string, error) {
+	client := &http.Client{Timeout: trackersFetchTimeout}
+	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d", resp.StatusCode)
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	buf, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var ret []string
 	for _, s := range strings.Split(string(buf), "\n") {
@@ -121,12 +194,9 @@ func loadNewTracker() error {
 		}
 	}
 	if len(ret) == 0 {
-		return fmt.Errorf("empty list")
+		return nil, fmt.Errorf("empty list")
 	}
-	trackersMu.Lock()
-	loadedTrackers = append(ret, defTrackers...)
-	trackersMu.Unlock()
-	return nil
+	return ret, nil
 }
 
 func PeerIDRandom(peer string) string {
