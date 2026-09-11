@@ -326,7 +326,7 @@ Aggregate lists are worse still: some combine anti-P2P, ads, malware and whole-c
 
 ### 10. Profile-Guided Optimization (PGO)
 
-The binary is compiled with `-pgo=auto`. Go 1.24 reads `default.pgo` to inline hot paths and optimize branch prediction using real production profiling data. On Pi 4 Cortex-A72 (no hardware AES/SHA1), PGO alone accounts for **~5–7% CPU reduction**.
+The binary is compiled with `-pgo=auto`. Go 1.26 reads `default.pgo` to inline hot paths and optimize branch prediction using real production profiling data. On Pi 4 Cortex-A72 (no hardware AES/SHA1), PGO alone accounts for **~5–7% CPU reduction**.
 
 ### 11. GoStorm Engine Deep Fork of TorrServer Matrix + anacrolix/torrent
 
@@ -379,7 +379,7 @@ GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrSe
 | Component | Details |
 |-----------|---------|
 | **Hardware** | Any `linux/amd64` or `linux/arm64` device, **Raspberry Pi 4 is the minimum tested baseline** (4 GB RAM recommended). Runs on NAS, VPS, mini-PC, or any always-on Linux box. **On amd64, AVX2 is strongly recommended** (any x86_64 CPU from ~2013 onward — Intel Haswell or AMD Excavator and later). Without it, Go's SHA1 piece verification falls back to its slowest scalar path and may not sustain real playback bitrates; Tiramisu still starts, logging a warning at boot so that high CPU and stuttering have a visible cause. arm64 has no equivalent requirement: NEON is mandatory on every ARMv8-A chip, so any real arm64 device (including the Pi 4 itself) already clears the floor. |
-| **Go** | 1.24+ (`linux/amd64` or `linux/arm64`), do **not** use the 32-bit `linux/arm` toolchain |
+| **Go** | 1.26+ (`linux/amd64` or `linux/arm64`), do **not** use the 32-bit `linux/arm` toolchain |
 | **FUSE 3** | `sudo apt install fuse3 libfuse3-dev` |
 | **systemd** | For service management |
 | **Samba** | `sudo apt install samba` |
@@ -943,14 +943,14 @@ sudo systemctl start tiramisu
 **Verify the toolchain is 64-bit:**
 ```bash
 /usr/local/go/bin/go version
-# Required: go version go1.24.x linux/arm64
-# Wrong:    go version go1.24.x linux/arm   <-- 32-bit
+# Required: go version go1.26.x linux/arm64
+# Wrong:    go version go1.26.x linux/arm   <-- 32-bit
 ```
 
-**Install Go 1.24 if needed:**
+**Install Go 1.26 if needed:**
 ```bash
-wget https://go.dev/dl/go1.24.0.linux-arm64.tar.gz
-sudo tar -C /usr/local -xzf go1.24.0.linux-arm64.tar.gz
+wget https://go.dev/dl/go1.26.8.linux-arm64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.8.linux-arm64.tar.gz
 ```
 
 ---

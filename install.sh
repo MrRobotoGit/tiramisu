@@ -735,7 +735,7 @@ ensure_go() {
     local go_version
     go_version=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
     if [ -z "$go_version" ]; then
-        go_version="go1.24.0"   # fallback if network unavailable
+        go_version="go1.26.8"   # fallback if network unavailable
     fi
 
     print_info "${go_version} (${GO_OS}/${GO_ARCH}) not found — downloading..."
