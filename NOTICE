@@ -1,0 +1,18 @@
+# NOTICE
+
+Tiramisu
+Copyright (C) 2026 Matteo Rancilio
+
+This project includes the third-party components listed below. Each one is licensed under its own terms, and its license text is kept next to the code.
+
+## internal/anacrolix-torrent
+
+- License: Mozilla Public License 2.0 (MPL-2.0)
+- License text: `internal/anacrolix-torrent/LICENSE`
+- Vendored fork of `github.com/anacrolix/torrent`, patched in-tree.
+
+## internal/anacrolix-torrent/webtorrent
+
+- License: MIT
+- Copyright (c) 2019 Michiel De Backker
+- License text: `internal/anacrolix-torrent/webtorrent/LICENSE`
