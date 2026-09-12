@@ -54,7 +54,7 @@ Review is direct and technical. Expect every claim to be checked, including the 
 
 ## Licensing
 
-Tiramisu v2.0 and later is licensed under GPL-3.0-only. By submitting a contribution you agree that it is licensed under the same terms. Only submit code you have the right to license, and do not copy code from projects whose license is incompatible with GPL-3.0.
+Tiramisu is licensed under GPL-3.0-only. By submitting a contribution you agree that it is licensed under the same terms. Only submit code you have the right to license, and do not copy code from projects whose license is incompatible with GPL-3.0.
 
 ## Style
 
