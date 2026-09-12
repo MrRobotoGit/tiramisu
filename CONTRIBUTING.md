@@ -8,6 +8,12 @@ This document explains what fits the project, and what will be closed. Reading i
 
 Tiramisu is not a download manager, not a debrid client, not a media library UI, and not a media player. It is the infrastructure layer between a torrent swarm and a media server. Everything above that layer (library administration, release selection, naming, tradeoffs) is policy, and policy does not live in this repository: it lives in a versioned [agent skill](hermes/SKILL.md) driven by the user's agent of choice.
 
+## What is welcome
+
+- Improvements, bug fixes, data race fixes and optimizations in the FUSE layer and in GoStorm.
+- Agentic autonomy built on the skill: the skill is the base. An MCP server is welcome, but never without a skill and guardrails.
+- Improvements, bug fixes, data race fixes and optimizations in the torrent client layer.
+
 ## Before you open a pull request
 
 1. **Open an issue first** for anything that is not a small, self-contained bug fix: new features, API changes, refactors, behavioral changes, new dependencies. Wait for a maintainer's answer before writing code. PRs that arrive without a prior issue will usually be closed with a pointer to this document.
