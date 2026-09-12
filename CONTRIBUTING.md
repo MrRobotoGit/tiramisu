@@ -11,7 +11,7 @@ Tiramisu is not a download manager, not a debrid client, not a media library UI,
 ## What is welcome
 
 - Improvements, bug fixes, data race fixes and optimizations in the FUSE layer, in the GoStorm engine, and in the torrent client layer, including the vendored anacrolix/torrent fork.
-- Agentic autonomy built on the skill: the skill is the base. An MCP server is welcome, but never without a skill and guardrails.
+- Agentic autonomy built on the skill: the skill is the base. An MCP server that exposes primitives already in the Library API is welcome; one that freezes policy (search, scoring, selection) is not. Never without a skill and guardrails.
 - Improvements to the versioned skill, where the project's policy lives.
 - Docker: the maintainer does not run Tiramisu in Docker by design, but every improvement to the Docker image is more than welcome.
 
@@ -33,7 +33,7 @@ The FUSE mount is a projection of engine state, not an administrable directory. 
 
 ## House rules
 
-- **Architecture.** New Go files go into an existing package under `internal/`. The repository root is reserved for `main.go`, `version.go` and the legacy files still coupled to `main`; it is not a valid place for new code. Global state lives in `main.go`; internal packages export constructors and types, never singletons.
+- **Architecture.** New Go files go into an existing package under `internal/`. The repository root is reserved for `main.go`, `version.go` and the legacy files still coupled to `main`; it is not a valid place for new code. Do not introduce new global state: the existing state stays in `main.go` until it is extracted; internal packages export constructors and types, never singletons.
 - **Root cause, in Go.** Fixes belong in the Go code path. The embedded HTML/JS is a thin layer; a frontend patch over a backend defect will be rejected.
 - **Performance budget.** Raspberry Pi 4 is the baseline. Memory ceilings, read-ahead budget and startup time are part of the contract. Changes to hot paths need measurements: before/after, with the workload and the hardware named.
 - **Dependencies.** Do not add a module without discussing it in an issue first. The anacrolix/torrent fork is vendored and patched in-tree: changes to it are accepted like any other code, while sending patches upstream to anacrolix remains a deliberate maintainer decision, not a side effect of a PR.
