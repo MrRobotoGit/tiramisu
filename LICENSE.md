@@ -1,3 +1,5 @@
+Copyright (C) 2026 Matteo Rancilio — Tiramisu
+
 ### GNU GENERAL PUBLIC LICENSE
 
 Version 3, 29 June 2007
