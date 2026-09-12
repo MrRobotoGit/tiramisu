@@ -36,7 +36,7 @@ The FUSE mount is a projection of engine state, not an administrable directory. 
 - **Architecture.** New Go files go into an existing package under `internal/`. The repository root is reserved for `main.go`, `version.go` and the legacy files still coupled to `main`; it is not a valid place for new code. Global state lives in `main.go`; internal packages export constructors and types, never singletons.
 - **Root cause, in Go.** Fixes belong in the Go code path. The embedded HTML/JS is a thin layer; a frontend patch over a backend defect will be rejected.
 - **Performance budget.** Raspberry Pi 4 is the baseline. Memory ceilings, read-ahead budget and startup time are part of the contract. Changes to hot paths need measurements: before/after, with the workload and the hardware named.
-- **Dependencies.** Do not add a module without discussing it in an issue first. The anacrolix/torrent fork is vendored and patched in-tree; upstreaming those patches is done deliberately, not as a side effect of a PR.
+- **Dependencies.** Do not add a module without discussing it in an issue first. The anacrolix/torrent fork is vendored and patched in-tree: changes to it are accepted like any other code, while sending patches upstream to anacrolix remains a deliberate maintainer decision, not a side effect of a PR.
 - **API surface.** The endpoint surface is deliberately small and frozen. New endpoints require an issue and an explicit maintainer decision, and they must expose raw primitives, never policy.
 - **CI and publishing.** Registry and multi-architecture publishing (Docker Hub, GHCR, amd64 + arm64) is out of scope for PRs. Changes that alter or drop part of that matrix will not be merged.
 - **No data loss by design.** Do not add cleanup or deletion that acts on artifacts created by the feature itself, and do not infer live state from a RAM+DB union. If a fix removes files, prove what is actually live before touching it.
@@ -63,9 +63,9 @@ This is a single-maintainer project with no SLA: expect days, not hours. If an i
 
 ## Licensing
 
-Tiramisu is licensed under GPL-3.0-only. By submitting a contribution you agree that it is licensed under the same terms, and you grant the maintainer a perpetual, worldwide, non-exclusive, royalty-free, irrevocable right to relicense it under other terms, including commercial terms.
+Tiramisu is licensed under GPL-3.0-only. By submitting a contribution you agree that it is licensed under the same terms, and you grant the maintainer a perpetual, worldwide, non-exclusive, royalty-free, sublicensable, irrevocable right to relicense it under other terms, including commercial terms.
 
-Only submit code you have the right to license, and do not copy code from projects whose license is incompatible with GPL-3.0. Forks are welcome under the same license, but the GPL requires them to keep the LICENSE text, keep the copyright notices, and state which files they modified and when: stripping any of these is a license violation, not a fork.
+Only submit code you have the right to license, and do not copy code from projects whose license is incompatible with GPL-3.0. Forks are welcome under the same license, but the GPL requires them to keep the LICENSE text, keep the copyright notices (the third-party ones are listed in NOTICE), and state which files they modified and when: stripping any of these is a license violation, not a fork.
 
 ## Security
 
@@ -75,5 +75,5 @@ Do not open a public issue for a vulnerability. Use the repository's private vul
 
 - Public repository text is in English, including commit messages, PR descriptions and release notes.
 - No AI or LLM attribution trailers in commits.
-- Code comments are at most one or two lines, and only document constraints that are not obvious from the code. Historical rationale and discarded alternatives belong in the changelog, never in the code.
+- Code comments are at most one or two lines, and only document constraints that are not obvious from the code. Historical rationale and discarded alternatives belong in the release notes, never in the code.
 - Run `gofmt` and `go vet` before pushing; the build must be clean.
