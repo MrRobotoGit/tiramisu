@@ -10,22 +10,22 @@ Tiramisu is not a download manager, not a debrid client, not a media library UI,
 
 ## What is welcome
 
-- Improvements, bug fixes, data race fixes and optimizations in the FUSE layer and in GoStorm.
+- Improvements, bug fixes, data race fixes and optimizations in the FUSE layer, in the GoStorm engine, and in the torrent client layer, including the vendored anacrolix/torrent fork.
 - Agentic autonomy built on the skill: the skill is the base. An MCP server is welcome, but never without a skill and guardrails.
-- Improvements, bug fixes, data race fixes and optimizations in the torrent client layer.
+- Improvements to the versioned skill, where the project's policy lives.
 - Docker: the maintainer does not run Tiramisu in Docker by design, but every improvement to the Docker image is more than welcome.
 
 ## Before you open a pull request
 
 1. **Open an issue first** for anything that is not a small, self-contained bug fix: new features, API changes, refactors, behavioral changes, new dependencies. Wait for a maintainer's answer before writing code. PRs that arrive without a prior issue will usually be closed with a pointer to this document.
-2. **Read the project's own documentation first.** Many "gaps" are described in the README, the release notes, or the configuration reference. Characterizing the project before reading it wastes your time and ours.
+2. **Read the project's own documentation first.** Many "gaps" are described in the [README](README.md), the [release notes](https://github.com/MrRobotoGit/tiramisu/releases), or the [configuration reference](README.md#configuration-reference). Characterizing the project before reading it wastes your time and ours.
 3. **Search existing issues, PRs and forks.** Your idea may already have been proposed, implemented, or explicitly rejected.
 
 ## Where things belong
 
 **The engine.** Minimal, stable primitives: torrent add/get/list, FUSE stub creation, blacklist on unlink from the mount, the config API on `:9080`, and the Library API (`add` / `remove` / `list`, raw primitives only). These endpoints exist so clients without filesystem access can do the same operations the mount exposes.
 
-**The skill layer.** Policy: search, release selection, language and bandwidth tradeoffs, duplicate detection, naming, verification. A server endpoint freezes a policy and cannot ask the user when a tradeoff appears; a skill iterates like documentation. Logic like this will not be merged into the engine, and it will not be merged into the embedded Control Panel either.
+**The skill layer.** Policy: search, scoring, release selection, language and bandwidth tradeoffs, duplicate detection, naming, verification. A server endpoint freezes a policy and cannot ask the user when a tradeoff appears; a skill iterates like documentation. Logic like this will not be merged into the engine, and it will not be merged into the embedded Control Panel either.
 
 **The media server.** Metadata, library scanning, subtitle fetching, playback. Do not build these into the FUSE daemon.
 
@@ -59,12 +59,21 @@ Every PR premise is verified against the actual repository code, not only agains
 
 Review is direct and technical. Expect every claim to be checked, including the ones you are confident about. A PR that conflicts with the scope in this document will be closed with an explanation, even if the code is well written. A fork that diverges in philosophy is fine and welcome under the license: it simply does not set the direction upstream.
 
+This is a single-maintainer project with no SLA: expect days, not hours. If an issue or PR sits without an answer, a ping is fair.
+
 ## Licensing
 
-Tiramisu is licensed under GPL-3.0-only. By submitting a contribution you agree that it is licensed under the same terms. Only submit code you have the right to license, and do not copy code from projects whose license is incompatible with GPL-3.0. Forks are welcome under the same license, but they must keep the LICENSE text and the copyright attribution: stripping either one is a license violation, not a fork.
+Tiramisu is licensed under GPL-3.0-only. By submitting a contribution you agree that it is licensed under the same terms, and you grant the maintainer a perpetual, worldwide, non-exclusive, royalty-free, irrevocable right to relicense it under other terms, including commercial terms.
+
+Only submit code you have the right to license, and do not copy code from projects whose license is incompatible with GPL-3.0. Forks are welcome under the same license, but the GPL requires them to keep the LICENSE text, keep the copyright notices, and state which files they modified and when: stripping any of these is a license violation, not a fork.
+
+## Security
+
+Do not open a public issue for a vulnerability. Use the repository's private vulnerability reporting in the Security tab, so the report stays private until a fix ships.
 
 ## Style
 
 - Public repository text is in English, including commit messages, PR descriptions and release notes.
 - No AI or LLM attribution trailers in commits.
+- Code comments are at most one or two lines, and only document constraints that are not obvious from the code. Historical rationale and discarded alternatives belong in the changelog, never in the code.
 - Run `gofmt` and `go vet` before pushing; the build must be clean.
