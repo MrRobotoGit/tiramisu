@@ -59,6 +59,5 @@ Tiramisu is licensed under GPL-3.0-only. By submitting a contribution you agree 
 ## Style
 
 - Public repository text is in English, including commit messages, PR descriptions and release notes.
-- Commit messages are one line, imperative, no body.
 - No AI or LLM attribution trailers in commits.
 - Run `gofmt` and `go vet` before pushing; the build must be clean.
