@@ -6,7 +6,7 @@ This document explains what fits the project, and what will be closed. Reading i
 
 ## What Tiramisu is not
 
-Tiramisu is not a download manager, not a debrid client, not a media library UI, and not a media player. It is the infrastructure layer between a torrent swarm and a media server. Everything above that layer (library administration, release selection, naming, scoring, tradeoffs, verification) is policy, and policy does not live in this repository: it lives in a versioned agent skill driven by the user's agent of choice.
+Tiramisu is not a download manager, not a debrid client, not a media library UI, and not a media player. It is the infrastructure layer between a torrent swarm and a media server. Everything above that layer (library administration, release selection, naming, tradeoffs) is policy, and policy does not live in this repository: it lives in a versioned agent skill driven by the user's agent of choice.
 
 ## Before you open a pull request
 
