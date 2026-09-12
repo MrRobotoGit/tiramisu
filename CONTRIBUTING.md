@@ -43,6 +43,7 @@ Features removed from the codebase stay removed unless a maintainer asked for th
 Every PR premise is verified against the actual repository code, not only against the file it modifies. Reviewers will check defaults for behavioral impact, test coverage on semantic changes, and alignment with the project's philosophy.
 
 - **Reproduce before you fix.** State the observed behavior, the expected behavior, and how you reproduced both.
+- **Go tests are part of the change.** Behavioral changes and bug fixes come with `*_test.go` coverage: a test that fails without the patch and passes with it. PRs without tests will be asked to add them.
 - **Numbers, not adjectives.** "Faster", "cleaner", "more robust" are not evidence. Show before/after measurements.
 - **One concern per PR.** A coherent thesis, not a bundle of isolated patches. If two changes cannot be justified together, split them.
 - **LLM-assisted contributions are welcome with evidence per premise.** A plausible patch generated without repository context will be asked for verification or closed. Attach what you ran, what you measured, and what you ruled out.
