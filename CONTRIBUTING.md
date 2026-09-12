@@ -25,7 +25,7 @@ Tiramisu is not a download manager, not a debrid client, not a media library UI,
 
 **The engine.** Minimal, stable primitives: torrent add/get/list, FUSE stub creation, blacklist on unlink from the mount, the config API on `:9080`, and the Library API (`add` / `remove` / `list`, raw primitives only). These endpoints exist so clients without filesystem access can do the same operations the mount exposes.
 
-**The skill layer.** Policy: search, scoring, release selection, language and bandwidth tradeoffs, duplicate detection, naming, verification. A server endpoint freezes a policy and cannot ask the user when a tradeoff appears; a skill iterates like documentation. Logic like this will not be merged into the engine, and it will not be merged into the embedded Control Panel either.
+**The skill layer.** Policy: search, release selection, language and bandwidth tradeoffs, duplicate detection, naming, verification. A server endpoint freezes a policy and cannot ask the user when a tradeoff appears; a skill iterates like documentation. Logic like this will not be merged into the engine, and it will not be merged into the embedded Control Panel either.
 
 **The media server.** Metadata, library scanning, subtitle fetching, playback. Do not build these into the FUSE daemon.
 
@@ -61,7 +61,7 @@ Review is direct and technical. Expect every claim to be checked, including the 
 
 ## Licensing
 
-Tiramisu is licensed under GPL-3.0-only. By submitting a contribution you agree that it is licensed under the same terms. Only submit code you have the right to license, and do not copy code from projects whose license is incompatible with GPL-3.0.
+Tiramisu is licensed under GPL-3.0-only. By submitting a contribution you agree that it is licensed under the same terms. Only submit code you have the right to license, and do not copy code from projects whose license is incompatible with GPL-3.0. Forks are welcome under the same license, but they must keep the LICENSE text and the copyright attribution: stripping either one is a license violation, not a fork.
 
 ## Style
 
