@@ -13,6 +13,7 @@ Tiramisu is not a download manager, not a debrid client, not a media library UI,
 - Improvements, bug fixes, data race fixes and optimizations in the FUSE layer and in GoStorm.
 - Agentic autonomy built on the skill: the skill is the base. An MCP server is welcome, but never without a skill and guardrails.
 - Improvements, bug fixes, data race fixes and optimizations in the torrent client layer.
+- Docker: the maintainer does not run Tiramisu in Docker by design, but every improvement to the Docker image is more than welcome.
 
 ## Before you open a pull request
 
