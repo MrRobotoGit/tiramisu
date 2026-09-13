@@ -47,6 +47,13 @@ func (c *LRUCache) Put(key string, value *vfs.Metadata, size int64) {
 	c.getShard(key).Put(key, value, size)
 }
 
+// Delete drops one key. Removing a stub has to evict its metadata here too: the
+// entry otherwise answers lookups by exact path for the whole TTL, so a media
+// server that knows the path still sees a file that is gone.
+func (c *LRUCache) Delete(key string) bool {
+	return c.getShard(key).Delete(key)
+}
+
 func (c *LRUCache) Len() int {
 	total := 0
 	for _, s := range c.shards {
@@ -187,6 +194,17 @@ func (c *simpleLRUCache) Put(key string, value *vfs.Metadata, size int64) {
 	elem := c.order.PushFront(entry)
 	c.items[key] = elem
 	c.currentSize += size
+}
+
+func (c *simpleLRUCache) Delete(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	elem, ok := c.items[key]
+	if !ok {
+		return false
+	}
+	c.removeElement(elem)
+	return true
 }
 
 func (c *simpleLRUCache) removeElement(elem *list.Element) {

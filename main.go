@@ -799,6 +799,11 @@ func invalidateSyncRemovedPath(path string) {
 		forceCloseVirtualFile(path)
 		registry.RemoveFromRegistry(path)
 	}
+	// The directory listing is not the only way back to a removed stub: a lookup by
+	// exact path is served from the metadata cache, which holds entries for 24h.
+	if metaCache != nil {
+		metaCache.Delete(path)
+	}
 	globalDirCache.Delete(filepath.Dir(path))
 	// Covers removed directories too (empty season/show dir cleanup).
 	globalDirCache.Delete(path)
