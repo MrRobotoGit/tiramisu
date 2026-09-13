@@ -22,6 +22,7 @@ import (
 	"tiramisu/internal/catalog/torrentio"
 	"tiramisu/internal/config"
 	"tiramisu/internal/library"
+	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -55,6 +56,12 @@ type MovieGoEngine struct {
 
 	blacklist     BlacklistData
 	blacklistFile string
+
+	db *metadb.DB
+	// deadTitles holds the IMDB ids whose current release stopped resolving its
+	// metadata. They are re-searched this run, and dropped only if nothing live
+	// turns up.
+	deadTitles map[string]bool
 
 	invalidatePath func(string)
 
@@ -98,6 +105,7 @@ type MovieEngineConfig struct {
 	StateDir        string
 	LogsDir         string
 	ProwlarrCfg     prowlarr.ConfigProwlarr
+	DB              *metadb.DB
 	Language        config.LanguageConfig
 	Weights         config.MovieWeights
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
@@ -112,11 +120,15 @@ const (
 	mMovieMetadataWait   = 12
 	mMovie4KMetadataWait = 45
 	noMKVCacheTTL        = 12 * time.Hour
-	noStreamsCacheTTL    = 24 * time.Hour
-	recheckCacheTTL      = 48 * time.Hour
-	recheck1080pTTL      = 6 * time.Hour
-	recheckNoFileTTL     = 24 * time.Hour
-	addFailCacheTTL      = 168 * time.Hour
+	// deadReleaseFailures/deadReleaseSpan: what tells a dead swarm from a bad
+	// evening is failures spread over time, not how many arrived together.
+	deadReleaseFailures = 3
+	deadReleaseSpan     = 24 * time.Hour
+	noStreamsCacheTTL   = 24 * time.Hour
+	recheckCacheTTL     = 48 * time.Hour
+	recheck1080pTTL     = 6 * time.Hour
+	recheckNoFileTTL    = 24 * time.Hour
+	addFailCacheTTL     = 168 * time.Hour
 )
 
 var (
@@ -188,6 +200,8 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 	e.addFailCache = e.loadCache(e.addFailCFile)
 	e.imdbCache = e.loadIMDBCache(e.imdbCFile)
 	e.blacklist = e.loadBlacklist()
+	e.db = cfg.DB
+	e.deadTitles = make(map[string]bool)
 
 	e.pruneExpiredCaches()
 
@@ -202,11 +216,67 @@ func (e *MovieGoEngine) removeStub(ctx context.Context, path, hash string) {
 		if err := e.gostorm.RemoveTorrent(ctx, hash); err != nil {
 			e.logger.Printf("[MovieSync] WARNING: failed to remove torrent %s for %s: %v", hash, filepath.Base(path), err)
 		}
+		// The failure counter outlives the release otherwise: if this hash is ever
+		// selected again, a stale count already past the threshold would condemn it
+		// before it has had a chance to fail.
+		if e.db != nil {
+			if err := e.db.ClearMetadataFailure(hash); err != nil {
+				e.logger.Printf("[MovieSync] WARNING: failed to clear metadata failures for %s: %v", hash, err)
+			}
+		}
 	}
 	os.Remove(path)
 	if e.invalidatePath != nil {
 		e.invalidatePath(path)
 	}
+}
+
+// flagDeadTitles marks the titles whose release stopped answering with its
+// metadata, so this run re-searches them instead of skipping them as already
+// present. The engine counts the failures; the threshold lives here because
+// what to do with a dead release is a library decision, not an engine one.
+//
+// The failing hash goes into noMKVCache, which the candidate loop already
+// consults: that keeps the dead release out of this run's selection without a
+// second writer for blacklist.json, which the mount's unlink handler owns.
+func (e *MovieGoEngine) flagDeadTitles(existingIndex map[string]movieFile) {
+	if e.db == nil {
+		return
+	}
+	dead, err := e.db.MetadataFailuresOver(deadReleaseFailures, deadReleaseSpan)
+	if err != nil {
+		e.logger.Printf("[MovieSync] WARNING: could not read metadata failures: %v", err)
+		return
+	}
+	if len(dead) == 0 {
+		return
+	}
+	deadSet := make(map[string]bool, len(dead))
+	for _, h := range dead {
+		deadSet[strings.ToLower(h)] = true
+	}
+	for imdbID, mf := range existingIndex {
+		if mf.hash == "" || !deadSet[strings.ToLower(mf.hash)] {
+			continue
+		}
+		e.deadTitles[imdbID] = true
+		e.setCache(e.noMKVCache, mf.hash, CacheEntry{Reason: "dead_swarm", TS: time.Now().Unix()})
+		delete(e.recheckCache, imdbID)
+		e.logger.Printf("[MovieSync] Dead release for %s (%s): re-searching", filepath.Base(mf.path), mf.hash[:8])
+	}
+}
+
+// dropDeadStub removes the stub of a title flagged dead once this run has
+// established there is nothing live to replace it with. A search that failed to
+// complete never gets here: it says nothing about the title.
+func (e *MovieGoEngine) dropDeadStub(ctx context.Context, imdbID string, existing movieFile) bool {
+	if !e.deadTitles[imdbID] || existing.path == "" {
+		return false
+	}
+	e.logger.Printf("[MovieSync] No live release for %s: removing dead stub", filepath.Base(existing.path))
+	e.removeStub(ctx, existing.path, existing.hash)
+	delete(e.deadTitles, imdbID)
+	return true
 }
 
 func (e *MovieGoEngine) Name() string { return "movies" }
@@ -221,6 +291,8 @@ func (e *MovieGoEngine) Run(ctx context.Context) error {
 
 	existingIndex, diskHashes := e.buildExistingMovieIndex()
 	e.logger.Printf("[MovieSync] Existing index: %d movies, %d hashes on disk", len(existingIndex), len(diskHashes))
+
+	e.flagDeadTitles(existingIndex)
 
 	created := 0
 	for i, m := range movies {
@@ -439,6 +511,7 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		return false
 	}
 	if len(candidates) == 0 {
+		e.dropDeadStub(ctx, imdbID, existing)
 		if hadRaw {
 			e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_valid_stream", TS: time.Now().Unix()})
 		} else {
@@ -522,6 +595,11 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 
 		e.gostorm.RemoveTorrent(ctx, hash)
 	}
+
+	// Every candidate was exhausted without a live one: the stub points at a swarm
+	// that cannot serve it. A live candidate would have returned above through the
+	// ordinary upgrade path.
+	e.dropDeadStub(ctx, imdbID, existing)
 
 	e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_better_stream", TS: time.Now().Unix()})
 	return false

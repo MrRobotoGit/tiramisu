@@ -4090,6 +4090,21 @@ func main() {
 					torrent.V304LoadBans(ips)
 					logger.Printf("[V304] Restored %d persisted peer bans", len(ips))
 				}
+				// Metadata resolution outcomes: the sync engines read the counter to
+				// tell a dead swarm from a slow one before dropping a title.
+				failDB := stateDB
+				native.MetadataOutcome = func(hash string, resolved bool) {
+					var err error
+					if resolved {
+						err = failDB.ClearMetadataFailure(hash)
+					} else {
+						err = failDB.RecordMetadataFailure(hash)
+					}
+					if err != nil {
+						logger.Printf("WARNING: metadata failure bookkeeping for %s: %v", hash, err)
+					}
+				}
+
 				banDB := stateDB
 				torrent.V304SetOnBan(func(ip string) {
 					if err := banDB.SaveV304Ban(ip); err != nil {
@@ -4455,6 +4470,7 @@ func main() {
 				Language:        gc().Language,
 				QualityScoring:  gc().QualityScoringConfig,
 				InvalidatePath:  invalidateSyncRemovedPath,
+				DB:              stateDB,
 			}),
 			"tv": engines.NewTVSyncer(engines.TVSyncerConfig{
 				GoStormURL:      gc().GoStormBaseURL,

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"tiramisu/internal/config"
+	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -33,6 +34,8 @@ type MoviesSyncerConfig struct {
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
+	// DB is optional: without it the engine simply never reaps dead releases.
+	DB *metadb.DB
 }
 
 // NewMoviesSyncer creates a new Go-based movie syncer.
@@ -68,6 +71,7 @@ func NewMoviesSyncer(cfg MoviesSyncerConfig) *MoviesSyncer {
 		Language:        cfg.Language,
 		Weights:         cfg.QualityScoring.MovieWeights(),
 		InvalidatePath:  cfg.InvalidatePath,
+		DB:              cfg.DB,
 	}
 
 	return &MoviesSyncer{

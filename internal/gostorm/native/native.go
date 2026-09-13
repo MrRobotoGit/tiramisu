@@ -41,6 +41,11 @@ func NewNativeClient() *NativeClient {
 	}
 }
 
+// MetadataOutcome reports each resolution the bridge had to wait for: true when
+// the swarm answered, false on timeout. Injected by main so this package stays
+// unaware of the state DB; nil when no DB is wired.
+var MetadataOutcome func(hash string, resolved bool)
+
 // Wake triggers the start of a torrent (Ghost -> Active) entirely in-memory
 // Synchronous & Deduplicated.
 func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
@@ -93,9 +98,15 @@ func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
 
 			select {
 			case <-t.Torrent.GotInfo():
-				// Metadata ready — fall through to log below
+				// One answer is enough to call the swarm alive again.
+				if MetadataOutcome != nil {
+					MetadataOutcome(hash, true)
+				}
 			case <-timer.C:
 				log.Printf("[NativeBridge] Metadata timeout for %s", hash)
+				if MetadataOutcome != nil {
+					MetadataOutcome(hash, false)
+				}
 				return fmt.Errorf("torrent metadata timeout (45s): %s", hash)
 			}
 		}

@@ -148,6 +148,13 @@ CREATE TABLE IF NOT EXISTS v304_bans (
     ip        TEXT PRIMARY KEY,
     banned_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS metadata_failures (
+    hash       TEXT PRIMARY KEY,
+    fail_count INTEGER NOT NULL DEFAULT 0,
+    first_fail INTEGER NOT NULL,
+    last_fail  INTEGER NOT NULL
+);
 `
 	_, err := d.db.Exec(schema)
 	if err != nil {
@@ -158,5 +165,9 @@ CREATE TABLE IF NOT EXISTS v304_bans (
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'initial schema')`)
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (2, 'add playback_states table')`)
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (3, 'add v304_bans table')`)
+	// 4 is taken on installations that ran the V754 webhook-position build, so this
+	// lands on 5: INSERT OR IGNORE would otherwise drop it there and leave the
+	// registry claiming two different things for the same version.
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (5, 'add metadata_failures table')`)
 	return nil
 }
