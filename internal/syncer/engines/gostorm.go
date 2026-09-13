@@ -46,11 +46,22 @@ type FileStat = library.FileStat
 
 // AddTorrent adds a magnet URL to GoStorm via POST /torrents {"action":"add"}.
 // Returns the 40-char info hash or empty string on failure.
+// AddTorrent adds a torrent and returns its hash. It hides whether the engine
+// echoed the hash back; callers that must not mistake an unacknowledged add for a
+// statement about the swarm should use AddTorrentConfirmed.
 func (c *GoStormClient) AddTorrent(ctx context.Context, magnet, title string) (string, error) {
+	hash, _, err := c.AddTorrentConfirmed(ctx, magnet, title)
+	return hash, err
+}
+
+// AddTorrentConfirmed reports confirmed=false when the engine answered 2xx without
+// echoing a hash: the torrent may never have been taken, so its later silence says
+// nothing about the release.
+func (c *GoStormClient) AddTorrentConfirmed(ctx context.Context, magnet, title string) (string, bool, error) {
 	m := regexp.MustCompile(`xt=urn:btih:([a-fA-F0-9]{32,40})`)
 	match := m.FindStringSubmatch(magnet)
 	if len(match) < 2 {
-		return "", fmt.Errorf("cannot extract hash from magnet")
+		return "", false, fmt.Errorf("cannot extract hash from magnet")
 	}
 	hash := strings.ToLower(match[1])
 
@@ -62,24 +73,24 @@ func (c *GoStormClient) AddTorrent(ctx context.Context, magnet, title string) (s
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/torrents", bytes.NewReader(data))
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("gostorm error %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 120)]))
+		return "", false, fmt.Errorf("gostorm error %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 120)]))
 	}
 
 	// Response contains the torrent object with hash
@@ -87,10 +98,12 @@ func (c *GoStormClient) AddTorrent(ctx context.Context, magnet, title string) (s
 		Hash string `json:"hash"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.Hash != "" {
-		return strings.ToLower(result.Hash), nil
+		return strings.ToLower(result.Hash), true, nil
 	}
 
-	return hash, nil
+	// 2xx with nothing usable in the body: the hash is the one we sent, not one the
+	// engine acknowledged.
+	return hash, false, nil
 }
 
 // GetTorrentInfo polls GoStorm until file_stats appear.

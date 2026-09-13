@@ -72,14 +72,22 @@ func (c *Client) FetchTorrents(imdbID, contentType, title string, year int, seas
 // pays for candidates that are thrown away moments later. A nil keep behaves exactly
 // like FetchTorrents.
 func (c *Client) FetchTorrentsFiltered(imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, error) {
+	streams, _, err := c.FetchTorrentsStatus(imdbID, contentType, title, year, keep, seasons...)
+	return streams, err
+}
+
+// FetchTorrentsStatus is FetchTorrentsFiltered with the search's own health reported
+// back: complete is false when some queries failed while others answered. The streams
+// are still usable, but "nothing found" cannot be read as "nothing exists".
+func (c *Client) FetchTorrentsStatus(imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, bool, error) {
 	if c == nil {
-		return []Stream{}, nil
+		return []Stream{}, true, nil
 	}
-	results, err := c.fetchFromProwlarr(imdbID, contentType, title, year, seasons...)
+	results, partial, err := c.fetchFromProwlarrStatus(imdbID, contentType, title, year, seasons...)
 	if err != nil {
-		return []Stream{}, err
+		return []Stream{}, false, err
 	}
-	return c.mapToStremioFiltered(results, keep), nil
+	return c.mapToStremioFiltered(results, keep), !partial, nil
 }
 
 // fetchFromProwlarr executes an API query using the IMDb ID and merges results by infoHash.
@@ -88,6 +96,13 @@ func (c *Client) FetchTorrentsFiltered(imdbID, contentType, title string, year i
 // single "Title Year" keyword query is added (e.g. "Gone 2026"), since indexers without
 // IMDb-ID search (1337x, etc.) otherwise never contribute movie results at all.
 func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, seasons ...int) ([]ProwlarrResult, error) {
+	res, _, err := c.fetchFromProwlarrStatus(imdbID, contentType, title, year, seasons...)
+	return res, err
+}
+
+// fetchFromProwlarrStatus reports partial=true when at least one query failed while
+// another answered: the merged results are usable, but incomplete.
+func (c *Client) fetchFromProwlarrStatus(imdbID, contentType, title string, year int, seasons ...int) ([]ProwlarrResult, bool, error) {
 	prowlarrType := "movie"
 	if contentType == "series" {
 		prowlarrType = "tvsearch"
@@ -157,10 +172,11 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, 
 			lastErr = r.err
 		}
 	}
-	// Only a total failure is reported: as long as one query answered, the search ran and
-	// an empty result genuinely means "nothing found".
+	// A total failure is an error; a partial one still returns its results, but the
+	// caller is told the search was incomplete so "nothing found" is not mistaken for
+	// "nothing exists".
 	if failures == len(queries) {
-		return nil, fmt.Errorf("all %d Prowlarr queries failed: %w", failures, lastErr)
+		return nil, false, fmt.Errorf("all %d Prowlarr queries failed: %w", failures, lastErr)
 	}
 
 	// Merge deduplicating by infoHash when available, or by guid for no-hash results.
@@ -185,7 +201,7 @@ func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, 
 			merged = append(merged, r)
 		}
 	}
-	return merged, nil
+	return merged, failures > 0, nil
 }
 
 // queryCtx executes a single Prowlarr API GET request, respecting context cancellation.

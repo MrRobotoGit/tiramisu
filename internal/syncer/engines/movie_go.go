@@ -149,14 +149,17 @@ var (
 	reMStereo = regexp.MustCompile(`(?i)stereo|aac|mp3|2\.0`)
 	// Same rule as library.BuildMovieFilename: no separator required before the word,
 	// so "BDRemux" and "UHDRemux" count as the remux they are.
-	reMRemux    = regexp.MustCompile(`(?i)remux(?:$|[^A-Za-z0-9])`)
-	reMGarbage  = regexp.MustCompile(`(?i)camrip|hdcam|hdts|telesync|\bts\b|telecine|\btc\b|\bscr\b|screener|webscreener`)
-	reMSeeders  = regexp.MustCompile(`👤\s*(\d+)`)
-	reMHashURL  = regexp.MustCompile(`link=([a-f0-9]{40})`)
-	reMMKVHash8 = regexp.MustCompile(`_([a-f0-9]{8})\.mkv$`)
-	reMYear     = regexp.MustCompile(`[._]((?:19|20)\d{2})[._]`)
-	reMNonWord  = regexp.MustCompile(`[^a-z0-9]`)
-	reMQuality  = regexp.MustCompile(`(?i)(2160p|1080p|720p|4k|uhd)`)
+	reMRemux   = regexp.MustCompile(`(?i)remux(?:$|[^A-Za-z0-9])`)
+	reMGarbage = regexp.MustCompile(`(?i)camrip|hdcam|hdts|telesync|\bts\b|telecine|\btc\b|\bscr\b|screener|webscreener`)
+	reMSeeders = regexp.MustCompile(`👤\s*(\d+)`)
+	// reQualityMarker: where a stub filename stops being the title and starts being
+	// release metadata.
+	reQualityMarker = regexp.MustCompile(`(?i)^(2160p|1080p|720p|480p|4k|uhd|hdr|dv|atmos|remux|bluray|web|webrip|web-dl|hevc|x264|x265|multi|ita|eng|\d+\.\d+)$`)
+	reMHashURL      = regexp.MustCompile(`link=([a-f0-9]{40})`)
+	reMMKVHash8     = regexp.MustCompile(`_([a-f0-9]{8})\.mkv$`)
+	reMYear         = regexp.MustCompile(`[._]((?:19|20)\d{2})[._]`)
+	reMNonWord      = regexp.MustCompile(`[^a-z0-9]`)
+	reMQuality      = regexp.MustCompile(`(?i)(2160p|1080p|720p|4k|uhd)`)
 )
 
 // NewMovieGoEngine creates a new Go movie sync engine.
@@ -246,6 +249,11 @@ func (e *MovieGoEngine) removeStub(ctx context.Context, path, hash string) {
 // consults: that keeps the dead release out of this run's selection without a
 // second writer for blacklist.json, which the mount's unlink handler owns.
 func (e *MovieGoEngine) flagDeadTitles(existingIndex map[string]movieFile) {
+	// Rebuilt every run, before the DB guard: a flag is a decision about this pass,
+	// and carrying it over would let a later run act on a title whose release has
+	// since been replaced.
+	e.deadTitles = make(map[string]bool)
+
 	if e.db == nil {
 		return
 	}
@@ -292,6 +300,65 @@ func (e *MovieGoEngine) dropDeadStub(ctx context.Context, imdbID string, existin
 	return true
 }
 
+// reapFlaggedTitles gives the titles still flagged at the end of a run their own
+// pass. Discovery only returns the last six months plus what is trending, so an
+// aging library would otherwise collect flags that are never acted on: neither
+// re-searched nor removed.
+func (e *MovieGoEngine) reapFlaggedTitles(ctx context.Context, existingIndex map[string]movieFile, diskHashes map[string]bool) {
+	if len(e.deadTitles) == 0 {
+		return
+	}
+	pending := make([]string, 0, len(e.deadTitles))
+	for imdbID := range e.deadTitles {
+		pending = append(pending, imdbID)
+	}
+	sort.Strings(pending) // deterministic order, so a run is reproducible from the log
+	for _, imdbID := range pending {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		existing := existingIndex[imdbID]
+		if existing.path == "" {
+			continue
+		}
+		title, year := titleFromStubName(filepath.Base(existing.path))
+		if title == "" {
+			continue
+		}
+		e.logger.Printf("[MovieSync] Dead release outside discovery: evaluating %s (%s)", title, imdbID)
+		e.evaluateTitle(ctx, imdbID, title, strconv.Itoa(year), year, existing, diskHashes)
+		time.Sleep(mMovieProcessSleep)
+	}
+}
+
+// titleFromStubName recovers a searchable title and year from a stub filename. The
+// name is built from the title plus quality markers and an 8-char hash, so cutting
+// at the first marker is enough; the IMDB id carries the search either way, and this
+// only feeds the secondary title query.
+func titleFromStubName(name string) (string, int) {
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	if i := strings.LastIndex(base, "_"); i > 0 && len(base)-i == 9 {
+		base = base[:i] // drop the trailing _hash8
+	}
+	sep := func(r rune) bool { return r == '_' || r == '.' || r == ' ' }
+	parts := strings.FieldsFunc(base, sep)
+	var words []string
+	year := 0
+	for _, p := range parts {
+		if n, err := strconv.Atoi(p); err == nil && n >= 1900 && n <= 2100 {
+			year = n
+			break // everything past the year is release metadata
+		}
+		if reQualityMarker.MatchString(p) {
+			break
+		}
+		words = append(words, p)
+	}
+	return strings.Join(words, " "), year
+}
+
 func (e *MovieGoEngine) Name() string { return "movies" }
 
 func (e *MovieGoEngine) Run(ctx context.Context) error {
@@ -321,6 +388,8 @@ func (e *MovieGoEngine) Run(ctx context.Context) error {
 		}
 		time.Sleep(mMovieProcessSleep)
 	}
+
+	e.reapFlaggedTitles(ctx, existingIndex, diskHashes)
 
 	e.logger.Printf("[MovieSync] Processing complete: %d created out of %d discovered", created, len(movies))
 	e.saveAllCaches()
@@ -487,9 +556,20 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		return false
 	}
 
+	year := 0
+	if len(movie.ReleaseDate) >= 4 {
+		year, _ = strconv.Atoi(movie.ReleaseDate[:4])
+	}
+	return e.evaluateTitle(ctx, imdbID, title, movie.ReleaseDate, year, existingIndex[imdbID], diskHashes)
+}
+
+// evaluateTitle runs the candidate search for one title and acts on the result. It is
+// separate from processMovie so a title the discovery feed never returns - anything
+// older than the six-month window - can still be reached, which is the only way the
+// reaper sees an aging library.
+func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releaseDate string, year int, existing movieFile, diskHashes map[string]bool) bool {
 	// TTL recheck upgrade-aware: 1080p esistente → 6h (cerca upgrade 4K),
 	// 4K esistente → 48h, nessun file → 24h.
-	existing := existingIndex[imdbID]
 	recheckTTL := recheckNoFileTTL
 	if existing.path != "" {
 		if existing.is4K {
@@ -512,10 +592,6 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 
 	// Get streams
 	e.logger.Printf("[MovieSync] Processing: %s (%s)", title, imdbID)
-	year := 0
-	if len(movie.ReleaseDate) >= 4 {
-		year, _ = strconv.Atoi(movie.ReleaseDate[:4])
-	}
 	candidates, search, err := e.getMovieStreams(ctx, imdbID, title, year)
 	if err != nil {
 		// A search that never completed says nothing about the title. Caching it would
@@ -561,9 +637,10 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		}
 
 		magnet := BuildMagnet(c.Hash, title, DefaultTrackers())
-		hash, err := e.gostorm.AddTorrent(ctx, magnet, title)
-		if err != nil || hash == "" {
-			// The engine refused the release: nothing was learned about the swarm.
+		hash, confirmed, err := e.gostorm.AddTorrentConfirmed(ctx, magnet, title)
+		if err != nil || hash == "" || !confirmed {
+			// The engine refused the release, or answered without acknowledging it:
+			// either way nothing was learned about the swarm.
 			addFailed = true
 			e.setCache(e.addFailCache, imdbID, CacheEntry{Title: title, Reason: "add_failed", TS: time.Now().Unix()})
 			continue
@@ -601,7 +678,7 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 			e.removeStub(ctx, existingPath, existing.hash)
 		}
 
-		filename := e.buildMovieFilename(title, movie.ReleaseDate, c)
+		filename := e.buildMovieFilename(title, releaseDate, c)
 		mkvPath := filepath.Join(e.moviesDir, filename)
 		streamURL := fmt.Sprintf("%s/stream?link=%s&index=%d&play", e.gostorm.baseURL, hash, bestFile.ID)
 
@@ -610,6 +687,9 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 			if !c.Is4K {
 				res = "1080p"
 			}
+			// The title has a live release again: the flag must not survive, or a later
+			// run with no candidates would drop the replacement we just created.
+			delete(e.deadTitles, imdbID)
 			e.logger.Printf("[MovieSync] Created: %s (%s, %.1fGB, score:%d)", filename, res, float64(bestFile.Length)/1024/1024/1024, c.QualityScore)
 			e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "processed", TS: time.Now().Unix()})
 			return true
@@ -665,11 +745,16 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 			ms, _ := e.classifyMovieStream(s)
 			return ms != nil
 		}
-		ps, err := e.prowlarr.FetchTorrentsFiltered(imdbID, "movie", title, year, keep)
+		ps, complete, err := e.prowlarr.FetchTorrentsStatus(imdbID, "movie", title, year, keep)
 		if err != nil {
 			e.logger.Printf("[MovieSync] Prowlarr search failed: %v", err)
 		} else {
-			prowlarrOK = true
+			// Partial answers still feed the candidate list, but they cannot make the
+			// search complete: some of Prowlarr's own queries never ran.
+			if !complete {
+				e.logger.Printf("[MovieSync] Prowlarr answered partially for %s: search is not conclusive", imdbID)
+			}
+			prowlarrOK = complete
 			streams = append(streams, ps...)
 		}
 	} else {
