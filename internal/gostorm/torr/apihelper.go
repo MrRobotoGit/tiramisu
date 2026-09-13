@@ -15,6 +15,7 @@ import (
 
 	"tiramisu/internal/gostorm/log"
 	sets "tiramisu/internal/gostorm/settings"
+	"tiramisu/internal/gostorm/torr/utils"
 )
 
 // saveDebounce prevents redundant BoltDB writes for the same torrent.
@@ -466,6 +467,8 @@ func dropAllTorrent() {
 }
 
 func Shutdown() {
+	utils.StopTrackerLoader()
+
 	btsMu.Lock()
 	bts.Disconnect()
 	btsMu.Unlock()
