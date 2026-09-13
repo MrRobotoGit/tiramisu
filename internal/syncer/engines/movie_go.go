@@ -113,13 +113,19 @@ type MovieEngineConfig struct {
 	InvalidatePath func(string)
 }
 
-// Movie thresholds
-const (
-	mMovieUpgradePct     = 1.1
-	mMovieProcessSleep   = 1 * time.Second
+// mMovieMetadataWait/mMovie4KMetadataWait are how long a candidate is given to
+// produce its metadata. Vars, not consts, so a test can exercise the timeout path
+// without waiting on the wall clock.
+var (
 	mMovieMetadataWait   = 12
 	mMovie4KMetadataWait = 45
-	noMKVCacheTTL        = 12 * time.Hour
+)
+
+// Movie thresholds
+const (
+	mMovieUpgradePct   = 1.1
+	mMovieProcessSleep = 1 * time.Second
+	noMKVCacheTTL      = 12 * time.Hour
 	// deadReleaseFailures/deadReleaseSpan: what tells a dead swarm from a bad
 	// evening is failures spread over time, not how many arrived together.
 	deadReleaseFailures = 3
@@ -269,11 +275,18 @@ func (e *MovieGoEngine) flagDeadTitles(existingIndex map[string]movieFile) {
 // dropDeadStub removes the stub of a title flagged dead once this run has
 // established there is nothing live to replace it with. A search that failed to
 // complete never gets here: it says nothing about the title.
-func (e *MovieGoEngine) dropDeadStub(ctx context.Context, imdbID string, existing movieFile) bool {
+func (e *MovieGoEngine) dropDeadStub(ctx context.Context, imdbID string, existing movieFile, conclusive, rawSeen bool) bool {
 	if !e.deadTitles[imdbID] || existing.path == "" {
 		return false
 	}
-	e.logger.Printf("[MovieSync] No live release for %s: removing dead stub", filepath.Base(existing.path))
+	// Only a run that actually reached the swarm may condemn a title. An aborted
+	// run, or one where candidates failed to be added at all, says nothing: without
+	// this an indexer outage would empty the library in a single pass.
+	if !conclusive || ctx.Err() != nil {
+		e.logger.Printf("[MovieSync] Dead release for %s: search was inconclusive, keeping the stub", filepath.Base(existing.path))
+		return false
+	}
+	e.logger.Printf("[MovieSync] No live release for %s (raw releases seen: %t): removing dead stub", filepath.Base(existing.path), rawSeen)
 	e.removeStub(ctx, existing.path, existing.hash)
 	delete(e.deadTitles, imdbID)
 	return true
@@ -503,7 +516,7 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 	if len(movie.ReleaseDate) >= 4 {
 		year, _ = strconv.Atoi(movie.ReleaseDate[:4])
 	}
-	candidates, hadRaw, err := e.getMovieStreams(ctx, imdbID, title, year)
+	candidates, search, err := e.getMovieStreams(ctx, imdbID, title, year)
 	if err != nil {
 		// A search that never completed says nothing about the title. Caching it would
 		// hide the film for a day over a transient indexer timeout.
@@ -511,8 +524,11 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		return false
 	}
 	if len(candidates) == 0 {
-		e.dropDeadStub(ctx, imdbID, existing)
-		if hadRaw {
+		// Completeness is what matters, not whether releases came back: every indexer
+		// answering with nothing usable is a statement about the title, while one
+		// indexer down is a statement about the search.
+		e.dropDeadStub(ctx, imdbID, existing, search.Complete, search.HadRaw)
+		if search.HadRaw {
 			e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_valid_stream", TS: time.Now().Unix()})
 		} else {
 			e.setCache(e.noStreamsCache, imdbID, CacheEntry{Title: title, TS: time.Now().Unix()})
@@ -524,6 +540,10 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 	// Check if we already have this movie
 	existingPath := existing.path
 	existingScore := existing.score
+
+	// addFailed marks candidates the engine could not even take: their silence is
+	// about us, not about the swarm, so the title must not be condemned for it.
+	addFailed := false
 
 	// Try candidates
 	for _, c := range candidates {
@@ -543,6 +563,8 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 		magnet := BuildMagnet(c.Hash, title, DefaultTrackers())
 		hash, err := e.gostorm.AddTorrent(ctx, magnet, title)
 		if err != nil || hash == "" {
+			// The engine refused the release: nothing was learned about the swarm.
+			addFailed = true
 			e.setCache(e.addFailCache, imdbID, CacheEntry{Title: title, Reason: "add_failed", TS: time.Now().Unix()})
 			continue
 		}
@@ -599,7 +621,7 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 	// Every candidate was exhausted without a live one: the stub points at a swarm
 	// that cannot serve it. A live candidate would have returned above through the
 	// ordinary upgrade path.
-	e.dropDeadStub(ctx, imdbID, existing)
+	e.dropDeadStub(ctx, imdbID, existing, !addFailed && search.Complete, search.HadRaw)
 
 	e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_better_stream", TS: time.Now().Unix()})
 	return false
@@ -620,7 +642,16 @@ type MovieStream struct {
 //
 // The error return means no search completed. It must stay distinct from "searched and found
 // nothing", because the caller caches the latter for a day.
-func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title string, year int) ([]MovieStream, bool, error) {
+// streamSearch says what a search run actually established. HadRaw means releases
+// came back at all; Complete means every configured indexer answered. Condemning a
+// title needs Complete: with one indexer down, "no valid release" is a statement
+// about the search, not about the title.
+type streamSearch struct {
+	HadRaw   bool
+	Complete bool
+}
+
+func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title string, year int) ([]MovieStream, streamSearch, error) {
 	var streams []prowlarr.Stream
 	prowlarrOK, torrentioOK := false, false
 
@@ -661,11 +692,14 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 	}
 
 	if !prowlarrOK && !torrentioOK {
-		return nil, false, fmt.Errorf("every indexer search failed for %s", imdbID)
+		return nil, streamSearch{}, fmt.Errorf("every indexer search failed for %s", imdbID)
 	}
 
 	streams = dedupStreamsByHash(streams)
-	return e.filterMovieStreams(streams), len(streams) > 0, nil
+	return e.filterMovieStreams(streams), streamSearch{
+		HadRaw:   len(streams) > 0,
+		Complete: prowlarrOK && torrentioOK,
+	}, nil
 }
 
 // dedupStreamsByHash keeps the first occurrence of each infohash: the two indexers list the

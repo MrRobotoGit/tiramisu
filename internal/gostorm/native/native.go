@@ -98,10 +98,6 @@ func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
 
 			select {
 			case <-t.Torrent.GotInfo():
-				// One answer is enough to call the swarm alive again.
-				if MetadataOutcome != nil {
-					MetadataOutcome(hash, true)
-				}
 			case <-timer.C:
 				log.Printf("[NativeBridge] Metadata timeout for %s", hash)
 				if MetadataOutcome != nil {
@@ -114,6 +110,12 @@ func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
 		if t.Torrent != nil {
 			if info := t.Torrent.Info(); info != nil {
 				pieceLenKB = int(info.PieceLength) / 1024
+				// Reported here, not inside the wait above: a torrent that recovered
+				// arrives with its metadata already in hand and would never clear the
+				// failures it collected while the swarm was down.
+				if MetadataOutcome != nil {
+					MetadataOutcome(hash, true)
+				}
 			}
 		}
 		log.Printf("[NativeBridge] Metadata ready for %s (piece=%dKB)", hash, pieceLenKB)

@@ -843,6 +843,11 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 
 	registry.RemoveFromRegistry(fullPath)
 	globalDirCache.Delete(d.physicalPath)
+	// Same reason as the sync removal path: a lookup by exact path is answered from
+	// the metadata cache, which would keep serving this file for the whole TTL.
+	if metaCache != nil {
+		metaCache.Delete(fullPath)
+	}
 
 	logger.Printf("UNLINK COMPLETE: file deleted successfully")
 	return 0
@@ -4101,6 +4106,11 @@ func main() {
 				native.MetadataOutcome = func(hash string, resolved bool) {
 					var err error
 					if resolved {
+						// Success is the common case: read first so the usual Open costs a
+						// lookup instead of a write transaction.
+						if n, qerr := failDB.MetadataFailureCount(hash); qerr != nil || n == 0 {
+							return
+						}
 						err = failDB.ClearMetadataFailure(hash)
 					} else {
 						err = failDB.RecordMetadataFailure(hash)
