@@ -204,13 +204,13 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 		weights: cfg.Weights,
 	}
 
-	e.noMKVCache = e.loadCache(e.noMKVCFile)
+	e.db = cfg.DB
+	e.noMKVCache = e.loadNoMKVCache()
 	e.noStreamsCache = e.loadCache(e.noStreamsCFile)
 	e.recheckCache = e.loadCache(e.recheckCFile)
 	e.addFailCache = e.loadCache(e.addFailCFile)
 	e.imdbCache = e.loadIMDBCache(e.imdbCFile)
 	e.blacklist = e.loadBlacklist()
-	e.db = cfg.DB
 	e.deadTitles = make(map[string]bool)
 
 	e.pruneExpiredCaches()
@@ -381,6 +381,11 @@ func titleFromStubName(name string) (string, int) {
 func (e *MovieGoEngine) Name() string { return "movies" }
 
 func (e *MovieGoEngine) Run(ctx context.Context) error {
+	// Deferred so an early return still persists what the run learned about dead
+	// candidates. The nominal path saves before the closing phases too: this is the
+	// backstop, not the only write.
+	defer e.saveAllCaches()
+
 	e.logger.Printf("[MovieSync] Starting discovery...")
 	movies, err := e.discoverMovies(ctx)
 	if err != nil {
@@ -411,6 +416,8 @@ func (e *MovieGoEngine) Run(ctx context.Context) error {
 	e.reapFlaggedTitles(ctx, existingIndex, diskHashes)
 
 	e.logger.Printf("[MovieSync] Processing complete: %d created out of %d discovered", created, len(movies))
+	// Saved here, and again by the deferred call: what the run learned is on disk
+	// before the long rehydrate/cleanup phases, which a SIGKILL would cut through.
 	e.saveAllCaches()
 	e.rehydrateMissingTorrents(ctx)
 	e.cleanupOrphanedFiles(ctx)
@@ -1246,11 +1253,7 @@ func (e *MovieGoEngine) pruneExpiredCaches() {
 }
 
 func (e *MovieGoEngine) saveAllCaches() {
-	// no_mkv_hashes.json is managed by SQLite after migration — skip if .migrated exists
-	// to avoid triggering the DB crash-recovery wipe on next restart.
-	if !isMigratedFile(e.noMKVCFile) {
-		e.saveCache(e.noMKVCFile, e.noMKVCache)
-	}
+	e.saveNoMKVCache()
 	e.saveCache(e.noStreamsCFile, e.noStreamsCache)
 	e.saveCache(e.recheckCFile, e.recheckCache)
 	e.saveCache(e.addFailCFile, e.addFailCache)
@@ -1262,6 +1265,61 @@ func (e *MovieGoEngine) saveAllCaches() {
 func isMigratedFile(path string) bool {
 	_, err := os.Stat(path + ".migrated")
 	return err == nil
+}
+
+// loadNoMKVCache reads the hashes to skip from the state DB, falling back to the
+// legacy JSON when there is no DB. Without it the cache lives only inside one run,
+// which is what happened between the April migration and now: the DB write was
+// never implemented and the JSON one had already been turned off.
+func (e *MovieGoEngine) loadNoMKVCache() map[string]CacheEntry {
+	if e.db == nil {
+		return e.loadCache(e.noMKVCFile)
+	}
+	neg, _, err := e.db.LoadAllCaches()
+	if err != nil {
+		e.logger.Printf("WARNING: could not read the negative cache from the state DB: %v", err)
+		return e.loadCache(e.noMKVCFile)
+	}
+	out := make(map[string]CacheEntry, len(neg))
+	for hash, entry := range neg {
+		ts, err := time.Parse(time.RFC3339, entry.Timestamp)
+		if err != nil {
+			// An unparseable row is one skipped candidate, not a reason to drop the set.
+			continue
+		}
+		out[hash] = CacheEntry{Reason: entry.Reason, TS: ts.Unix()}
+	}
+	return out
+}
+
+// saveNoMKVCache persists the set the run ends with. The JSON file is written only
+// when there is no DB: recreating it would make the next startup re-run the JSON
+// migration, which clears the table this function just filled.
+func (e *MovieGoEngine) saveNoMKVCache() {
+	if e.db == nil {
+		if !isMigratedFile(e.noMKVCFile) {
+			e.saveCache(e.noMKVCFile, e.noMKVCache)
+		}
+		return
+	}
+	now := time.Now()
+	entries := make([]metadb.NegativeCacheEntry, 0, len(e.noMKVCache))
+	for hash, entry := range e.noMKVCache {
+		if now.Sub(time.Unix(entry.TS, 0)) > noMKVCacheTTL {
+			// Expired in memory but never read again this run: writing it back would
+			// resurrect the rows the hourly cleanup has just deleted.
+			delete(e.noMKVCache, hash)
+			continue
+		}
+		entries = append(entries, metadb.NegativeCacheEntry{
+			Hash:      hash,
+			Reason:    entry.Reason,
+			Timestamp: time.Unix(entry.TS, 0).UTC().Format(time.RFC3339),
+		})
+	}
+	if err := e.db.ReplaceNegatives(entries); err != nil {
+		e.logger.Printf("WARNING: could not save the negative cache to the state DB: %v", err)
+	}
 }
 
 func (e *MovieGoEngine) saveCache(file string, data interface{}) {

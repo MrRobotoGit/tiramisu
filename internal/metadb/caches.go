@@ -7,6 +7,7 @@ import (
 // NegativeCacheEntry represents a hash that should be skipped (no MKV).
 type NegativeCacheEntry struct {
 	Hash      string
+	Reason    string // why it was skipped: diagnostic only, never read by the sync
 	Timestamp string // ISO 8601
 }
 
@@ -17,13 +18,42 @@ type FullpackCacheEntry struct {
 	Timestamp string // ISO 8601
 }
 
-// AddNegative inserts or updates a negative cache entry.
-func (d *DB) AddNegative(hash string, timestamp time.Time) error {
+// AddNegative inserts or updates a negative cache entry. The reason travels in the
+// title column: the schema predates it, and nothing reads it back except a human.
+func (d *DB) AddNegative(hash, reason string, timestamp time.Time) error {
 	_, err := d.db.Exec(
-		"INSERT OR REPLACE INTO sync_caches (hash, cache_type, title, timestamp) VALUES (?, 'negative', '', ?)",
-		hash, timestamp.UTC().Format(time.RFC3339),
+		"INSERT OR REPLACE INTO sync_caches (hash, cache_type, title, timestamp) VALUES (?, 'negative', ?, ?)",
+		hash, reason, timestamp.UTC().Format(time.RFC3339),
 	)
 	return err
+}
+
+// ReplaceNegatives swaps the whole negative set in one transaction, leaving fullpack
+// rows untouched. The sync owns that set in memory and writes it back at the end of a
+// run, so a partial write would resurrect hashes it had just expired.
+func (d *DB) ReplaceNegatives(entries []NegativeCacheEntry) error {
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM sync_caches WHERE cache_type = 'negative'"); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(
+		"INSERT INTO sync_caches (hash, cache_type, title, timestamp) VALUES (?, 'negative', ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, e := range entries {
+		if _, err := stmt.Exec(e.Hash, e.Reason, e.Timestamp); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // AddFullpack inserts or updates a fullpack cache entry.
@@ -106,44 +136,6 @@ func (d *DB) CleanupStale(negativeTTL, fullpackTTL time.Duration) (int, error) {
 	return int(negRows) + int(fullRows), nil
 }
 
-// SaveAllCaches replaces the entire sync_caches table.
-// Used by background save goroutine.
-func (d *DB) SaveAllCaches(
-	negEntries map[string]NegativeCacheEntry,
-	fullEntries map[string]FullpackCacheEntry,
-) error {
-	tx, err := d.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec("DELETE FROM sync_caches"); err != nil {
-		return err
-	}
-
-	stmt, err := tx.Prepare(
-		"INSERT INTO sync_caches (hash, cache_type, title, timestamp) VALUES (?, ?, ?, ?)")
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for _, entry := range negEntries {
-		if _, err := stmt.Exec(entry.Hash, "negative", "", entry.Timestamp); err != nil {
-			return err
-		}
-	}
-
-	for _, entry := range fullEntries {
-		if _, err := stmt.Exec(entry.Hash, "fullpack", entry.Title, entry.Timestamp); err != nil {
-			return err
-		}
-	}
-
-	return tx.Commit()
-}
-
 // LoadAllCaches loads all cache entries for populating in-memory maps at startup.
 func (d *DB) LoadAllCaches() (
 	neg map[string]NegativeCacheEntry,
@@ -171,6 +163,7 @@ func (d *DB) LoadAllCaches() (
 		case "negative":
 			neg[hash] = NegativeCacheEntry{
 				Hash:      hash,
+				Reason:    title,
 				Timestamp: timestamp,
 			}
 		case "fullpack":

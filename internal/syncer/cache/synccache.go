@@ -105,9 +105,15 @@ func (s *SyncCacheManager) loadFromJSONLocked() error {
 	return nil
 }
 
-// SyncToDisk writes in-memory caches to persistence if dirty flag is set.
-// With StateDB: writes a single transaction. Without: writes JSON via temp+rename.
+// SyncToDisk refreshes the in-memory view from the state DB, or writes the JSON
+// files when there is no DB. With a DB the sync engines own the rows and write them
+// at the end of a run: writing this snapshot back would undo whatever they stored
+// since startup, so here the DB is read, never overwritten.
 func (s *SyncCacheManager) SyncToDisk() error {
+	if s.db != nil {
+		return s.refreshFromDB()
+	}
+
 	s.mu.Lock()
 
 	if !s.dirty {
@@ -135,18 +141,32 @@ func (s *SyncCacheManager) SyncToDisk() error {
 	s.dirty = false
 	s.mu.Unlock()
 
-	if s.db != nil {
-		if err := s.db.SaveAllCaches(negCopy, fullCopy); err != nil {
-			s.logger.Printf("SyncCache: Warning - failed to save to DB: %v", err)
-			return fmt.Errorf("sync caches to DB: %w", err)
-		}
-		s.logger.Printf("SyncCache: Synced %d negative + %d fullpack entries to StateDB",
-			len(negCopy), len(fullCopy))
-		return nil
-	}
-
 	// Fallback: legacy JSON write
 	return s.syncJSONLocked(negCopy, fullCopy)
+}
+
+// refreshFromDB reloads the counters the dashboard reads. It is the read half of the
+// 30s tick: the rows themselves belong to whoever wrote them.
+func (s *SyncCacheManager) refreshFromDB() error {
+	neg, full, err := s.db.LoadAllCaches()
+	if err != nil {
+		return fmt.Errorf("read sync caches from DB: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.negativeCache = make(map[string]NegativeCacheEntry, len(neg))
+	for hash, entry := range neg {
+		ts, _ := time.Parse(time.RFC3339, entry.Timestamp)
+		s.negativeCache[hash] = NegativeCacheEntry{Hash: hash, Timestamp: ts}
+	}
+	s.fullpackCache = make(map[string]FullpackCacheEntry, len(full))
+	for hash, entry := range full {
+		ts, _ := time.Parse(time.RFC3339, entry.Timestamp)
+		s.fullpackCache[hash] = FullpackCacheEntry{Hash: hash, Title: entry.Title, ProcessedAt: ts}
+	}
+	s.dirty = false
+	return nil
 }
 
 // ClearNegativeCache removes a hash from the negative cache.
@@ -158,6 +178,9 @@ func (s *SyncCacheManager) ClearNegativeCache(hash string) error {
 		delete(s.negativeCache, hash)
 		s.dirty = true
 		s.logger.Printf("SyncCache: Cleared negative cache for hash %s", hash[:8])
+	}
+	if s.db != nil {
+		return s.db.RemoveNegative(hash)
 	}
 	return nil
 }
@@ -172,11 +195,27 @@ func (s *SyncCacheManager) ClearFullpackCache(hash string) error {
 		s.dirty = true
 		s.logger.Printf("SyncCache: Cleared fullpack cache for hash %s", hash[:8])
 	}
+	if s.db != nil {
+		return s.db.RemoveFullpack(hash)
+	}
 	return nil
 }
 
-// CleanupStaleEntries removes expired entries from all caches.
+// CleanupStaleEntries removes expired entries from all caches. With a DB the delete
+// runs there, scoped by timestamp: dropping only what this snapshot considers stale
+// would leave behind every row written after startup.
 func (s *SyncCacheManager) CleanupStaleEntries(negativeTTL, fullpackTTL time.Duration) error {
+	if s.db != nil {
+		removed, err := s.db.CleanupStale(negativeTTL, fullpackTTL)
+		if err != nil {
+			return fmt.Errorf("cleanup sync caches in DB: %w", err)
+		}
+		if removed > 0 {
+			s.logger.Printf("SyncCache: Cleaned up %d stale entries", removed)
+		}
+		return s.refreshFromDB()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
