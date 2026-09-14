@@ -61,6 +61,15 @@ func (d *DB) Close() error {
 }
 
 // SetLogger sets a custom logger for the database.
+// hasColumn reports whether a table already carries a column.
+func (d *DB) hasColumn(table, column string) bool {
+	var n int
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n); err != nil {
+		return false
+	}
+	return n > 0
+}
+
 func (d *DB) SetLogger(l Logger) {
 	if l != nil {
 		d.logger = l
@@ -169,5 +178,42 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 	// lands on 5: INSERT OR IGNORE would otherwise drop it there and leave the
 	// registry claiming two different things for the same version.
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (5, 'add metadata_failures table')`)
+
+	// Additive column: SQLite has no ADD COLUMN IF NOT EXISTS, so it is guarded by a
+	// lookup instead. Without the show id an episode file cannot be traced back to
+	// TMDB, which is what a re-search needs.
+	if !d.hasColumn("tv_episodes", "show_imdb") {
+		if _, err := d.db.Exec(`ALTER TABLE tv_episodes ADD COLUMN show_imdb TEXT DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (6, 'add tv_episodes.show_imdb')`)
+
+	// Episodes the reaper removed. Discovery returns a fraction of the library, so a
+	// season it does not reach would keep the hole forever: this is what a later run
+	// consults to try again.
+	if _, err := d.db.Exec(`
+		CREATE TABLE IF NOT EXISTS episode_gaps (
+		    episode_key TEXT PRIMARY KEY,
+		    show_imdb   TEXT DEFAULT '',
+		    season      INTEGER NOT NULL,
+		    file_path   TEXT NOT NULL,
+		    dead_hash   TEXT NOT NULL,
+		    removed_at  INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_gaps_season ON episode_gaps(show_imdb, season);`); err != nil {
+		return err
+	}
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (7, 'add episode_gaps table')`)
+
+	// last_attempt sends a gap to the back of the queue once it has been tried. Without
+	// it a show whose name cannot be resolved is retried first on every run, and the
+	// rest of the backlog is never reached.
+	if !d.hasColumn("episode_gaps", "last_attempt") {
+		if _, err := d.db.Exec(`ALTER TABLE episode_gaps ADD COLUMN last_attempt INTEGER DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (8, 'add episode_gaps.last_attempt')`)
 	return nil
 }

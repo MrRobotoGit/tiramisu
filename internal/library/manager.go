@@ -47,7 +47,11 @@ type Config struct {
 	// Blacklist, when set, records a removed release the way the FUSE unlink handler
 	// does, so the sync engines do not add it back. Called only when the caller asks.
 	Blacklist func(path, hash string)
-	Logger    *log.Logger
+	// Gaps, when set, reports the episodes the reaper removed and has not been able to
+	// replace. Read-only: what to do about a hole is a decision for the client, which
+	// can ask the user; the engine only says which ones are open.
+	Gaps   func() ([]Gap, error)
+	Logger *log.Logger
 	// MediaServer, when set, is asked to rescan the section a stub was added to or
 	// removed from. MovieSection and TVSection are its library ids.
 	MediaServer  MediaServer
@@ -140,6 +144,42 @@ type RemoveRequest struct {
 	// title back on their next run, which is what you want when removing to upgrade
 	// and not what you want when removing for good.
 	Blacklist bool `json:"blacklist"`
+}
+
+// Gap is an episode removed because its release died and nothing live replaced it.
+type Gap struct {
+	EpisodeKey string `json:"episode_key"`
+	Show       string `json:"show"`
+	Season     int    `json:"season"`
+	ShowIMDB   string `json:"show_imdb,omitempty"`
+	Path       string `json:"path"`
+	DeadHash   string `json:"dead_hash"`
+	RemovedAt  int64  `json:"removed_at"`
+	// LastAttempt is when the engine last re-searched this hole, zero when it never
+	// has. No omitempty: the client needs to tell "never tried" from "tried at 0".
+	LastAttempt int64 `json:"last_attempt"`
+}
+
+// maxGaps caps one listing: the client pages through nothing, it acts on what it
+// sees, and an unbounded backlog should not become an unbounded response.
+const maxGaps = 500
+
+// ListGaps returns the open holes, oldest first.
+func (m *Manager) ListGaps() ([]Gap, error) {
+	if m.cfg.Gaps == nil {
+		return []Gap{}, nil
+	}
+	gaps, err := m.cfg.Gaps()
+	if err != nil {
+		return nil, errf(http.StatusInternalServerError, "cannot read the episode gaps: %v", err)
+	}
+	if gaps == nil {
+		gaps = []Gap{}
+	}
+	if len(gaps) > maxGaps {
+		gaps = gaps[:maxGaps]
+	}
+	return gaps, nil
 }
 
 type RemoveResponse struct {
@@ -550,9 +590,16 @@ func (m *Manager) addEpisodes(ctx context.Context, req AddRequest, hash, magnet 
 		})
 		prior = append(prior, p)
 
+		// UpsertEpisode replaces the row, so the show id a previous sync stored would
+		// be wiped by an add through the API. It is carried over instead: the id is
+		// how a dead release is traced back to TMDB, and this path has none of its own.
+		showIMDB := ""
+		if prev, ok, err := m.cfg.Registry.GetEpisode(key); err == nil && ok {
+			showIMDB = prev.ShowIMDB
+		}
 		if err := m.cfg.Registry.UpsertEpisode(key, metadb.EpisodeEntry{
 			EpisodeKey: key, QualityScore: req.QualityScore, Hash: hash,
-			FilePath: path, Source: "api", Created: time.Now().Unix(),
+			FilePath: path, Source: "api", Created: time.Now().Unix(), ShowIMDB: showIMDB,
 		}); err != nil {
 			rollback()
 			return nil, errf(http.StatusInternalServerError, "cannot register S%02dE%02d: %v", w.season, w.episode, err)

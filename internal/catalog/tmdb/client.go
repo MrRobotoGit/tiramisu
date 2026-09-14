@@ -13,7 +13,16 @@ import (
 	"tiramisu/internal/catalog"
 )
 
-const baseURL = "https://api.themoviedb.org/3"
+// baseURL is a var, not a const, so tests can point the client at a local server.
+var baseURL = "https://api.themoviedb.org/3"
+
+// SetBaseURLForTest points every client at another host and returns the previous
+// value, so a test in another package can reach a stub TMDB. Not for production use.
+func SetBaseURLForTest(u string) string {
+	old := baseURL
+	baseURL = u
+	return old
+}
 
 // Client is a TMDB API client with rate limiting.
 type Client struct {
@@ -344,6 +353,26 @@ func (c *Client) SearchMovieBest(ctx context.Context, query, year string) (Movie
 		return Movie{}, fmt.Errorf("no results for %q", query)
 	}
 	return movies[0], nil
+}
+
+// SearchTVBest returns the best-matching show for a free-text name, the TV twin of
+// SearchMovieBest. Episode stubs written before the show id was persisted carry no
+// id at all, so the only way back to TMDB for those is the show's own name.
+func (c *Client) SearchTVBest(ctx context.Context, query string, firstAirYear string) (TVShow, error) {
+	urlStr := fmt.Sprintf("%s/search/tv?api_key=%s&query=%s&page=1",
+		baseURL, c.apiKey, url.QueryEscape(query))
+	if firstAirYear != "" {
+		urlStr += "&first_air_date_year=" + firstAirYear
+	}
+
+	shows, err := c.fetchTVPage(ctx, urlStr)
+	if err != nil {
+		return TVShow{}, err
+	}
+	if len(shows) == 0 {
+		return TVShow{}, fmt.Errorf("no TV results for %q", query)
+	}
+	return shows[0], nil
 }
 
 func (c *Client) fetchDiscoverPage(ctx context.Context, urlStr string) ([]Movie, error) {

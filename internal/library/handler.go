@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 )
 
 const maxBodyBytes = 1 << 20
@@ -61,6 +62,17 @@ func (h *Handler) Remove(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	// type=gaps reuses this endpoint rather than adding one: the response stays an
+	// array, so a client that asks for movies or tv sees no change.
+	if strings.EqualFold(r.URL.Query().Get("type"), "gaps") {
+		gaps, err := h.mgr.ListGaps()
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, gaps)
 		return
 	}
 	items, err := h.mgr.List(r.URL.Query().Get("type"))

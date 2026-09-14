@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.2.1
+version: 4.2.2
 author: MrRobotoGit
 license: GPL-3.0-only
 metadata:
@@ -208,6 +208,44 @@ tv/
 - **HASH8** is 8 lowercase hex chars of the info hash, but not the same 8:
   **movies use the LAST 8, episodes the FIRST 8.** When you match a `list` entry
   by hash, use `endswith` for a movie and `startswith` for an episode
+
+## Episode gaps (TV)
+
+The TV reaper removes an episode when its release stops resolving its metadata
+and a complete search finds nothing live to replace it. The hole is recorded,
+not forgotten, and `type=gaps` is how you see it:
+
+```bash
+curl -s "{CTRL}/api/library/list?type=gaps" | \
+  python3 -c 'import sys,json; [print(g["show"], g["season"], g["episode_key"], g["dead_hash"][:8]) for g in json.load(sys.stdin)]'
+```
+
+The response is an array like the other types, but the objects are gaps, not
+stubs: `episode_key`, `show`, `season`, `show_imdb`, `path` (where the stub was),
+`dead_hash`, `removed_at` (unix seconds) and `last_attempt`, zero when the engine
+has never tried that hole. It is capped at 500 entries and carries no total, so
+treat a full page as "there may be more".
+
+**The engine retries the open gaps on its own.** Every TV sync re-searches them,
+skipping the ones younger than six hours, at most five shows per run, oldest
+first, with a show whose resolution failed moved to the back of the queue. A
+gap disappears as soon as the episode is back. Doing nothing is therefore a
+valid outcome: an episode missing from `list` for a while is not a fault to
+repair by hand.
+
+What the skill is for here:
+
+- **explaining the disappearance**: the episode was in a release whose swarm
+  died, and no live release existed at that moment
+- **filling the hole on request**: run the normal search, score and add flow for
+  a *live* release of that episode. Never re-file `dead_hash`: it is the exact
+  release the reaper discarded
+- **checking, not editing**: gaps ride on `list`, there is no separate endpoint
+  and nothing in the database should be touched
+
+An episode that comes back gets a new HASH8, so Plex sees a new item and the
+watched/resume state for that episode does not carry over. That is the same
+trade-off as any upgrade, not a symptom of the repair.
 
 ## Resolve the IMDB id first
 
@@ -588,15 +626,13 @@ First check the title is not already there, which on
 this route means one call and has to happen before the add, not after:
 
 ```bash
-# type is a filter, not a hint: movie lists the movie library, tv the series one,
-# and neither returns the other. Ask for the one you are about to write into.
+# type picks the library: movie, tv or gaps (see "Episode gaps"). Ask for the
+# one you are about to write into.
 curl -s "{CTRL}/api/library/list?type=movie" | \
   python3 -c 'import sys,json; [print(i["fuse_path"]) for i in json.load(sys.stdin)]' | grep -i '<title fragment>'
-
-# TV: entries carry season and episode, so check the episodes you are filling
-curl -s "{CTRL}/api/library/list?type=tv" | \
-  python3 -c 'import sys,json; [print(i["fuse_path"], i.get("season"), i.get("episode")) for i in json.load(sys.stdin)]' | grep -i '<series fragment>'
 ```
+For TV, match the series fragment on the same output and read `season`/`episode`
+from the entries.
 
 `add` answers `200` with `already_present` instead of filing a movie or a single
 episode twice, but that guard does not cover the two cases that matter here:
@@ -610,38 +646,14 @@ episode twice, but that guard does not cover the two cases that matter here:
   and answers `201`. That is an upgrade, not a duplicate, but it is not a no-op:
   do not re-send a pack to "check" whether it is there, use `list`
 
-One call does the add, the file pick, the stub and the library scan. See
-[Library API](#library-api-the-whole-add-in-one-call) for the full field list.
-
-```bash
-curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
-  -d '{"type":"movie","hash":"<HASH>","title":"<Title>","year":<YEAR>,
-       "release_title":"<the raw release name>","imdb":"<tt...>"}' \
-  "{CTRL}/api/library/add"
-```
-
-Pass `release_title` verbatim from the indexer result: it is what puts `_DV`,
-`_Atmos` and `_REMUX` in the filename, and `title` alone silently loses them.
-The response already carries the path and size of every stub written: that is
-the receipt, go to step 4.
-
-A season pack, which files every episode the torrent names:
-
-```bash
-curl -s -X POST -H 'Content-Type: application/json' --max-time 180 \
-  -d '{"type":"tv","hash":"<HASH>","title":"<Series>","first_air_date":"<YYYY-MM-DD>",
-       "season":1,"release_title":"<the raw release name>","quality_score":<score>,
-       "metadata_wait":120}' \
-  "{CTRL}/api/library/add"
-```
-
-For a single episode add `"episode":<N>` and keep `"season"`: season alone is
-what makes it a pack. `first_air_date` is what puts the year in the folder name, and the
-score is what stops the next sync replacing your pick.
-
-Sending `hash` alone is enough. The server builds the magnet with its own
-default tracker list, so the torrent does not start DHT-only. Pass `magnet`
-instead when the indexer gave you one: its trackers are kept as they are.
+One call does the add, the file pick, the stub and the library scan; see
+[Library API](#library-api-the-whole-add-in-one-call) for the full field list
+and the response. Two fields carry the silent failures: `release_title`
+verbatim, or `_DV`/`_Atmos`/`_REMUX` never reach the filename, and
+`first_air_date` for TV, or the show lands in a second folder. A pack is
+`"season":<N>` alone; a single episode adds `"episode":<N>` and keeps the
+season. `hash` alone is enough: the server builds the magnet and the torrent
+does not start DHT-only; pass `magnet` when its trackers must be kept.
 
 **Build the payload as a file, not inline.** One apostrophe in a title closes
 the shell string and the call dies on `unexpected EOF while looking for matching
@@ -706,21 +718,11 @@ exists.
 
 ### 5. Undo, if the release was wrong
 
-```bash
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"path":"<fuse_path from the add response>","blacklist":true}' \
-  "{CTRL}/api/library/remove"
-```
-
-`blacklist: true` is what makes the removal stick. It records the release the
-way the FUSE unlink handler does, and both sync engines check that record before
-adding anything, so the title stays out. Leave it out only when the removal is a
-step towards a better release for the same title, which is exactly when you want
-the sync free to manage it again.
-
-The torrent behind the stub is dropped only once no other stub points at it: one
-season pack is a single torrent behind many episodes, so removing one episode
-does not break the others.
+The call is the one in [Removing](#removing):
+`{"path":"<fuse_path from the add response>","blacklist":true}`. Setting
+`blacklist: true` keeps the sync engines from adding the title back; leave it
+out only when you are removing to make room for a better release of the same
+title.
 
 **Replacing a release is a remove and an add, and the media server is the last
 to know.** `list` answers whether the stub exists, which is what it is the
@@ -764,13 +766,8 @@ there is; the selection is yours to build from it.
 
 ### Delete
 
-```bash
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"path":"movies/<file>.mkv","blacklist":true}' "{CTRL}/api/library/remove"
-```
-
-One call per title. `blacklist: true` is what stops the next sync bringing them
-all back.
+One [remove](#removing) call per title, `path` from the selection above.
+`blacklist: true` is what stops the next sync bringing them all back.
 
 ### Before deleting anything
 
@@ -803,6 +800,9 @@ touching files.
 - **The title is in `list` but not in Plex**: the scan runs about 15 seconds
   after the add and the media server takes its own time. `list` is the authority
   on whether the stub exists
+- **An episode vanished from `list`**: it was reaped, not lost. Check
+  `type=gaps` for the hole; the engine retries it every sync, so the only action
+  is filing a live replacement if the operator wants one sooner
 - **Add is slow**: most of the time is the metadata wait. A cold or dead swarm
   uses all of it, and no amount of retrying makes the peers appear
 
@@ -832,6 +832,8 @@ touching files.
 - File a release the gates rejected without the operator's explicit go-ahead,
   or report it afterwards as if it were an ordinary pick
 - Call a language present because a flag says so: flags cover subtitles too
+- Re-file the `dead_hash` of an open gap: it is the release the reaper discarded
+  for being dead
 
 ## When you learn something new
 
@@ -891,21 +893,15 @@ hardcoded.
 #!/usr/bin/env python3
 """Read a Tiramisu deployment's scoring profile and configuration.
 
-Usage:
-    python3 resolve_deployment.py [ctrl_base]
+Usage: python3 resolve_deployment.py [ctrl_base]
+ctrl_base defaults to http://127.0.0.1:9080, overridable with TIRAMISU_CTRL:
+the media server, the library ids and the weights all come back from
+GET {ctrl}/api/config. Weights are per-deployment and may have been tuned, so
+read them, never assume them; with no quality_scoring block the built-in
+profile applies and this script says so instead of inventing numbers.
 
-ctrl_base defaults to http://127.0.0.1:9080, overridable with TIRAMISU_CTRL. It
-is the ONLY value that has to come from the operator: the media server, the
-library ids and the scoring weights all come back from GET {ctrl}/api/config.
-
-Weights are per-deployment configuration and may have been tuned, so they must
-be read, never assumed. When the config carries no quality_scoring block the
-engine falls back to its own built-in profile and this script says so instead of
-inventing numbers.
-
-SECURITY: the config response also contains API keys and tokens in cleartext.
-This script reports whether each one is set, never its value, and never the
-whole response. Do not dump it anywhere either.
+The config response carries API keys and tokens in cleartext: report whether
+each is set, never its value, and never dump the response.
 """
 import json
 import os
@@ -919,9 +915,7 @@ def main():
         args[0] if args else "http://127.0.0.1:9080"
     )
 
-    # Fetched fresh every time, and never written to disk. The response carries
-    # plex.token, prowlarr.api_key and tmdb_api_key in cleartext, so caching it would
-    # leave secrets in a file readable by any local user. One call costs milliseconds.
+    # Fetched fresh, never written to disk: caching it would leave secrets in a file.
     with urllib.request.urlopen(ctrl + "/api/config", timeout=15) as r:
         cfg = json.loads(r.read())
 

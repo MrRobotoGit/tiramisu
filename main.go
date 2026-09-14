@@ -4577,6 +4577,30 @@ func main() {
 			InvalidatePath: invalidateSyncRemovedPath,
 			// Same record the FUSE unlink handler writes: without it the sync engines
 			// add the title back on their next run.
+			// Read-only view of the holes the reaper left, for a client that can decide
+			// what to do about them.
+			Gaps: func() ([]library.Gap, error) {
+				if stateDB == nil {
+					return nil, nil
+				}
+				rows, err := stateDB.EpisodeGaps()
+				if err != nil {
+					return nil, err
+				}
+				out := make([]library.Gap, 0, len(rows))
+				for _, g := range rows {
+					// Same spelling the sync logs use, so a client and the log agree on
+					// what the show is called.
+					show := engines.ShowNameFromEpisodePath(g.FilePath)
+					out = append(out, library.Gap{
+						EpisodeKey: g.EpisodeKey, Show: show, Season: g.Season,
+						ShowIMDB: g.ShowIMDB, Path: g.FilePath,
+						DeadHash: g.DeadHash, RemovedAt: g.RemovedAt,
+						LastAttempt: g.LastAttempt,
+					})
+				}
+				return out, nil
+			},
 			Blacklist: func(path, hash string) {
 				if globalTorrentRemover == nil || len(hash) != 40 {
 					return
