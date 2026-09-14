@@ -736,9 +736,10 @@ func (c *Collector) enrichTorrents(torrents []TorrentInfo) {
 		var sess plexSession
 		var ok bool
 		if len(t.Hash) >= 8 {
-			sess, ok = sessions[t.Hash[len(t.Hash)-8:]]
+			h := strings.ToLower(t.Hash)
+			sess, ok = sessions[h[len(h)-8:]]
 			if !ok {
-				sess, ok = sessions[t.Hash[:8]]
+				sess, ok = sessions[h[:8]]
 			}
 		}
 		if ok {
@@ -847,7 +848,7 @@ func (c *Collector) fetchPlexSessions() map[string]plexSession {
 		return result
 	}
 
-	reHash8 := regexp.MustCompile(`_([a-f0-9]{8})\.mkv$`)
+	reHash8 := regexp.MustCompile(`(?i)_([a-f0-9]{8})\.mkv$`)
 	for _, v := range container.Videos {
 		// For episodes: use series title + series poster; for movies: use title + thumb
 		title := v.Title
@@ -880,7 +881,8 @@ func (c *Collector) fetchPlexSessions() map[string]plexSession {
 			for _, p := range media.Parts {
 				m := reHash8.FindStringSubmatch(p.File)
 				if len(m) >= 2 {
-					result[m[1]] = sess
+					// Keys are looked up with an engine hash, which is lowercase.
+					result[strings.ToLower(m[1])] = sess
 				}
 			}
 		}
@@ -890,7 +892,7 @@ func (c *Collector) fetchPlexSessions() map[string]plexSession {
 
 var (
 	reVideoExt = regexp.MustCompile(`(?i)\.(mkv|mp4|avi|mov|ts|m2ts)$`)
-	reHexHash8 = regexp.MustCompile(`[_.\s][a-f0-9]{8}$`)
+	reHexHash8 = regexp.MustCompile(`(?i)[_.\s][a-f0-9]{8}$`)
 )
 
 func cleanTorrentTitle(raw string) string {

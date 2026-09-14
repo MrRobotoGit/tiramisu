@@ -44,9 +44,8 @@ type TorrentStats = library.TorrentStats
 
 type FileStat = library.FileStat
 
-// AddTorrent adds a magnet URL to GoStorm via POST /torrents {"action":"add"}.
-// Returns the 40-char info hash or empty string on failure.
-// AddTorrent adds a torrent and returns its hash. It hides whether the engine
+// AddTorrent adds a magnet URL to GoStorm via POST /torrents {"action":"add"}
+// and returns its hash. It hides whether the engine
 // echoed the hash back; callers that must not mistake an unacknowledged add for a
 // statement about the swarm should use AddTorrentConfirmed.
 func (c *GoStormClient) AddTorrent(ctx context.Context, magnet, title string) (string, error) {
@@ -216,7 +215,7 @@ func (c *GoStormClient) postTorrents(ctx context.Context, body map[string]string
 func TitleFromFilename(filename string) string {
 	s := strings.TrimSuffix(filename, filepath.Ext(filename))
 	// Remove trailing _hash8 (8 hex chars)
-	if re := regexp.MustCompile(`_[a-f0-9]{8}$`); re.MatchString(s) {
+	if re := regexp.MustCompile(`(?i)_[a-f0-9]{8}$`); re.MatchString(s) {
 		s = s[:len(s)-9]
 	}
 	s = strings.ReplaceAll(s, "_", " ")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -67,11 +68,14 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	// type=gaps reuses this endpoint rather than adding one: the response stays an
 	// array, so a client that asks for movies or tv sees no change.
 	if strings.EqualFold(r.URL.Query().Get("type"), "gaps") {
-		gaps, err := h.mgr.ListGaps()
+		gaps, total, err := h.mgr.ListGaps()
 		if err != nil {
 			writeAPIError(w, err)
 			return
 		}
+		// The body stays an array, so the count travels in a header: without it a
+		// client reading a capped page cannot tell there is more behind it.
+		w.Header().Set("X-Total-Count", strconv.Itoa(total))
 		writeJSON(w, http.StatusOK, gaps)
 		return
 	}

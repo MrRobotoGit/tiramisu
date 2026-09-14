@@ -39,6 +39,9 @@ func (e *TVGoEngine) flagDeadPacks() []deadPack {
 	if e.deadPackHashes == nil {
 		e.deadPackHashes = make(map[string]bool)
 	}
+	if e.deadEpisodeKeys == nil {
+		e.deadEpisodeKeys = make(map[string]bool)
+	}
 	for _, hash := range hashes {
 		episodes, err := e.db.EpisodesByHash(hash)
 		if err != nil {
@@ -46,7 +49,9 @@ func (e *TVGoEngine) flagDeadPacks() []deadPack {
 			continue
 		}
 		if len(episodes) == 0 {
-			continue // a movie, or a release with nothing registered against it
+			// A movie, or a pack already replaced: its row would otherwise be re-read
+			// on every run for good. The movie engine keeps its own counters.
+			continue
 		}
 		// Excluded from this run's candidates right away, not only in the reaper pass:
 		// the discovery loop would otherwise retry the silent release once, at the cost
@@ -179,15 +184,29 @@ func (e *TVGoEngine) dropReplacedPack(ctx context.Context, pack deadPack, search
 		}
 	}
 
+	// Only the seasons the gate above actually verified may lose stubs. An episode whose
+	// key carries no readable season was never searched, so it is kept.
+	verified := make(map[int]bool, len(pack.Seasons))
+	for _, sn := range pack.Seasons {
+		verified[sn] = true
+	}
+
 	removed := 0
+	kept := 0
 	for _, ep := range pack.Episodes {
+		if !verified[seasonFromEpisodeKey(ep.EpisodeKey)] {
+			kept++
+			continue
+		}
 		// Re-read: the search above may have replaced this episode, in which case the
 		// registry now points at another release and there is nothing to remove.
 		current, ok := e.registry[ep.EpisodeKey]
 		if !ok || !strings.EqualFold(current.Hash, pack.Hash) {
 			continue
 		}
-		e.removeStub(ctx, current.FilePath, current.Hash)
+		// The torrent is shared by every episode of the pack, so it is dropped once,
+		// after the loop: removing it here would fail loudly on all the others.
+		e.removeStubFile(current.FilePath)
 		delete(e.registry, ep.EpisodeKey)
 		if e.db != nil {
 			if err := e.db.DeleteEpisode(ep.EpisodeKey); err != nil {
@@ -208,8 +227,19 @@ func (e *TVGoEngine) dropReplacedPack(ctx context.Context, pack deadPack, search
 		removed++
 	}
 	if removed > 0 {
-		e.logger.Printf("[TVSync] No live release for %s (%s S%02d): removed %d stub(s), recorded as gaps",
-			pack.Hash[:8], show, pack.Seasons[0], removed)
+		// One call for the whole pack: every episode points at the same torrent. A stub
+		// kept above still needs it, so the torrent only goes when none is left.
+		if kept == 0 {
+			if err := e.gostorm.RemoveTorrent(ctx, pack.Hash); err != nil {
+				e.logger.Printf("[TVSync] WARNING: failed to remove torrent %s: %v", pack.Hash[:8], err)
+			}
+		}
+		e.logger.Printf("[TVSync] No live release for %s (%s season(s) %v): removed %d stub(s), recorded as gaps",
+			pack.Hash[:8], show, pack.Seasons, removed)
+	}
+	if kept > 0 {
+		e.logger.Printf("[TVSync] Dead release %s: kept %d stub(s) whose season could not be read from the key, torrent left in place",
+			pack.Hash[:8], kept)
 	}
 	// The counter outlives the release otherwise: the row stays and is re-read every
 	// run, and a hash picked again later would arrive already condemned.
@@ -262,12 +292,24 @@ func (e *TVGoEngine) repairEpisodeGaps(ctx context.Context) {
 			_ = e.db.ClearEpisodeGap(g.EpisodeKey)
 			continue
 		}
-		if g.RemovedAt > cutoff || g.Season <= 0 {
-			// Too fresh to be worth a search, or no season to scope one with.
+		// The throttle has to look at the last attempt, not only at the removal: a hole
+		// open for weeks would otherwise be re-searched on every single run, which is
+		// the unbounded cost gapRetryAfter exists to prevent.
+		last := g.RemovedAt
+		if g.LastAttempt > last {
+			last = g.LastAttempt
+		}
+		if last > cutoff || g.Season <= 0 {
+			// Too recently tried, or no season to scope a search with.
 			continue
 		}
 		name, _ := showQueryFromPath(g.FilePath)
 		if name == "" {
+			// Unrepairable as recorded. Stamp it anyway, or it sits at the head of the
+			// oldest-first queue for good and hides the gaps that can be repaired.
+			if err := e.db.MarkGapAttempted(g.EpisodeKey); err != nil {
+				e.logger.Printf("[TVSync] Warning: could not stamp the unreadable gap %s: %v", g.EpisodeKey, err)
+			}
 			continue
 		}
 		sg, ok := byShow[name]
@@ -321,6 +363,17 @@ func (e *TVGoEngine) repairEpisodeGaps(ctx context.Context) {
 		}
 
 		for season, group := range sg.seasons {
+			// The release that made the hole is excluded again. deadPackHashes is rebuilt
+			// every run and the failure counter was cleared on removal, so without this
+			// the search happily re-picks the dead pack and the cycle starts over.
+			if e.deadPackHashes == nil {
+				e.deadPackHashes = make(map[string]bool)
+			}
+			for _, g := range group {
+				if g.DeadHash != "" {
+					e.deadPackHashes[strings.ToLower(g.DeadHash)] = true
+				}
+			}
 			e.logger.Printf("[TVSync] %d gap(s) open on %s S%02d: re-searching", len(group), name, season)
 			e.processShow(ctx, show, season)
 

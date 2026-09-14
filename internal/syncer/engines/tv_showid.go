@@ -20,12 +20,21 @@ var ErrShowIdentityUnclear = errors.New("stored show id disagrees with the name 
 // reShowFolderYear splits "A_Good_Girls_Guide_to_Murder (2024)" into name and year.
 var reShowFolderYear = regexp.MustCompile(`^(.*?)\s*\((\d{4})\)$`)
 
+// reSeasonDir matches the season directory the TV sync writes, e.g. "Season.01".
+var reSeasonDir = regexp.MustCompile(`(?i)^season[._ ]?\d{1,3}$`)
+
 // showQueryFromPath recovers a searchable show name and year from an episode path.
 // The episode key is lowercased with every non-word character stripped, so it is a
 // poor query; the show folder keeps the readable name and the first-air year.
 func showQueryFromPath(episodePath string) (string, string) {
 	// <tv>/<Show Folder>/Season.NN/<episode>.mkv
 	seasonDir := filepath.Dir(episodePath)
+	// The layout has to be the real one: on a flat or manually placed file the parent
+	// of the parent is the library root, and searching TMDB for "tv" returns an
+	// arbitrary show that would then be written onto every episode of the set.
+	if !reSeasonDir.MatchString(filepath.Base(seasonDir)) {
+		return "", ""
+	}
 	folder := filepath.Base(filepath.Dir(seasonDir))
 	if folder == "." || folder == string(filepath.Separator) || folder == "" {
 		return "", ""
@@ -123,8 +132,10 @@ func (e *TVGoEngine) persistShowIMDB(entries []metadb.EpisodeEntry, imdbID strin
 		}
 		ep.ShowIMDB = imdbID
 		if err := e.db.UpsertEpisode(ep.EpisodeKey, ep); err != nil {
+			// One row failing (a busy DB, say) must not cost the whole set: the
+			// unwritten ones would send the search back to TMDB on the next run.
 			e.logger.Printf("[TVSync] Warning: could not store the show id for %s: %v", ep.EpisodeKey, err)
-			return
+			continue
 		}
 	}
 }

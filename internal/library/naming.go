@@ -98,6 +98,14 @@ func HashSuffix(hash string) string {
 	return hash[len(hash)-8:]
 }
 
+// HashPrefix is the first 8 hash chars used in episode filenames.
+func HashPrefix(hash string) string {
+	if len(hash) <= 8 {
+		return hash
+	}
+	return hash[:8]
+}
+
 // SanitizeShowName turns a show name into one safe directory component. Titles reach
 // here from HTTP requests, so a name made of dots must not survive as "." or "..".
 func SanitizeShowName(name string) string {

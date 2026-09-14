@@ -149,11 +149,11 @@ var (
 	reTVSeasonW      = regexp.MustCompile(`\bseasons?\s*(\d{1,2})\s*[-–]\s*(\d{1,2})\b`)
 	reTVCompleteS    = regexp.MustCompile(`(?i)\b(complete\s+series|all\s+seasons|full\s+series)\b`)
 	reTVEpNum        = regexp.MustCompile(`[Ss](\d+)[Ee](\d+)`)
-	reTVFileName     = regexp.MustCompile(`(.+)_S(\d+)E(\d+)_([a-f0-9]{8})\.mkv$`)
+	reTVFileName     = regexp.MustCompile(`(?i)(.+)_S(\d+)E(\d+)_([a-f0-9]{8})\.mkv$`)
 	reTVNonWord      = regexp.MustCompile(`[^a-z0-9]`)
 	reTVYear         = regexp.MustCompile(`\(?(\d{4})\)?`)
 	reTVQuality      = regexp.MustCompile(`\b(2160p|1080p|720p|4k|uhd|hdr|dv|dovi|web|bluray|remux)\b.*`)
-	reTVHashURL      = regexp.MustCompile(`link=([a-f0-9]{40})`)
+	reTVHashURL      = regexp.MustCompile(`(?i)link=([a-f0-9]{40})`)
 )
 
 var tvExcludedGenreIDs = map[int]bool{99: true, 10763: true, 10764: true, 10767: true, 16: true}
@@ -213,6 +213,12 @@ func (e *TVGoEngine) removeStub(ctx context.Context, path, hash string) {
 			e.logger.Printf("[TVSync] WARNING: failed to remove torrent %s for %s: %v", hash, filepath.Base(path), err)
 		}
 	}
+	e.removeStubFile(path)
+}
+
+// removeStubFile drops the stub without touching the engine, for callers that share one
+// torrent across several stubs and drop it once.
+func (e *TVGoEngine) removeStubFile(path string) {
 	os.Remove(path)
 	if e.invalidatePath != nil {
 		e.invalidatePath(path)
@@ -406,7 +412,7 @@ func (e *TVGoEngine) populateRegistryFromExisting() {
 		showName := m[1]
 		season, _ := strconv.Atoi(m[2])
 		episode, _ := strconv.Atoi(m[3])
-		hash8 := m[4]
+		hash8 := strings.ToLower(m[4])
 		key := e.episodeKey(showName, season, episode)
 
 		if _, exists := e.registry[key]; exists {
@@ -422,8 +428,8 @@ func (e *TVGoEngine) populateRegistryFromExisting() {
 				tsLoaded = true
 			}
 			for _, t := range torrents {
-				if strings.HasPrefix(t.Hash, hash8) {
-					fullHash = t.Hash
+				if strings.HasPrefix(strings.ToLower(t.Hash), hash8) {
+					fullHash = strings.ToLower(t.Hash)
 					break
 				}
 			}
@@ -460,7 +466,7 @@ func (e *TVGoEngine) readHashFromMKV(path string) string {
 	url, _ := obj["url"].(string)
 	m := reTVHashURL.FindStringSubmatch(url)
 	if len(m) > 1 {
-		return m[1]
+		return strings.ToLower(m[1])
 	}
 	return ""
 }
@@ -507,6 +513,11 @@ func (e *TVGoEngine) registerEpisode(key string, score int, hash, path, source, 
 			ShowIMDB:     showIMDB,
 		}); err != nil {
 			e.logger.Printf("[TVSync] Warning: failed to save episode to DB: %v", err)
+		}
+		// The hole is filled: close it here rather than only in the repair pass, or a
+		// client that reads the gap list and adds the episode itself keeps seeing it.
+		if err := e.db.ClearEpisodeGap(key); err != nil {
+			e.logger.Printf("[TVSync] Warning: could not clear the gap for %s: %v", key, err)
 		}
 	} else {
 		e.saveRegistry()
@@ -1519,7 +1530,7 @@ func (e *TVGoEngine) rehydrateMissingTorrents(ctx context.Context) {
 		if len(m) < 2 {
 			return nil
 		}
-		hash := m[1]
+		hash := strings.ToLower(m[1])
 
 		if activeHashes[hash] {
 			return nil

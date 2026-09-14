@@ -164,22 +164,28 @@ type Gap struct {
 // sees, and an unbounded backlog should not become an unbounded response.
 const maxGaps = 500
 
-// ListGaps returns the open holes, oldest first.
-func (m *Manager) ListGaps() ([]Gap, error) {
+// ListGaps returns the open holes, oldest first, along with how many there are in
+// total: the response is capped, and a client cannot tell a full page from a
+// truncated one by its length alone.
+func (m *Manager) ListGaps() ([]Gap, int, error) {
 	if m.cfg.Gaps == nil {
-		return []Gap{}, nil
+		return []Gap{}, 0, nil
 	}
 	gaps, err := m.cfg.Gaps()
 	if err != nil {
-		return nil, errf(http.StatusInternalServerError, "cannot read the episode gaps: %v", err)
+		// The driver error names the database file: it is logged, not returned, since
+		// this endpoint carries no authentication.
+		m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot read the episode gaps: %v", err)
+		return nil, 0, errf(http.StatusInternalServerError, "cannot read the episode gaps")
 	}
 	if gaps == nil {
 		gaps = []Gap{}
 	}
+	total := len(gaps)
 	if len(gaps) > maxGaps {
 		gaps = gaps[:maxGaps]
 	}
-	return gaps, nil
+	return gaps, total, nil
 }
 
 type RemoveResponse struct {
@@ -216,6 +222,13 @@ func (m *Manager) dropTorrent(ctx context.Context, hash string) {
 	defer cancel()
 	if err := m.cfg.GoStorm.RemoveTorrent(cctx, hash); err != nil {
 		m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove torrent %s: %v", hash, err)
+	}
+	// The failure counter outlives the torrent otherwise: the same release added again
+	// later would arrive already condemned, and the reaper would drop it on sight.
+	if cf, ok := m.cfg.Registry.(interface{ ClearMetadataFailure(string) error }); ok {
+		if err := cf.ClearMetadataFailure(hash); err != nil {
+			m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot clear the failure counter for %s: %v", hash, err)
+		}
 	}
 }
 
@@ -593,16 +606,22 @@ func (m *Manager) addEpisodes(ctx context.Context, req AddRequest, hash, magnet 
 		// UpsertEpisode replaces the row, so the show id a previous sync stored would
 		// be wiped by an add through the API. It is carried over instead: the id is
 		// how a dead release is traced back to TMDB, and this path has none of its own.
-		showIMDB := ""
-		if prev, ok, err := m.cfg.Registry.GetEpisode(key); err == nil && ok {
-			showIMDB = prev.ShowIMDB
-		}
+		// Reuse the row already read above: reading again would cost a query per
+		// episode and, on error, blank the id this very block exists to preserve.
+		showIMDB := p.entry.ShowIMDB
 		if err := m.cfg.Registry.UpsertEpisode(key, metadb.EpisodeEntry{
 			EpisodeKey: key, QualityScore: req.QualityScore, Hash: hash,
 			FilePath: path, Source: "api", Created: time.Now().Unix(), ShowIMDB: showIMDB,
 		}); err != nil {
 			rollback()
 			return nil, errf(http.StatusInternalServerError, "cannot register S%02dE%02d: %v", w.season, w.episode, err)
+		}
+		// The episode is back on disk: an open gap for it is stale, and a client that
+		// read the gap list and added it here would otherwise keep seeing its own hole.
+		if gc, ok := m.cfg.Registry.(interface{ ClearEpisodeGap(string) error }); ok {
+			if err := gc.ClearEpisodeGap(key); err != nil {
+				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot clear the gap for %s: %v", key, err)
+			}
 		}
 	}
 
@@ -733,8 +752,12 @@ func (m *Manager) findByHash(kind, hash string) ([]AddedFile, error) {
 	suffix := HashSuffix(hash)
 	if kind == "tv" {
 		dir = m.cfg.TVDir
-		suffix = hash[:8]
+		suffix = HashPrefix(hash)
 	}
+	// Legacy stubs carry the hash in the case the tracker used, so match case-insensitively:
+	// readStub lowercases the hash it returns, and a mismatch here would hide sibling stubs
+	// and drop a torrent still in use.
+	suffix = strings.ToLower(suffix)
 	var out []AddedFile
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -742,7 +765,7 @@ func (m *Manager) findByHash(kind, hash string) ([]AddedFile, error) {
 			// missing stub here means a duplicate add.
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(path, "_"+suffix+".mkv") {
+		if info.IsDir() || !strings.HasSuffix(strings.ToLower(path), "_"+suffix+".mkv") {
 			return nil
 		}
 		st := readStub(path)

@@ -30,7 +30,7 @@ func NewTorrentRemover(nativeBridge *native.NativeClient, logger *log.Logger) *T
 	return &TorrentRemover{
 		nativeBridge: nativeBridge,
 		logger:       logger,
-		hashPattern:  regexp.MustCompile(`([a-f0-9]{40})`),
+		hashPattern:  regexp.MustCompile(`(?i)([a-f0-9]{40})`),
 	}
 }
 
@@ -43,7 +43,7 @@ func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (bool, error) {
 	// Previously read the file content first, which could deadlock if the file
 	// was being streamed via FUSE (smbd holds read lock → Unlink blocks).
 	var fullHash string
-	suffixPattern := regexp.MustCompile(`_([a-f0-9]{8})\.mkv$`)
+	suffixPattern := regexp.MustCompile(`(?i)_([a-f0-9]{8})\.mkv$`)
 	if matches := suffixPattern.FindStringSubmatch(filename); len(matches) > 1 {
 		fullHash, _, _ = tr.findFullHashBySuffix(matches[1])
 	}
@@ -54,6 +54,7 @@ func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (bool, error) {
 	}
 
 	// CRITICAL FIX: Ensure hash is valid and 40 chars before proceeding
+	fullHash = strings.ToLower(fullHash)
 	if len(fullHash) != 40 {
 		return false, fmt.Errorf("invalid or missing hash (%s) for: %s", fullHash, filename)
 	}
@@ -125,6 +126,8 @@ func (tr *TorrentRemover) deriveTitleFromPath(path string) string {
 
 // addToBlacklist adds a hash and title to the persistent blacklist file
 func (tr *TorrentRemover) addToBlacklist(hash, title string) {
+	// Readers look the hash up lowercased, so a capitalised entry would never match.
+	hash = strings.ToLower(hash)
 	// blacklistPath := "/home/pi/STATE/blacklist.json"
 	blacklistPath := filepath.Join(GetStateDir(), "blacklist.json")
 

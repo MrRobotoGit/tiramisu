@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -60,7 +61,6 @@ func (d *DB) Close() error {
 	return d.db.Close()
 }
 
-// SetLogger sets a custom logger for the database.
 // hasColumn reports whether a table already carries a column.
 func (d *DB) hasColumn(table, column string) bool {
 	var n int
@@ -70,6 +70,24 @@ func (d *DB) hasColumn(table, column string) bool {
 	return n > 0
 }
 
+// addColumn applies an additive migration guarded by hasColumn. A lookup that fails for
+// its own reasons answers "missing", so the ALTER is attempted on a table that already
+// has the column: that duplicate is tolerated here, because the alternative is New()
+// returning an error and tiramisu refusing to start.
+func (d *DB) addColumn(table, column, ddl string) error {
+	if d.hasColumn(table, column) {
+		return nil
+	}
+	if _, err := d.db.Exec(ddl); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// SetLogger sets a custom logger for the database.
 func (d *DB) SetLogger(l Logger) {
 	if l != nil {
 		d.logger = l
@@ -182,10 +200,9 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 	// Additive column: SQLite has no ADD COLUMN IF NOT EXISTS, so it is guarded by a
 	// lookup instead. Without the show id an episode file cannot be traced back to
 	// TMDB, which is what a re-search needs.
-	if !d.hasColumn("tv_episodes", "show_imdb") {
-		if _, err := d.db.Exec(`ALTER TABLE tv_episodes ADD COLUMN show_imdb TEXT DEFAULT ''`); err != nil {
-			return err
-		}
+	if err := d.addColumn("tv_episodes", "show_imdb",
+		`ALTER TABLE tv_episodes ADD COLUMN show_imdb TEXT DEFAULT ''`); err != nil {
+		return err
 	}
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (6, 'add tv_episodes.show_imdb')`)
 
@@ -209,10 +226,9 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 	// last_attempt sends a gap to the back of the queue once it has been tried. Without
 	// it a show whose name cannot be resolved is retried first on every run, and the
 	// rest of the backlog is never reached.
-	if !d.hasColumn("episode_gaps", "last_attempt") {
-		if _, err := d.db.Exec(`ALTER TABLE episode_gaps ADD COLUMN last_attempt INTEGER DEFAULT 0`); err != nil {
-			return err
-		}
+	if err := d.addColumn("episode_gaps", "last_attempt",
+		`ALTER TABLE episode_gaps ADD COLUMN last_attempt INTEGER DEFAULT 0`); err != nil {
+		return err
 	}
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (8, 'add episode_gaps.last_attempt')`)
 	return nil

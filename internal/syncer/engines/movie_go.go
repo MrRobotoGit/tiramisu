@@ -153,10 +153,11 @@ var (
 	reMGarbage = regexp.MustCompile(`(?i)camrip|hdcam|hdts|telesync|\bts\b|telecine|\btc\b|\bscr\b|screener|webscreener`)
 	reMSeeders = regexp.MustCompile(`👤\s*(\d+)`)
 	// reQualityMarker: where a stub filename stops being the title and starts being
-	// release metadata.
-	reQualityMarker = regexp.MustCompile(`(?i)^(2160p|1080p|720p|480p|4k|uhd|hdr|dv|atmos|remux|bluray|web|webrip|web-dl|hevc|x264|x265|multi|ita|eng|\d+\.\d+)$`)
-	reMHashURL      = regexp.MustCompile(`link=([a-f0-9]{40})`)
-	reMMKVHash8     = regexp.MustCompile(`_([a-f0-9]{8})\.mkv$`)
+	// release metadata. No audio-channel alternative (5.1, 7.1): titleFromStubName
+	// splits on "." before matching, so such a token never reaches here whole.
+	reQualityMarker = regexp.MustCompile(`(?i)^(2160p|1080p|720p|480p|4k|uhd|hdr|dv|atmos|remux|bluray|web|webrip|web-dl|hevc|x264|x265|multi|ita|eng)$`)
+	reMHashURL      = regexp.MustCompile(`(?i)link=([a-f0-9]{40})`)
+	reMMKVHash8     = regexp.MustCompile(`(?i)_([a-f0-9]{8})\.mkv$`)
 	reMYear         = regexp.MustCompile(`[._]((?:19|20)\d{2})[._]`)
 	reMNonWord      = regexp.MustCompile(`[^a-z0-9]`)
 	reMQuality      = regexp.MustCompile(`(?i)(2160p|1080p|720p|4k|uhd)`)
@@ -275,7 +276,12 @@ func (e *MovieGoEngine) flagDeadTitles(existingIndex map[string]movieFile) {
 		}
 		e.deadTitles[imdbID] = true
 		e.setCache(e.noMKVCache, mf.hash, CacheEntry{Reason: "dead_swarm", TS: time.Now().Unix()})
+		// Every negative cache has to go, not just the recheck one: a title that hit
+		// no_streams (24h) or add_failed (168h) would log "re-searching" and then return
+		// from evaluateTitle without searching anything, for up to a week.
 		delete(e.recheckCache, imdbID)
+		delete(e.noStreamsCache, imdbID)
+		delete(e.addFailCache, imdbID)
 		e.logger.Printf("[MovieSync] Dead release for %s (%s): re-searching", filepath.Base(mf.path), mf.hash[:8])
 	}
 }
@@ -327,8 +333,14 @@ func (e *MovieGoEngine) reapFlaggedTitles(ctx context.Context, existingIndex map
 		if title == "" {
 			continue
 		}
+		// An unknown year must stay empty: "0" is not a date, and BuildMovieFilename would
+		// drop it and rename the stub, which Plex reads as a different file.
+		releaseDate := ""
+		if year > 0 {
+			releaseDate = strconv.Itoa(year)
+		}
 		e.logger.Printf("[MovieSync] Dead release outside discovery: evaluating %s (%s)", title, imdbID)
-		e.evaluateTitle(ctx, imdbID, title, strconv.Itoa(year), year, existing, diskHashes)
+		e.evaluateTitle(ctx, imdbID, title, releaseDate, year, existing, diskHashes)
 		time.Sleep(mMovieProcessSleep)
 	}
 }
@@ -345,16 +357,23 @@ func titleFromStubName(name string) (string, int) {
 	sep := func(r rune) bool { return r == '_' || r == '.' || r == ' ' }
 	parts := strings.FieldsFunc(base, sep)
 	var words []string
-	year := 0
 	for _, p := range parts {
-		if n, err := strconv.Atoi(p); err == nil && n >= 1900 && n <= 2100 {
-			year = n
-			break // everything past the year is release metadata
-		}
 		if reQualityMarker.MatchString(p) {
-			break
+			break // everything past the first marker is release metadata
 		}
 		words = append(words, p)
+	}
+	// The release year is the LAST year-like token, not the first: a title can be a year
+	// ("1917", "2012") or end with one ("Blade Runner 2049"), and taking the first would
+	// steal it from the title and report the wrong year. Index 0 is never the year, or a
+	// title that is just a year would come back empty and never be reaped.
+	year := 0
+	for i := len(words) - 1; i > 0; i-- {
+		if n, err := strconv.Atoi(words[i]); err == nil && n >= 1900 && n <= 2100 {
+			year = n
+			words = words[:i]
+			break
+		}
 	}
 	return strings.Join(words, " "), year
 }
@@ -523,7 +542,7 @@ func (e *MovieGoEngine) buildExistingMovieIndex() (map[string]movieFile, map[str
 		}
 		var hash string
 		if m := reMHashURL.FindStringSubmatch(url); len(m) >= 2 {
-			hash = m[1]
+			hash = strings.ToLower(m[1])
 		}
 		is4K := reM4K.MatchString(info.Name())
 		score := e.calculateMovieScore(info.Name(), 0, 0, is4K, e.weights)
@@ -579,15 +598,19 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 		}
 	}
 
-	// Check negative caches
-	if e.isInCache(e.noStreamsCache, imdbID, noStreamsCacheTTL) {
-		return false
-	}
-	if e.isInCache(e.recheckCache, imdbID, recheckTTL) {
-		return false
-	}
-	if e.isInCache(e.addFailCache, imdbID, addFailCacheTTL) {
-		return false
+	// Check negative caches. A title flagged dead this run skips them: its stub is
+	// unplayable, so a cached "nothing better" from a healthy release no longer applies,
+	// and honouring it would make the reaper log a search it never ran.
+	if !e.deadTitles[imdbID] {
+		if e.isInCache(e.noStreamsCache, imdbID, noStreamsCacheTTL) {
+			return false
+		}
+		if e.isInCache(e.recheckCache, imdbID, recheckTTL) {
+			return false
+		}
+		if e.isInCache(e.addFailCache, imdbID, addFailCacheTTL) {
+			return false
+		}
 	}
 
 	// Get streams
@@ -632,7 +655,7 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 			continue
 		}
 
-		if diskHashes[c.Hash[len(c.Hash)-8:]] {
+		if diskHashes[strings.ToLower(c.Hash[len(c.Hash)-8:])] {
 			continue
 		}
 
@@ -690,6 +713,12 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 			// The title has a live release again: the flag must not survive, or a later
 			// run with no candidates would drop the replacement we just created.
 			delete(e.deadTitles, imdbID)
+			// The index was built before the run: without this the reap pass, which
+			// runs at the end with the same map, cannot see what the loop just wrote
+			// and would add the very same release a second time.
+			if len(hash) >= 8 {
+				diskHashes[strings.ToLower(hash[len(hash)-8:])] = true
+			}
 			e.logger.Printf("[MovieSync] Created: %s (%s, %.1fGB, score:%d)", filename, res, float64(bestFile.Length)/1024/1024/1024, c.QualityScore)
 			e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "processed", TS: time.Now().Unix()})
 			return true
@@ -1072,7 +1101,7 @@ func (e *MovieGoEngine) rehydrateMissingTorrents(ctx context.Context) {
 		if len(m) < 2 {
 			return nil
 		}
-		hash := m[1]
+		hash := strings.ToLower(m[1])
 
 		if activeHashes[hash] {
 			return nil
@@ -1133,8 +1162,9 @@ func (e *MovieGoEngine) cleanupOrphanedFiles(ctx context.Context) {
 		if len(m) < 2 {
 			return nil
 		}
-		if !activeHashes[m[1]] {
-			e.removeStub(ctx, path, m[1])
+		hash := strings.ToLower(m[1])
+		if !activeHashes[hash] {
+			e.removeStub(ctx, path, hash)
 		}
 		return nil
 	})

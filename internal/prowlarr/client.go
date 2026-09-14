@@ -87,21 +87,22 @@ func (c *Client) FetchTorrentsStatus(imdbID, contentType, title string, year int
 	if err != nil {
 		return []Stream{}, false, err
 	}
-	return c.mapToStremioFiltered(results, keep), !partial, nil
+	streams, unresolved := c.mapToStremioFiltered(results, keep)
+	// A release whose hash never resolved was dropped in silence, and a search that
+	// produced nothing BECAUSE of that is an indexer or proxy failure, not proof the
+	// title is dead: the caller must not condemn a stub on it. One unresolvable result
+	// among usable ones is not enough to invalidate the search, though - an indexer
+	// that never resolves would otherwise switch the reaper off for good.
+	complete := !partial && (len(streams) > 0 || unresolved == 0)
+	return streams, complete, nil
 }
 
-// fetchFromProwlarr executes an API query using the IMDb ID and merges results by infoHash.
-// If contentType is "series" and seasons are provided, it also executes keyword searches
-// (e.g., "Show Name s01") in parallel to maximize discovery of 4K releases. For movies, a
-// single "Title Year" keyword query is added (e.g. "Gone 2026"), since indexers without
-// IMDb-ID search (1337x, etc.) otherwise never contribute movie results at all.
-func (c *Client) fetchFromProwlarr(imdbID, contentType, title string, year int, seasons ...int) ([]ProwlarrResult, error) {
-	res, _, err := c.fetchFromProwlarrStatus(imdbID, contentType, title, year, seasons...)
-	return res, err
-}
-
-// fetchFromProwlarrStatus reports partial=true when at least one query failed while
-// another answered: the merged results are usable, but incomplete.
+// fetchFromProwlarrStatus executes an API query using the IMDb ID and merges results by
+// infoHash. For a series with seasons it also runs keyword searches ("Show Name s01") in
+// parallel; for a movie it adds a single "Title Year" query, since indexers without
+// IMDb-ID search (1337x and friends) otherwise never contribute movie results at all.
+// partial=true means at least one query failed while another answered: the merged
+// results are usable, but incomplete.
 func (c *Client) fetchFromProwlarrStatus(imdbID, contentType, title string, year int, seasons ...int) ([]ProwlarrResult, bool, error) {
 	prowlarrType := "movie"
 	if contentType == "series" {
@@ -247,7 +248,8 @@ func (c *Client) queryCtx(ctx context.Context, params map[string]string) ([]Prow
 // lightweight GET request that follows Prowlarr's 301→magnet redirect.
 // Resolution is performed concurrently (up to 5 goroutines).
 func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
-	return c.mapToStremioFiltered(results, nil)
+	streams, _ := c.mapToStremioFiltered(results, nil)
+	return streams
 }
 
 // toStream builds the Stream a result maps to. Everything except InfoHash is known
@@ -273,9 +275,11 @@ func (c *Client) toStream(res ProwlarrResult) Stream {
 //
 // keep receives the Stream as it will be returned, with InfoHash still empty for the
 // ones that need resolving. A nil keep resolves everything, which is the old behaviour.
-func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream) bool) []Stream {
+// It also returns how many kept results had to be dropped because their hash could not
+// be resolved, so the caller can tell an empty answer from a degraded one.
+func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream) bool) ([]Stream, int) {
 	if len(results) == 0 {
-		return []Stream{}
+		return []Stream{}, 0
 	}
 
 	// V1.7.3: Sort by size descending immediately. This ensures that high-quality
@@ -310,6 +314,7 @@ func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream
 	// Resolve missing hashes concurrently (max 5 workers). Never cap this list: the size sort
 	// only sets priority, and truncating it would drop the smaller 1080p releases that a
 	// 1080p-preferring quality preset exists to select.
+	unresolved := 0
 	if len(needsResolution) > 0 {
 		sem := make(chan struct{}, 5)
 		var mu sync.Mutex
@@ -322,12 +327,14 @@ func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				hash := c.resolveHashFromDownloadURL(item.res.DownloadUrl)
+				mu.Lock()
 				if hash != "" {
 					item.res.InfoHash = hash
-					mu.Lock()
 					ready = append(ready, item.res)
-					mu.Unlock()
+				} else {
+					unresolved++
 				}
+				mu.Unlock()
 			}()
 		}
 		wg.Wait()
@@ -337,7 +344,10 @@ func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream
 	for _, res := range ready {
 		streams = append(streams, c.toStream(res))
 	}
-	return streams
+	if unresolved > 0 {
+		log.Printf("[Prowlarr] %d result(s) dropped: hash could not be resolved", unresolved)
+	}
+	return streams, unresolved
 }
 
 // resolveHashFromDownloadURL follows the Prowlarr download proxy URL, which issues a

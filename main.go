@@ -4575,8 +4575,6 @@ func main() {
 			GoStorm:        engines.NewGoStormClient(gc().GoStormBaseURL),
 			Registry:       registry,
 			InvalidatePath: invalidateSyncRemovedPath,
-			// Same record the FUSE unlink handler writes: without it the sync engines
-			// add the title back on their next run.
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.
 			Gaps: func() ([]library.Gap, error) {
@@ -4601,6 +4599,8 @@ func main() {
 				}
 				return out, nil
 			},
+			// Same record the FUSE unlink handler writes: without it the sync engines
+			// add the title back on their next run.
 			Blacklist: func(path, hash string) {
 				if globalTorrentRemover == nil || len(hash) != 40 {
 					return

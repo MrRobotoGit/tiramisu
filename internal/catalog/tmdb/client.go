@@ -415,6 +415,13 @@ func (c *Client) fetchTVPage(ctx context.Context, urlStr string) ([]TVShow, erro
 	}
 	defer resp.Body.Close()
 
+	// catalog.Do only retries 5xx, so a 401 or a 429 arrives here with an error body
+	// that decodes to zero results. Reported as "no show", the reaper would read a
+	// rate limit as a title that does not exist.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("TMDB answered %d", resp.StatusCode)
+	}
+
 	var result struct {
 		Results []TVShow `json:"results"`
 	}
