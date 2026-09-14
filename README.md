@@ -1105,6 +1105,36 @@ leaves nothing behind.
 The torrent behind a removed stub is dropped only once no other stub points at
 it: one season pack is a single torrent behind many episodes.
 
+**Episode gaps (v1.9.71).** When the TV reaper removes an episode whose release
+died, it does not just delete the stub: it records the hole, so a show that
+discovery never returns can still be repaired later. `type=gaps` lists those
+holes, oldest first.
+
+```bash
+curl -s -D- 'http://127.0.0.1:9080/api/library/list?type=gaps' | \
+  jq '.[] | {episode_key, show, season, path, dead_hash, removed_at, last_attempt}'
+```
+
+```json
+[{"episode_key":"dummybunny_s01e02","show":"Dummy Bunny","season":1,
+  "show_imdb":"tt1234567","path":"tv/Dummy_Bunny_2015/Season_01/...mkv",
+  "dead_hash":"<infohash of the release that died>",
+  "removed_at":1757808000,"last_attempt":0}]
+```
+
+`episode_key` is `<show slugged>_s01e02` and is the id every other call uses.
+`last_attempt` is when the repair pass last re-searched the hole, and stays `0`
+when it never has, which is why it carries no `omitempty`: `0` means "never
+tried", not "tried at epoch". The listing is capped at 500 entries and the true
+count travels in the `X-Total-Count` header, so a client reading a full page can
+tell it is not the whole backlog.
+
+The TV sync repairs gaps on its own, one search per affected season, at most 5
+shows per run and no sooner than 6 hours after the last attempt on the same
+hole. Filing the episode yourself with `/api/library/add` closes its gap too: a
+gap is cleared whenever the episode has a live release again, whoever put it
+there.
+
 ### GoStorm API (`:8090`)
 
 The engine underneath. Adding a torrent here registers it for streaming but
