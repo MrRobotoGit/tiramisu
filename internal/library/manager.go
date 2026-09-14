@@ -199,7 +199,7 @@ type Item struct {
 }
 
 var (
-	reStubHash  = regexp.MustCompile(`link=([a-f0-9]{40})`)
+	reStubHash  = regexp.MustCompile(`link=([a-fA-F0-9]{40})`)
 	reStubIndex = regexp.MustCompile(`index=(\d+)`)
 	reStubIMDB  = regexp.MustCompile(`tt\d{7,10}`)
 )
@@ -969,8 +969,11 @@ func readStub(path string) stub {
 		}
 	}
 
+	// Older builds wrote the URL verbatim, hash in caps included, so normalise it:
+	// everything downstream compares lowercase, and an empty hash would leave the
+	// torrent in the engine and blacklist the release without its id.
 	if m := reStubHash.FindStringSubmatch(url); len(m) > 1 {
-		out.Hash = m[1]
+		out.Hash = strings.ToLower(m[1])
 	}
 	if m := reStubIndex.FindStringSubmatch(url); len(m) > 1 {
 		out.FileIndex, _ = strconv.Atoi(m[1])

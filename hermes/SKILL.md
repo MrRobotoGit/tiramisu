@@ -156,7 +156,12 @@ curl -s "{CTRL}/api/library/list?type=movie" | \
 
 The slice is the half that appears in a movie filename; for `type=tv` print
 `i["hash"][:8]` instead. The full hash is in the JSON either way, so script
-against that rather than the fragment.
+against that rather than the fragment; when it is empty, only the path
+identifies the entry.
+
+Only `movie`, `tv` and `gaps` mean anything: any other value, a typo included,
+silently falls back to the movie library, so a wrong word reads as a wrong
+answer. Ask for the library you are about to write into.
 
 One entry per stub, with `size`, `hash`, `imdb` and, for TV, `season`/`episode`.
 This is the dedup check: it reads the filesystem server-side, which is the only
@@ -206,8 +211,9 @@ tv/
   ignored on purpose: the webhook matcher pairs a Plex episode event with an
   open file by looking at the ones whose id is empty
 - **HASH8** is 8 lowercase hex chars of the info hash, but not the same 8:
-  **movies use the LAST 8, episodes the FIRST 8.** When you match a `list` entry
-  by hash, use `endswith` for a movie and `startswith` for an episode
+  **movies use the LAST 8, episodes the FIRST 8.** That is what the server writes
+  today, not a rule every stub on disk obeys: legacy entries can carry the other
+  half. Match on the `hash` field of the entry, never on the filename fragment
 
 ## Episode gaps (TV)
 
