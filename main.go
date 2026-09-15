@@ -4174,8 +4174,8 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				// Cleanup stale entries: negative cache 12h TTL, fullpack cache 7 days TTL
-				globalSyncCacheManager.CleanupStaleEntries(12*time.Hour, 7*24*time.Hour)
+				// Cleanup stale entries: negative cache 12h TTL
+				globalSyncCacheManager.CleanupStaleEntries(12 * time.Hour)
 			case <-backgroundStopChan:
 				return
 			}

@@ -214,7 +214,6 @@ func (tr *TorrentRemover) removeTorrent(hash string) error {
 
 	if globalSyncCacheManager != nil {
 		globalSyncCacheManager.ClearNegativeCache(hash)
-		globalSyncCacheManager.ClearFullpackCache(hash)
 	}
 	return nil
 }

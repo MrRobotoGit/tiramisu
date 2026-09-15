@@ -20,7 +20,9 @@ func (d *DB) MigrateFromJSON(stateDir string) error {
 	epPath := filepath.Join(stateDir, "tv_episode_registry.json")
 
 	needsInodes := fileExists(inodePath)
-	needsCaches := fileExists(negPath) || fileExists(fullPath)
+	// Only the negative half is ingested: tv_fullpacks.json has had no reader since
+	// the Go port. Keying on it too would let a leftover file wipe the live negatives.
+	needsCaches := fileExists(negPath)
 	needsEpisodes := fileExists(epPath)
 
 	if !needsInodes && !needsCaches && !needsEpisodes {
@@ -61,7 +63,7 @@ func (d *DB) MigrateFromJSON(stateDir string) error {
 	// Migrate sync caches
 	var cacheCount int
 	if needsCaches {
-		n, err := d.migrateCaches(negPath, fullPath)
+		n, err := d.migrateCaches(negPath)
 		if err != nil {
 			return fmt.Errorf("metadb: migrate caches: %w", err)
 		}
@@ -242,11 +244,9 @@ func (d *DB) insertInodesV2(data InodeMapDataV2) (int, error) {
 	return count, nil
 }
 
-// migrateCaches reads no_mkv_hashes.json and tv_fullpacks.json.
-// Actual formats:
-// no_mkv_hashes.json: {"hash": {"hash": "...", "timestamp": "..."}}
-// tv_fullpacks.json:  {"hash": {"hash": "...", "title": "...", "processed_at": "..."}}
-func (d *DB) migrateCaches(negPath, fullPath string) (int, error) {
+// migrateCaches reads no_mkv_hashes.json, whose format is
+// {"hash": {"hash": "...", "timestamp": "..."}}.
+func (d *DB) migrateCaches(negPath string) (int, error) {
 	tx, err := d.db.Begin()
 	if err != nil {
 		return 0, err
@@ -284,28 +284,6 @@ func (d *DB) migrateCaches(negPath, fullPath string) (int, error) {
 		}
 	}
 
-	// Fullpack caches
-	if fileExists(fullPath) {
-		data, err := os.ReadFile(fullPath)
-		if err != nil {
-			return 0, err
-		}
-		var fullData map[string]FullpackCacheEntryJSON
-		if err := json.Unmarshal(data, &fullData); err == nil {
-			for hash, entry := range fullData {
-				ts := entry.Timestamp
-				if ts == "" {
-					ts = time.Now().UTC().Format(time.RFC3339)
-				}
-				_, err := stmt.Exec(hash, "fullpack", entry.Title, ts)
-				if err != nil {
-					return 0, err
-				}
-				count++
-			}
-		}
-	}
-
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -317,13 +295,6 @@ func (d *DB) migrateCaches(negPath, fullPath string) (int, error) {
 type NegativeCacheEntryJSON struct {
 	Hash      string `json:"hash"`
 	Timestamp string `json:"timestamp"`
-}
-
-// FullpackCacheEntryJSON matches the JSON format of tv_fullpacks.json entries.
-type FullpackCacheEntryJSON struct {
-	Hash      string `json:"hash"`
-	Title     string `json:"title"`
-	Timestamp string `json:"processed_at"`
 }
 
 // migrateEpisodes reads tv_episode_registry.json.

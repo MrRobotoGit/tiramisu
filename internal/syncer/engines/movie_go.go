@@ -1275,7 +1275,7 @@ func (e *MovieGoEngine) loadNoMKVCache() map[string]CacheEntry {
 	if e.db == nil {
 		return e.loadCache(e.noMKVCFile)
 	}
-	neg, _, err := e.db.LoadAllCaches()
+	neg, err := e.db.LoadNegatives()
 	if err != nil {
 		e.logger.Printf("WARNING: could not read the negative cache from the state DB: %v", err)
 		return e.loadCache(e.noMKVCFile)
