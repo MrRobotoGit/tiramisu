@@ -589,6 +589,17 @@ func (e *MovieGoEngine) processMovie(ctx context.Context, movie tmdb.Movie, exis
 	return e.evaluateTitle(ctx, imdbID, title, movie.ReleaseDate, year, existingIndex[imdbID], diskHashes)
 }
 
+// candidateBlocked reports what a candidate that fails the quality bar means for the
+// title. The bar is the existing score plus the upgrade margin, and it is the user's: a
+// dead stub never gets to win it, but it is never replaced by a downgrade either, it is
+// dropped after the run. blocked alone (live stub) just parks the title.
+func candidateBlocked(stubDead bool, candidateScore, existingScore int) (blocked, dropDead bool) {
+	if float64(candidateScore) > float64(existingScore)*mMovieUpgradePct {
+		return false, false
+	}
+	return true, stubDead
+}
+
 // evaluateTitle runs the candidate search for one title and acts on the result. It is
 // separate from processMovie so a title the discovery feed never returns - anything
 // older than the six-month window - can still be reached, which is the only way the
@@ -653,9 +664,17 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 
 	// Try candidates
 	for _, c := range candidates {
-		if existingPath != "" && float64(c.QualityScore) <= float64(existingScore)*mMovieUpgradePct {
-			e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_better_stream", TS: time.Now().Unix()})
-			return false
+		if existingPath != "" {
+			blocked, dropDead := candidateBlocked(e.deadTitles[imdbID], c.QualityScore, existingScore)
+			if dropDead {
+				// The stub cannot play, but the bar still applies: no candidate clears
+				// it, so the post-loop drop removes the title instead of downgrading it.
+				continue
+			}
+			if blocked {
+				e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_better_stream", TS: time.Now().Unix()})
+				return false
+			}
 		}
 
 		if e.isInCache(e.noMKVCache, c.Hash, noMKVCacheTTL) {
