@@ -192,12 +192,25 @@ jobs:
       - name: Check it shuts down cleanly on SIGTERM
         run: |
           set -eu
+          timeout=30
           start=$(date +%s)
-          docker stop -t 30 tiramisu-smoke >/dev/null
-          echo "stopped in $(( $(date +%s) - start ))s"
+          docker stop -t "$timeout" tiramisu-smoke >/dev/null
+          took=$(( $(date +%s) - start ))
           code=$(docker inspect -f '{{.State.ExitCode}}' tiramisu-smoke)
-          echo "exit code: $code"
-          [ "$code" = "0" ] || { echo "::error::unclean shutdown, exit $code"; exit 1; }
+          echo "stopped in ${took}s, exit code $code"
+          # The duration is what proves the signal arrived: a container nobody
+          # forwarded SIGTERM to burns the whole timeout and is then killed.
+          [ "$took" -lt "$timeout" ] || {
+            echo "::error::took the full ${timeout}s: SIGTERM was not forwarded"
+            exit 1
+          }
+          # 143 is 128+15, the normal code for a process ending on SIGTERM; 137
+          # is 128+9, the SIGKILL that follows when it ignored the request.
+          case "$code" in
+            0|143) ;;
+            137) echo "::error::killed with SIGKILL: the shutdown did not complete"; exit 1 ;;
+            *)   echo "::error::unclean shutdown, exit $code"; exit 1 ;;
+          esac
 
       - name: Container logs
         if: always()
