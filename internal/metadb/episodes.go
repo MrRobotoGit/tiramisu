@@ -29,6 +29,20 @@ func (d *DB) UpsertEpisode(key string, entry EpisodeEntry) error {
 	return err
 }
 
+// SetEpisodeShowIMDB fills in the show id of one episode, and only that.
+// Deliberately not an UpsertEpisode with a modified entry: that is an INSERT OR
+// REPLACE, so a caller holding a row read earlier in the run would write back its
+// stale hash and path over whatever replaced them since — and resurrect a row the
+// meantime deleted. An UPDATE touches the one column it means to, and touches
+// nothing at all when the episode is gone.
+func (d *DB) SetEpisodeShowIMDB(key, imdbID string) error {
+	_, err := d.db.Exec(
+		`UPDATE tv_episodes SET show_imdb = ?, updated_at = datetime('now') WHERE episode_key = ?`,
+		imdbID, key,
+	)
+	return err
+}
+
 // GetEpisode returns a single episode by its key.
 func (d *DB) GetEpisode(key string) (*EpisodeEntry, bool, error) {
 	var e EpisodeEntry

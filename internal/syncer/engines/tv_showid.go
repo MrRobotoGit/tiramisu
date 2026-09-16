@@ -113,9 +113,11 @@ func (e *TVGoEngine) resolveShow(ctx context.Context, entries []metadb.EpisodeEn
 	return show, imdbID, nil
 }
 
-// persistShowIMDB fills in the id for the episodes that lack it. The entries must be
-// whole rows as read back from the registry: the write replaces the record, so a
-// partial entry would blank hash, source and created.
+// persistShowIMDB fills in the id for the episodes that lack it. Only that column is
+// written: entries reach here as a snapshot taken when the run started, and the reaper
+// reads it half an hour later, by which time the discovery loop may have replaced the
+// episode. Writing whole rows from that snapshot put the old release back and left its
+// replacement unregistered, for the orphan cleanup to delete on the next run.
 func (e *TVGoEngine) persistShowIMDB(entries []metadb.EpisodeEntry, imdbID string) {
 	if e.db == nil || imdbID == "" {
 		return
@@ -124,14 +126,7 @@ func (e *TVGoEngine) persistShowIMDB(entries []metadb.EpisodeEntry, imdbID strin
 		if ep.ShowIMDB == imdbID {
 			continue
 		}
-		if ep.Hash == "" {
-			// A partial entry: writing it would replace a real row with an empty one,
-			// or resurrect an episode that no longer exists. The gap records carry the
-			// id themselves, so nothing is lost by skipping.
-			continue
-		}
-		ep.ShowIMDB = imdbID
-		if err := e.db.UpsertEpisode(ep.EpisodeKey, ep); err != nil {
+		if err := e.db.SetEpisodeShowIMDB(ep.EpisodeKey, imdbID); err != nil {
 			// One row failing (a busy DB, say) must not cost the whole set: the
 			// unwritten ones would send the search back to TMDB on the next run.
 			e.logger.Printf("[TVSync] Warning: could not store the show id for %s: %v", ep.EpisodeKey, err)
