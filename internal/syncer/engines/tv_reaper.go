@@ -340,8 +340,9 @@ func (e *TVGoEngine) repairEpisodeGaps(ctx context.Context) {
 		}
 		entries := make([]metadb.EpisodeEntry, 0, len(any))
 		for _, g := range any {
-			// Hash is deliberately left empty: these episodes no longer exist, and the
-			// empty hash is what stops resolveShow from writing a partial row back.
+			// Hash stays empty: the episode is gone and no release stands behind it any
+			// more. The entry carries only what resolveShow needs to find the show, and
+			// storing the id is a single-column update, so no row is written back.
 			entries = append(entries, metadb.EpisodeEntry{
 				EpisodeKey: g.EpisodeKey, FilePath: g.FilePath, ShowIMDB: g.ShowIMDB,
 			})
