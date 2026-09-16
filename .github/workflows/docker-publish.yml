@@ -274,11 +274,13 @@ jobs:
       - name: Generate build summary
         if: github.event_name != 'workflow_dispatch' || inputs.push
         run: |
-          echo "## 🐳 Docker Images Published" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
-          echo "**Smoke test:** passed on linux/amd64 before publishing" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Published to:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Docker Hub:** \`docker pull mrrobotogit/tiramisu:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **GitHub Container Registry:** \`docker pull ghcr.io/${{ github.repository_owner }}/tiramisu:latest\`" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## 🐳 Docker Images Published"
+            echo ""
+            echo "**Platforms:** linux/amd64, linux/arm64"
+            echo "**Smoke test:** passed on linux/amd64 before publishing"
+            echo ""
+            echo "### 📦 Published to:"
+            echo "- **Docker Hub:** \`docker pull mrrobotogit/tiramisu:latest\`"
+            echo "- **GitHub Container Registry:** \`docker pull ghcr.io/${{ github.repository_owner }}/tiramisu:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"

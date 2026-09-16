@@ -1,0 +1,98 @@
+# ==============================================================================
+# Tiramisu CI
+# Formatting, host and arm64 builds, vet, module hygiene and the unit tests
+# that ship in this repository. The complete suite is maintained in the private
+# tree and runs there before every sync, so this job tests what is present
+# here: today that is a small subset, and every pull request brings its own
+# tests.
+# ==============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [ main, feature/audio-projection ]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The vendored anacrolix fork is upstream code with upstream formatting,
+      # so it is excluded from the check rather than reformatted.
+      - name: Check formatting
+        run: |
+          set -eu
+          unformatted=$(gofmt -l . | grep -v '^internal/anacrolix-torrent/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files are not gofmt clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      # Compile-only gate for the production architecture. CGO is off, which is
+      # all a cross build can do without a target toolchain, and enough to catch
+      # an architecture-specific compile error before a tag run reaches the
+      # multi-arch build under QEMU. The real binary is built on the Pi and in
+      # the Docker image, both with CGO enabled.
+      - name: Cross-build for the target architecture
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null .
+
+      # Same scope as formatting and tests: the vendored fork is upstream code
+      # and a vet finding there is not ours to fix. xargs passes the list as
+      # separate arguments, which shellcheck can see.
+      - name: Vet
+        run: go list ./... | grep -v 'internal/anacrolix-torrent' | xargs -r go vet
+
+      # -diff fails without writing, so a stale go.mod or go.sum surfaces here.
+      - name: Check the module files are tidy
+        run: go mod tidy -diff
+
+      - name: Lint the workflows
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+
+      # A private suite that is not here must not read as a green run either:
+      # the count goes into the summary, and zero skips the tests explicitly.
+      - name: Check for tests
+        id: tests
+        run: |
+          set -eu
+          count=$(find . -name '*_test.go' -not -path './.git/*' -not -path './internal/anacrolix-torrent/*' | wc -l | tr -d ' ')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Tests"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -eq 0 ]; then
+            echo "No test files in this revision, so the suite was not executed. The complete suite lives in the private repository." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "$count test file(s) found, running \`go test -race\` on the project packages." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Run the tests
+        if: steps.tests.outputs.count != '0'
+        run: |
+          set -eu
+          go list ./... | grep -v 'internal/anacrolix-torrent' | xargs -r go test -race -count=1
