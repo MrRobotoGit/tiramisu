@@ -4100,23 +4100,28 @@ func main() {
 					torrent.V304LoadBans(ips)
 					logger.Printf("[V304] Restored %d persisted peer bans", len(ips))
 				}
-				// Metadata resolution outcomes: the sync engines read the counter to
-				// tell a dead swarm from a slow one before dropping a title.
+				// Reachability outcomes: the sync engines read the counter to tell a dead
+				// release from a slow one before dropping a title.
 				failDB := stateDB
-				native.MetadataOutcome = func(hash string, resolved bool) {
+				native.ReachabilityOutcome = func(hash string, resolved bool) {
 					var err error
 					if resolved {
-						// Success is the common case: read first so the usual Open costs a
+						// Success is the common case: read first so the usual read costs a
 						// lookup instead of a write transaction.
 						if n, qerr := failDB.MetadataFailureCount(hash); qerr != nil || n == 0 {
 							return
 						}
 						err = failDB.ClearMetadataFailure(hash)
 					} else {
+						short := hash
+						if len(short) > 8 {
+							short = short[:8]
+						}
+						logger.Printf("[DeadSwarm] %s gave no bytes and has no peers", short)
 						err = failDB.RecordMetadataFailure(hash)
 					}
 					if err != nil {
-						logger.Printf("WARNING: metadata failure bookkeeping for %s: %v", hash, err)
+						logger.Printf("WARNING: reachability bookkeeping for %s: %v", hash, err)
 					}
 				}
 

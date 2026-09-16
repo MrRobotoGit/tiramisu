@@ -6,9 +6,12 @@ import (
 	"time"
 )
 
-// RecordMetadataFailure counts one failed metadata resolution for a torrent.
-// first_fail is kept so a burst inside one window cannot reach the threshold:
-// what proves a dead swarm is failures spread over time, not their number.
+// RecordMetadataFailure counts one failed reachability check for a torrent: a
+// metainfo that never arrived, or a read that waited out its timeout against a
+// swarm with nothing connected. first_fail is kept so a burst inside one window
+// cannot reach the threshold: what proves a dead swarm is failures spread over
+// time, not their number. The table name predates the second case and is kept
+// for the databases already in production.
 func (d *DB) RecordMetadataFailure(hash string) error {
 	now := time.Now().Unix()
 	_, err := d.db.Exec(`
@@ -21,8 +24,8 @@ func (d *DB) RecordMetadataFailure(hash string) error {
 	return err
 }
 
-// ClearMetadataFailure drops the counter after a successful resolution: one
-// answer from the swarm is enough to say it is alive.
+// ClearMetadataFailure drops the counter after the swarm answers: one metainfo
+// taken from it, or one byte served, is enough to say the release is alive.
 func (d *DB) ClearMetadataFailure(hash string) error {
 	_, err := d.db.Exec(`DELETE FROM metadata_failures WHERE hash = ?`, hash)
 	return err

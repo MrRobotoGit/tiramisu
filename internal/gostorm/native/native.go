@@ -41,10 +41,12 @@ func NewNativeClient() *NativeClient {
 	}
 }
 
-// MetadataOutcome reports each resolution the bridge had to wait for: true when
-// the swarm answered, false on timeout. Injected by main so this package stays
-// unaware of the state DB; nil when no DB is wired.
-var MetadataOutcome func(hash string, resolved bool)
+// ReachabilityOutcome reports whether a release answered: true when the swarm gave
+// something, false when it was waited out and gave nothing. Injected by main so this
+// package stays unaware of the state DB; nil when no DB is wired. The verdict is about
+// the swarm, not about the metainfo, which survives in the DB long after the peers are
+// gone (see reportReachability).
+var ReachabilityOutcome func(hash string, resolved bool)
 
 // Wake triggers the start of a torrent (Ghost -> Active) entirely in-memory
 // Synchronous & Deduplicated.
@@ -98,10 +100,16 @@ func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
 
 			select {
 			case <-t.Torrent.GotInfo():
+				// Reported only here, where the metainfo demonstrably came from the swarm.
+				// Below it may just as well have been injected from the DB, which says
+				// nothing about whether anybody is still sharing the release.
+				if ReachabilityOutcome != nil {
+					ReachabilityOutcome(hash, true)
+				}
 			case <-timer.C:
 				log.Printf("[NativeBridge] Metadata timeout for %s", hash)
-				if MetadataOutcome != nil {
-					MetadataOutcome(hash, false)
+				if ReachabilityOutcome != nil {
+					ReachabilityOutcome(hash, false)
 				}
 				return fmt.Errorf("torrent metadata timeout (45s): %s", hash)
 			}
@@ -110,12 +118,6 @@ func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
 		if t.Torrent != nil {
 			if info := t.Torrent.Info(); info != nil {
 				pieceLenKB = int(info.PieceLength) / 1024
-				// Reported here, not inside the wait above: a torrent that recovered
-				// arrives with its metadata already in hand and would never clear the
-				// failures it collected while the swarm was down.
-				if MetadataOutcome != nil {
-					MetadataOutcome(hash, true)
-				}
 			}
 		}
 		log.Printf("[NativeBridge] Metadata ready for %s (piece=%dKB)", hash, pieceLenKB)
@@ -445,8 +447,8 @@ func (r *NativeReader) IsIdle(d time.Duration) bool {
 }
 
 // fetchBlockTimeout bounds a stateless fetch. 3 retries x 8s = 27s max FUSE block, under the
-// 60s smbd D-state watchdog.
-const fetchBlockTimeout = 8 * time.Second
+// 60s smbd D-state watchdog. A var so a test can wait it out in milliseconds.
+var fetchBlockTimeout = 8 * time.Second
 
 // streamRangeFn opens a byte stream for [offset, offset+length) into pw and closes pw when the
 // stream ends. A var so FetchAhead can be exercised without a live torrent, the same injection
@@ -522,6 +524,8 @@ func (c *NativeClient) FetchAhead(hash string, fileID int, offset int64, buf, de
 		finished := false
 		finish := func(n int, err error) {
 			finished = true
+			// Before the deferred cancel below, for the same reason as in FetchBlock.
+			reportReachability(hash, n, ctx.Err() != nil)
 			onFill(n, true, err)
 		}
 		defer func() {
@@ -591,7 +595,7 @@ func (c *NativeClient) FetchBlock(hash string, fileID int, offset int64, p []byt
 	pr, pw := io.Pipe()
 	// V283: 8s timeout (was 30s). 6 retries × 30s = 180s FUSE block → smbd D-state.
 	// 3 retries × 8s = 27s max → under 60s watchdog threshold.
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), fetchBlockTimeout)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(ctx, "GET", "/stream", nil)
@@ -617,6 +621,10 @@ func (c *NativeClient) FetchBlock(hash string, fileID int, offset int64, p []byt
 
 	n, err := io.ReadFull(pr, p)
 	pr.Close()
+
+	// Before the deferred cancel, so ctx.Err() still tells a waited-out read from one
+	// that ended on its own.
+	reportReachability(hash, n, ctx.Err() != nil)
 
 	if err == io.ErrUnexpectedEOF {
 		if n < len(p) {
@@ -644,6 +652,7 @@ func (c *NativeClient) ListTorrents() ([]TorrentStats, error) {
 // RemoveTorrent removes a torrent from the server
 func (c *NativeClient) RemoveTorrent(hash string) error {
 	torr.RemTorrent(hash)
+	forgetReachability(hash)
 	// V272: Clean up disk warmup files for this hash
 	if warmup.DiskWarmup != nil && hash != "" {
 		warmup.DiskWarmup.RemoveHash(hash)
