@@ -33,8 +33,15 @@ type verdict struct {
 	at    time.Time
 }
 
-// lastVerdict is the last outcome reported per hash, keyed by hash.
-var lastVerdict sync.Map
+// lastVerdict is the last outcome reported per hash. Guarded by a mutex rather than a
+// sync.Map because the decision below is read-then-write: FetchBlock and FetchAhead run
+// concurrently on the same hash, and two of them reading the old state before either
+// writes would let both through, which is how one failed playback once wrote three
+// failures from two moments.
+var (
+	verdictMu   sync.Mutex
+	lastVerdict = map[string]verdict{}
+)
 
 // activePeers counts connections that exist, not addresses that are remembered.
 // TotalPeers and PendingPeers both count t.peers, which AddTorrent refills from the
@@ -80,27 +87,31 @@ func reportReachability(hash string, n int, timedOut bool) {
 
 // shouldReport throttles repeats of the verdict already standing, and lets a change of
 // verdict through at once: a swarm that comes back must clear its counter on the first
-// byte, not at the end of somebody's window.
+// byte, not at the end of somebody's window. The check and the stamp happen under one
+// lock, so concurrent reads of the same hash produce one verdict, not one each.
 func shouldReport(hash string, alive bool) bool {
 	now := time.Now()
-	if prev, ok := lastVerdict.Load(hash); ok {
-		p := prev.(verdict)
-		if p.alive == alive {
-			window := deadSwarmCooldown
-			if alive {
-				window = aliveReportEvery
-			}
-			if now.Sub(p.at) < window {
-				return false
-			}
+
+	verdictMu.Lock()
+	defer verdictMu.Unlock()
+
+	if p, ok := lastVerdict[hash]; ok && p.alive == alive {
+		window := deadSwarmCooldown
+		if alive {
+			window = aliveReportEvery
+		}
+		if now.Sub(p.at) < window {
+			return false
 		}
 	}
-	lastVerdict.Store(hash, verdict{alive: alive, at: now})
+	lastVerdict[hash] = verdict{alive: alive, at: now}
 	return true
 }
 
 // forgetReachability drops the throttle state of a hash that is going away, so a hash
 // added again later starts from no verdict instead of inheriting one.
 func forgetReachability(hash string) {
-	lastVerdict.Delete(hash)
+	verdictMu.Lock()
+	defer verdictMu.Unlock()
+	delete(lastVerdict, hash)
 }
