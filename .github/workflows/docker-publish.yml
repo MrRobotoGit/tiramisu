@@ -1,6 +1,6 @@
 # ==============================================================================
 # Tiramisu Docker Publishing Pipeline
-# Automatically publishes Docker images to registries on releases and main branch
+# Builds the image, proves it actually runs, and only then publishes it.
 # ==============================================================================
 
 name: Docker Publish
@@ -9,6 +9,14 @@ on:
   push:
     tags: [ 'v*.*.*' ]
   workflow_dispatch:
+    inputs:
+      # Manual runs default to a dry-run: the smoke test is exercised and the
+      # multi-arch build still validates, but nothing reaches the registries
+      # until a tag push does it.
+      push:
+        description: "Publish the image after the smoke test"
+        type: boolean
+        default: false
 
 # Grant permissions to GitHub Token for package management
 permissions:
@@ -21,40 +29,194 @@ env:
   REGISTRY_DOCKERHUB: docker.io
   REGISTRY_GHCR: ghcr.io
   IMAGE_NAME: tiramisu
-  
+
 jobs:
   publish:
     name: Build and Publish
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: all
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
+      # Native amd64 only, loaded into the local daemon instead of pushed: the
+      # checks below need a container to actually start, and the arm64 half is
+      # emulated and far too slow to boot under QEMU. The layers land in the
+      # cache, so the multi-arch build afterwards reuses this work.
+      - name: Build image for testing
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: tiramisu:smoke
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ github.workflow }}
+          cache-to: type=gha,mode=max,scope=${{ github.workflow }}
+
+      # CGO_ENABLED=1 is required for piece completion. A statically linked
+      # binary still builds and still starts, and fails later, in production.
+      - name: Check the binary is linked against libc
+        run: |
+          set -eu
+          out=$(docker run --rm --entrypoint ldd tiramisu:smoke /usr/local/bin/tiramisu)
+          echo "$out"
+          echo "$out" | grep -q 'libc\.so' || {
+            echo "::error::the binary is not dynamically linked: CGO was off"
+            exit 1
+          }
+
+      - name: Start the container
+        run: |
+          set -eu
+          mkdir -p "$GITHUB_WORKSPACE/ci-state"
+          # A real config is required: the entrypoint exits 1 without one. It is
+          # kept writable because LoadConfig persists a generated telemetry_id
+          # on first boot when the file does not carry one yet, and a read-only
+          # mount would turn that into a spurious ERROR in the logs.
+          cp config.json.example "$GITHUB_WORKSPACE/ci-config.json"
+          # /state is bind-mounted on purpose: the entrypoint warns when it is
+          # not, and that warning is one of the things asserted below.
+          docker run -d --name tiramisu-smoke \
+            --device /dev/fuse \
+            --cap-add SYS_ADMIN \
+            --security-opt apparmor=unconfined \
+            -v "$GITHUB_WORKSPACE/ci-state:/state" \
+            -v "$GITHUB_WORKSPACE/ci-config.json:/config.json" \
+            -p 9080:9080 -p 8090:8090 \
+            tiramisu:smoke
+
+      - name: Wait for the metrics endpoint
+        run: |
+          set -eu
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 2 http://127.0.0.1:9080/metrics >/dev/null 2>&1; then
+              echo "up after ${i}s"
+              exit 0
+            fi
+            if ! docker ps --filter name=tiramisu-smoke --filter status=running -q | grep -q .; then
+              echo "::error::the container exited before serving anything"
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "::error::no answer on :9080 within 60s"
+          exit 1
+
+      # The version is stamped through -ldflags at build time. When that breaks
+      # the binary reports "dev", the auto-updater compares against the wrong
+      # string, and nothing else notices.
+      - name: Check the reported version matches the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -eu
+          got=$(curl -fsS --max-time 10 http://127.0.0.1:9080/metrics | jq -r '.version')
+          echo "reported: $got, expected: ${{ github.ref_name }}"
+          [ "$got" = "${{ github.ref_name }}" ] || {
+            echo "::error::version is '$got': the -ldflags stamp did not take"
+            exit 1
+          }
+
+      - name: Check the Control Panel and the GoStorm API answer
+        run: |
+          set -eu
+          curl -fsS --max-time 10 http://127.0.0.1:9080/control >/dev/null
+          curl -fsS --max-time 10 -X POST -H 'Content-Type: application/json' \
+            -d '{"action":"list"}' http://127.0.0.1:8090/torrents >/dev/null
+
+      # The 2026-09-07 defect: state written into the container's writable layer
+      # looks fine until "docker rm" takes it away. The entrypoint detects it and
+      # warns; this asserts both that the state landed on the volume and that the
+      # detection agrees.
+      - name: Check the state is on the mounted volume
+        run: |
+          set -eu
+          test -f "$GITHUB_WORKSPACE/ci-state/STATE/tiramisu.db" || {
+            echo "::error::no state DB under the mounted volume"
+            ls -laR "$GITHUB_WORKSPACE/ci-state" || true
+            exit 1
+          }
+          if docker logs tiramisu-smoke 2>&1 | grep -q 'is NOT on a mounted volume'; then
+            echo "::error::the persistence check fired although /state is mounted"
+            exit 1
+          fi
+
+      - name: Check the state DB is intact and migrated
+        run: |
+          set -eu
+          db="$GITHUB_WORKSPACE/ci-state/STATE/tiramisu.db"
+          res=$(sudo sqlite3 -cmd '.timeout 5000' "$db" 'PRAGMA integrity_check;')
+          echo "integrity_check: $res"
+          [ "$res" = "ok" ] || { echo "::error::integrity check failed"; exit 1; }
+          # The schema version lives in a table, not in PRAGMA user_version,
+          # which this database leaves at 0.
+          ver=$(sudo sqlite3 -cmd '.timeout 5000' "$db" 'SELECT COALESCE(MAX(version), 0) FROM schema_version;')
+          echo "schema version: $ver"
+          [ "$ver" -gt 0 ] || { echo "::error::the schema migration did not run"; exit 1; }
+          for t in tv_episodes metadata_failures episode_gaps inodes; do
+            sudo sqlite3 -cmd '.timeout 5000' "$db" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='$t';" \
+              | grep -q 1 || { echo "::error::table $t is missing"; exit 1; }
+          done
+
+      # Nothing above proves the process is stable rather than merely reachable
+      # once: a crash loop answers too, between restarts.
+      - name: Check the process stayed up
+        run: |
+          set -eu
+          sleep 20
+          docker ps --filter name=tiramisu-smoke --filter status=running -q | grep -q . || {
+            echo "::error::the container is no longer running"
+            exit 1
+          }
+          starts=$(docker logs tiramisu-smoke 2>&1 | grep -c '^Starting tiramisu' || true)
+          echo "starts observed: $starts"
+          [ "$starts" -le 1 ] || {
+            echo "::error::tiramisu restarted $starts times: crash loop"
+            exit 1
+          }
+
+      # tini is PID 1 so that SIGTERM reaches tiramisu. Without it the container
+      # is killed after the timeout and the FUSE mount is left behind.
+      - name: Check it shuts down cleanly on SIGTERM
+        run: |
+          set -eu
+          start=$(date +%s)
+          docker stop -t 30 tiramisu-smoke >/dev/null
+          echo "stopped in $(( $(date +%s) - start ))s"
+          code=$(docker inspect -f '{{.State.ExitCode}}' tiramisu-smoke)
+          echo "exit code: $code"
+          [ "$code" = "0" ] || { echo "::error::unclean shutdown, exit $code"; exit 1; }
+
+      - name: Container logs
+        if: always()
+        run: docker logs tiramisu-smoke 2>&1 | tail -n 200 || true
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY_DOCKERHUB }}
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
-      
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY_GHCR }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
@@ -68,13 +230,15 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
 
+      # On a manual dry-run nothing is published, but the build still runs so the
+      # multi-arch path is validated too.
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./docker/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -83,8 +247,9 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ github.workflow }}
           provenance: true
           sbom: true
-      
+
       - name: Update Docker Hub description
+        if: github.event_name != 'workflow_dispatch' || inputs.push
         uses: peter-evans/dockerhub-description@v4
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
@@ -94,10 +259,12 @@ jobs:
           short-description: "Advanced BitTorrent-FUSE for real streaming to your private Plex/Jellyfin library. No Debrid."
 
       - name: Generate build summary
+        if: github.event_name != 'workflow_dispatch' || inputs.push
         run: |
           echo "## 🐳 Docker Images Published" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+          echo "**Smoke test:** passed on linux/amd64 before publishing" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Published to:" >> $GITHUB_STEP_SUMMARY
           echo "- **Docker Hub:** \`docker pull mrrobotogit/tiramisu:latest\`" >> $GITHUB_STEP_SUMMARY
