@@ -4119,9 +4119,8 @@ func main() {
 						if len(short) > 8 {
 							short = short[:8]
 						}
-						// Deliberately does not say why: the three reporters condemn for
-						// different reasons (a metadata wait timed out, a session ended
-						// with a failed read and nothing served) and each logs its own.
+						// Deliberately does not say why: the session layer that condemned
+						// already logged its own reason, with duration and outcome.
 						logger.Printf("[DeadSwarm] %s did not answer", short)
 						err = failDB.RecordMetadataFailure(hash)
 					}

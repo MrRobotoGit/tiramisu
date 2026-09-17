@@ -312,6 +312,11 @@ func (d *DiskWarmupCache) dropResidue(path string) {
 	if !strings.HasSuffix(path, warmupSuffix) {
 		return
 	}
+	// A new attempt may have reopened the file since the reaper decided on the old
+	// idle handle: unlinking it now would lose the warmup being written.
+	if _, ok := d.handles.Load(path); ok {
+		return
+	}
 	fi, err := os.Stat(path)
 	if err != nil || fi.Size() >= headReadyFloor {
 		return
@@ -319,7 +324,11 @@ func (d *DiskWarmupCache) dropResidue(path string) {
 	logf.Printf("[DiskWarmup] DROPPED %s (%.1fKB): incomplete head warmup below the ready floor",
 		filepath.Base(path), float64(fi.Size())/(1<<10))
 	d.sizeCache.Delete(path)
-	os.Remove(path)
+	if os.Remove(path) == nil {
+		// Written bytes were counted against the quota, so the drop gives them back
+		// instead of leaving the drift to the next full walk in enforceQuotaLocked.
+		atomic.AddInt64(&d.totalSize, -fi.Size())
+	}
 	d.missing.Store(path, time.Now())
 }
 
