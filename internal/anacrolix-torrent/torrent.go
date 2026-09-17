@@ -3638,6 +3638,13 @@ func (t *Torrent) getDialTimeoutUnlocked() time.Duration {
 // Fixed: lock only to copy scrapers, then release before calling announce()
 // to avoid deadlock (announce → rLock while write lock held on same goroutine).
 func (t *Torrent) Announce() {
+	t.AnnounceTracked(nil)
+}
+
+// AnnounceTracked forces a tracker announce for all trackers and reports the aggregate
+// result once every announce has returned: peers is the sum of the tracker responses and
+// errs counts the announces that failed. onDone runs on a separate goroutine and may be nil.
+func (t *Torrent) AnnounceTracked(onDone func(peers, errs int)) {
 	t.cl.lock()
 	scrapers := make([]*trackerScraper, 0, len(t.trackerAnnouncers))
 	for _, ta := range t.trackerAnnouncers {
@@ -3647,7 +3654,23 @@ func (t *Torrent) Announce() {
 	}
 	t.cl.unlock()
 
-	for _, ts := range scrapers {
-		go ts.announce(context.Background(), 0)
-	}
+	go func() {
+		results := make(chan trackerAnnounceResult, len(scrapers))
+		for _, ts := range scrapers {
+			go func(ts *trackerScraper) {
+				results <- ts.announce(context.Background(), 0)
+			}(ts)
+		}
+		var peers, errs int
+		for range scrapers {
+			res := <-results
+			peers += res.NumPeers
+			if res.Err != nil {
+				errs++
+			}
+		}
+		if onDone != nil {
+			onDone(peers, errs)
+		}
+	}()
 }

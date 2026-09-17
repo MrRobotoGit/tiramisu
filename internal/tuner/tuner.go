@@ -58,12 +58,19 @@ func runCycle() {
 	fileSizeGB := float64(size) / (1024 * 1024 * 1024)
 	speedMBs := st.DownloadSpeed / (1024 * 1024)
 
+	private := false
+	if info := active.Torrent.Info(); info != nil && info.Private != nil {
+		private = *info.Private
+	}
+
 	now := time.Now()
-	if !swarmWeak(st.ConnectedSeeders, speedMBs, fileSizeGB) || !announceDue(now, lastAnnounceAt) {
+	if !shouldBoost(st.ConnectedSeeders, speedMBs, st.LoadedSize, size, private) || !announceDue(now, lastAnnounceAt) {
 		return
 	}
 	lastAnnounceAt = now
-	active.Torrent.Announce()
+	active.Torrent.AnnounceTracked(func(peers, errs int) {
+		log.Printf("[Tuner] DiscoveryBoost: announce completed peers=%d errs=%d", peers, errs)
+	})
 	log.Printf("[Tuner] DiscoveryBoost: weak swarm (seeds=%d speed=%.1fMB/s threshold=%.1fMB/s) -> tracker re-announce triggered",
 		st.ConnectedSeeders, speedMBs, fileSizeGB*weakSwarmRatio)
 }
@@ -97,6 +104,15 @@ func swarmWeak(connectedSeeders int, speedMBs, fileSizeGB float64) bool {
 		return false
 	}
 	return connectedSeeders < 2 && speedMBs < fileSizeGB*weakSwarmRatio
+}
+
+// shouldBoost holds every reason not to re-announce: completed torrents have nothing to discover
+// (speed is zero by definition), and private trackers do not tolerate unscheduled announces.
+func shouldBoost(connectedSeeders int, speedMBs float64, loaded, size int64, private bool) bool {
+	if private || (size > 0 && loaded >= size) {
+		return false
+	}
+	return swarmWeak(connectedSeeders, speedMBs, float64(size)/(1024*1024*1024))
 }
 
 func announceDue(now, last time.Time) bool {
