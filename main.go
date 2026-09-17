@@ -29,7 +29,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"tiramisu/internal/ai"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/catalog/mediaserver"
@@ -57,6 +56,7 @@ import (
 	"tiramisu/internal/syncer/engines"
 	"tiramisu/internal/syncer/scheduler"
 	"tiramisu/internal/telemetry"
+	"tiramisu/internal/tuner"
 	"tiramisu/internal/updater"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
@@ -97,12 +97,7 @@ func gc() *config.Config { return globalConfig.Load() }
 // Global Prowlarr client for indexer queries (nil when disabled).
 var prowlarrClient *prowlarr.Client
 
-// GetEffectiveConcurrencyLimit returns AI limit if set, otherwise globalConfig default
 func GetEffectiveConcurrencyLimit() int {
-	aiLimit := int(atomic.LoadInt32(&ai.CurrentLimit))
-	if aiLimit > 0 {
-		return aiLimit
-	}
 	return gc().MasterConcurrencyLimit
 }
 
@@ -4023,30 +4018,7 @@ func main() {
 
 	nativeBridge = native.NewNativeClient()
 
-	if gc().AIURL != "" {
-		provider := ai.AIProvider{
-			URL:     gc().AIURL,
-			APIKey:  gc().AI_API_KEY,
-			Model:   gc().AIModel,
-			IsLocal: gc().AIProvider == "" || gc().AIProvider == "local",
-			GetBufferPct: func() int {
-				total, _, _ := raCache.Stats()
-				budget := gc().ReadAheadBudget
-				if budget <= 0 {
-					return 100
-				}
-				pct := int(total * 100 / budget)
-				if pct > 100 {
-					pct = 100
-				}
-				return pct
-			},
-			GetSaturation: func() int {
-				return len(masterDataSemaphore)
-			},
-		}
-		go ai.StartAITuner(context.Background(), provider)
-	}
+	go tuner.Start(context.Background())
 
 	if gc().BlockListEnabled && gc().BlockListURL != "" {
 		startBlockListLoop(gc().BlockListURL)

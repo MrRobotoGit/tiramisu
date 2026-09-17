@@ -202,10 +202,6 @@ type Config struct {
 	// BlockListFilter keeps only the ranges whose description matches this regexp.
 	// Empty keeps the whole list. See blockedIP.go for why published lists need it.
 	BlockListFilter string `json:"blocklist_filter"`
-	AIURL           string `json:"ai_url"`      // V1.4.5: AI Optimizer sidecar URL
-	AIProvider      string `json:"ai_provider"` // V1.7.1: Provider type (local, openrouter, openai)
-	AIModel         string `json:"ai_model"`    // V1.7.1: Model ID for cloud providers
-	AI_API_KEY      string `json:"ai_api_key"`  // V1.7.1: API key for cloud providers
 
 	// --- FUSE Paths ---
 	// Fallback when CLI args are omitted. CLI args always take precedence.
@@ -484,18 +480,6 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("MKV_PROXY_GOSTORM_URL"); v != "" {
 		c.GoStormBaseURL = v
-	}
-	if v := os.Getenv("MKV_PROXY_AI_URL"); v != "" {
-		c.AIURL = v
-	}
-	if v := os.Getenv("AI_PROVIDER"); v != "" {
-		c.AIProvider = v
-	}
-	if v := os.Getenv("AI_MODEL"); v != "" {
-		c.AIModel = v
-	}
-	if v := os.Getenv("AI_API_KEY"); v != "" {
-		c.AI_API_KEY = v
 	}
 	if v := firstEnv("TIRAMISU_LOG_DIR", "GOSTREAM_LOG_DIR"); v != "" {
 		c.LogDir = v

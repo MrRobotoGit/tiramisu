@@ -2,9 +2,6 @@
 Description=Tiramisu Unified Engine (GoStorm + FUSE Proxy)
 After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target
 Wants=network-online.target
-# Optional: uncomment if using AI Pilot (ensures ai-server loads before tiramisu)
-# After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target ai-server.service
-# Wants=network-online.target ai-server.service
 StartLimitIntervalSec=0
 
 [Service]
