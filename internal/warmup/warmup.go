@@ -26,6 +26,11 @@ const (
 	warmupWriteBuf       = 16 * 1024 * 1024  // 16 MB — matches pump chunk size
 	handleIdleMax        = 30 * time.Second  // close idle file handles after 30s
 	missingTTL           = 10 * time.Second  // negative-cache lifetime, matches sizeCache
+	// headReadyFloor is the least covered bytes for a head warmup file to count as
+	// warm. A file holding a few bytes is the residue of an aborted attempt (38 bytes
+	// in production), and treating it as warm sends Open down the warm path and
+	// falsifies any "this title has a warmup" reading.
+	headReadyFloor = 1 << 20
 )
 
 var diskQuotaGB int64
@@ -208,28 +213,9 @@ func InitDiskWarmup(quotaGB int64) {
 		dropHeads = true
 	}
 
-	if entries, err := os.ReadDir(dir); err == nil {
-		var initialTotal int64
-		var dropped int
-		for _, e := range entries {
-			name := e.Name()
-			// Tail coverage lives in memory only, so a tail file left by a previous run
-			// has no way to prove which of its ranges hold real data.
-			isTail := strings.HasSuffix(name, tailSuffix)
-			if isTail || (dropHeads && strings.HasSuffix(name, warmupSuffix)) {
-				if os.Remove(filepath.Join(dir, name)) == nil {
-					dropped++
-				}
-				continue
-			}
-			if strings.HasSuffix(name, warmupSuffix) {
-				if info, err := e.Info(); err == nil {
-					initialTotal += info.Size()
-				}
-			}
-		}
-		atomic.StoreInt64(&DiskWarmup.totalSize, initialTotal)
-		logf.Printf("[DiskWarmup] Initial size: %.1fGB (dropped %d stale cache files)", float64(initialTotal)/(1<<30), dropped)
+	if total, dropped, residues, err := scanExisting(dir, dropHeads); err == nil {
+		atomic.StoreInt64(&DiskWarmup.totalSize, total)
+		logf.Printf("[DiskWarmup] Initial size: %.1fGB (dropped %d stale cache files, %d residues)", float64(total)/(1<<30), dropped, residues)
 	}
 
 	if dropHeads {
@@ -245,30 +231,96 @@ func InitDiskWarmup(quotaGB int64) {
 	logf.Printf("[DiskWarmup] Active — dir=%s quota=%dGB warmup=%dMB", dir, quotaGB, FileSize/1024/1024)
 }
 
+// scanExisting walks the cache at startup. Tail files always go, because their
+// coverage lives in memory only and a tail left by a previous run cannot prove which
+// ranges are real. Head files go when the one-shot density migration runs, and a head
+// below the ready floor goes as a residue: the reaper only walks open handles, so the
+// backlog left by a previous process would otherwise live until quota pressure and
+// keep passing for warm coverage.
+func scanExisting(dir string, dropHeads bool) (total int64, dropped, residues int, err error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		isTail := strings.HasSuffix(name, tailSuffix)
+		if isTail || (dropHeads && strings.HasSuffix(name, warmupSuffix)) {
+			if os.Remove(filepath.Join(dir, name)) == nil {
+				dropped++
+			}
+			continue
+		}
+		if strings.HasSuffix(name, warmupSuffix) {
+			info, ierr := e.Info()
+			if ierr != nil {
+				continue
+			}
+			if info.Size() < headReadyFloor {
+				if os.Remove(filepath.Join(dir, name)) == nil {
+					residues++
+				}
+				continue
+			}
+			total += info.Size()
+		}
+	}
+	return total, dropped, residues, nil
+}
+
 func (d *DiskWarmupCache) handleReaper() {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		now := time.Now()
-		d.handles.Range(func(key, val interface{}) bool {
-			ch := val.(*cachedHandle)
-			if now.UnixNano()-ch.lastUsedNano.Load() > handleIdleMax.Nanoseconds() {
-				// V2.0: Use LoadAndDelete + double-check to prevent TOCTOU with getHandle.
-				// If getHandle updated lastUsedNano between Range and delete, re-insert.
-				if actual, loaded := d.handles.LoadAndDelete(key); loaded {
-					ac := actual.(*cachedHandle)
-					if now.UnixNano()-ac.lastUsedNano.Load() < handleIdleMax.Nanoseconds() {
-						d.handles.Store(key, ac)
-						return true
-					}
-					ac.closed.Store(true)
-					ac.f.Close()
-					d.warmupStarts.Delete(key)
-				}
-			}
-			return true
-		})
+		d.reapIdle(handleIdleMax)
 	}
+}
+
+// reapIdle closes handles idle longer than max and drops the head files that never
+// grew past the ready floor. Without the drop the residue of an aborted attempt (38
+// bytes in production) lives until quota pressure, passes for warm coverage, and
+// falsifies every "it has a warmup" reading.
+func (d *DiskWarmupCache) reapIdle(max time.Duration) {
+	now := time.Now()
+	d.handles.Range(func(key, val interface{}) bool {
+		path := key.(string)
+		ch := val.(*cachedHandle)
+		if now.UnixNano()-ch.lastUsedNano.Load() <= max.Nanoseconds() {
+			return true
+		}
+		// V2.0: Use LoadAndDelete + double-check to prevent TOCTOU with getHandle.
+		// If getHandle updated lastUsedNano between Range and delete, re-insert.
+		if actual, loaded := d.handles.LoadAndDelete(path); loaded {
+			ac := actual.(*cachedHandle)
+			if now.UnixNano()-ac.lastUsedNano.Load() < max.Nanoseconds() {
+				d.handles.Store(path, ac)
+				return true
+			}
+			ac.closed.Store(true)
+			ac.f.Close()
+			d.warmupStarts.Delete(path)
+			d.dropResidue(path)
+		}
+		return true
+	})
+}
+
+// dropResidue removes a head file that stayed below the ready floor: the shape of an
+// aborted attempt, not a warmup worth keeping. Tail files are left alone, since their
+// readiness already comes from in-memory coverage instead of file size.
+func (d *DiskWarmupCache) dropResidue(path string) {
+	if !strings.HasSuffix(path, warmupSuffix) {
+		return
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() >= headReadyFloor {
+		return
+	}
+	logf.Printf("[DiskWarmup] DROPPED %s (%.1fKB): incomplete head warmup below the ready floor",
+		filepath.Base(path), float64(fi.Size())/(1<<10))
+	d.sizeCache.Delete(path)
+	os.Remove(path)
+	d.missing.Store(path, time.Now())
 }
 
 func (d *DiskWarmupCache) getHandle(path string) (*cachedHandle, error) {
@@ -477,6 +529,16 @@ func (d *DiskWarmupCache) GetAvailableRange(hash string, fileID int) int64 {
 
 	d.sizeCache.Store(path, sizeEntry{size: fi.Size(), updatedAt: time.Now()})
 	return fi.Size()
+}
+
+// HeadReady reports whether the head warmup covers enough to be worth treating the
+// file as warm. GetAvailableRange keeps reporting the raw coverage: the pump and the
+// read clamps want the number, the Open decision wants the floor.
+func (d *DiskWarmupCache) HeadReady(hash string, fileID int) bool {
+	if d == nil {
+		return false
+	}
+	return d.GetAvailableRange(hash, fileID) >= headReadyFloor
 }
 
 // TailReady reports whether the whole tail window for hash/fileID is on SSD, i.e. Open

@@ -892,7 +892,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	headReady := false
 	tailReady := false
 	if warmup.DiskWarmup != nil && hashStr != "" {
-		headReady = warmup.DiskWarmup.GetAvailableRange(hashStr, urlFileIdx) > 0
+		headReady = warmup.DiskWarmup.HeadReady(hashStr, urlFileIdx)
 		tailReady = warmup.DiskWarmup.TailReady(hashStr, urlFileIdx)
 	}
 	ttffRegister(n.vMeta.Path, n.vMeta.Size, hashStr, headReady, tailReady)
@@ -1996,6 +1996,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		fuseShortReadFailed.Add(1)
 		logger.Printf("[ShortRead] Unfillable %d/%d bytes at offset %d for %s - EIO (a partial read would cache zeros)",
 			total, len(dest), off, filepath.Base(h.path))
+		ttffReadFailed(h.path)
 		return nil, syscall.EIO
 	}
 
@@ -2607,6 +2608,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	}
 
 	// If everything fails, return EAGAIN as last resort
+	ttffReadFailed(h.path)
 	return nil, syscall.EAGAIN
 
 DATA_READY:
@@ -4117,7 +4119,10 @@ func main() {
 						if len(short) > 8 {
 							short = short[:8]
 						}
-						logger.Printf("[DeadSwarm] %s gave no bytes and has no peers", short)
+						// Deliberately does not say why: the three reporters condemn for
+						// different reasons (a metadata wait timed out, a session ended
+						// with a failed read and nothing served) and each logs its own.
+						logger.Printf("[DeadSwarm] %s did not answer", short)
 						err = failDB.RecordMetadataFailure(hash)
 					}
 					if err != nil {

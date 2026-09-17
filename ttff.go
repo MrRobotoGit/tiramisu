@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"tiramisu/internal/gostorm/native"
 	"tiramisu/internal/warmup"
 )
 
@@ -113,6 +114,14 @@ const (
 	ttffTailMinRead   = int64(64 << 10) // 64KB: scanners read at most one Cues probe chunk
 	ttffDeepReadOff   = int64(8 << 20)  // 8MB: header/seek probes go deeper
 	ttffStallDuration = time.Second
+	// sessionVerdictFloor: below this a session that served nothing proves nothing,
+	// because the caller did not wait out even one full fetch cycle (3 x
+	// fetchBlockTimeout = 24s). Measured over 217 sessions: 58% end under 20s, those
+	// are scanners reading the header and closing, and a single one falls between 20
+	// and 30. Not 30: a failed playback closes right around 30s and the measurement
+	// has one-second granularity, so the boundary would cut through the cases that
+	// matter most.
+	sessionVerdictFloor = 25 * time.Second
 )
 
 // TTFFSession tracks one playback open of a virtual MKV (per-path, shared by
@@ -137,6 +146,18 @@ type TTFFSession struct {
 	stallCount      atomic.Int64
 	maxStallMS      atomic.Int64
 	tailOrDeep      atomic.Bool // read at off>=8MB or inside last 16MB (tail region)
+	// readFailed records that a read gave up with EAGAIN or EIO, the two exits that
+	// mean the swarm did not deliver. EINTR (the caller left) and ETIMEDOUT (our own
+	// slot semaphore was full) are deliberately not recorded: neither says anything
+	// about the release, and the second fires precisely under the load that would
+	// make a healthy title look dead.
+	readFailed atomic.Bool
+	// servedByNet records that a read was served straight from the swarm
+	// (srcFetchBlock). Its counterpart above condemns; this one acquits. Deliberately
+	// not bytesRead: that counts what the player received, and the SSD warmup and the
+	// read-ahead cache feed it too, so a release nobody is sharing any more would keep
+	// clearing its own counter off a 64MB file on local disk.
+	servedByNet atomic.Bool
 
 	closeOnce sync.Once
 	closed    atomic.Bool
@@ -144,7 +165,7 @@ type TTFFSession struct {
 
 // recordRead updates session state for one served FUSE read. lastReadAt is
 // refreshed on every served read.
-func (s *TTFFSession) recordRead(d time.Duration, n int, off int64) {
+func (s *TTFFSession) recordRead(src ttffSource, d time.Duration, n int, off int64) {
 	if s.closed.Load() {
 		return
 	}
@@ -153,6 +174,15 @@ func (s *TTFFSession) recordRead(d time.Duration, n int, off int64) {
 	if n > 0 {
 		s.firstDataAt.CompareAndSwap(0, nowN)
 		s.bytesRead.Add(int64(n))
+		// The source alone is not enough: the fetch path also hands back whatever is
+		// already local, and a dead release once returned 38 bytes of residue through
+		// it and acquitted itself with them, wiping six recorded failures. A release
+		// with no connection has nobody to have answered, whatever came out of the
+		// pipe. Stats() is only consulted until the flag is set, so a healthy session
+		// pays for it once.
+		if src == srcFetchBlock && !s.servedByNet.Load() && sessionActivePeers(s.hash) > 0 {
+			s.servedByNet.Store(true)
+		}
 		if off >= ttffDeepReadOff || (s.size > 0 && off >= s.size-warmup.TailWarmupSize) {
 			s.tailOrDeep.Store(true)
 			s.firstDeepReadAt.CompareAndSwap(0, nowN)
@@ -197,12 +227,58 @@ func ttffIsReal(tailOrDeep bool, bytesRead int64) bool {
 	return tailOrDeep && bytesRead > ttffTailMinRead
 }
 
+// sessionActivePeers reports the connections a release currently has. A var so the
+// verdict can be exercised without a live torrent.
+var sessionActivePeers = native.ActivePeers
+
+// reportSwarmVerdict turns one finished session into a verdict. It acquits on bytes
+// that came from the swarm, and condemns a release when a whole session, however long its
+// caller chose to keep it open, ended without a single byte served and with a read
+// that gave up. The observation window is the session rather than one 8s fetch:
+// that timeout exists to keep a FUSE read under the smbd D-state watchdog, and
+// reading a swarm's health out of it was answering a question it was never asked.
+//
+// What it will not do is acquit on any byte served: a session fed entirely by the
+// SSD warmup would clear the counter of a release the swarm never touched, which is
+// how a half-dead title stays invisible. Only srcFetchBlock counts as an answer.
+//
+// Runs before the ttffIsReal filter below on purpose: a session that served nothing
+// is exactly what that filter drops, and exactly what this needs to see.
+func (s *TTFFSession) reportSwarmVerdict() {
+	if native.ReachabilityOutcome == nil || s.hash == "" {
+		return
+	}
+	// The swarm answered at some point in this session: that clears whatever the
+	// counter had gathered, however the session ended afterwards. Without this the
+	// count only ever grows, and a release broken for a day by a tracker outage is
+	// reaped after it has already recovered.
+	if s.servedByNet.Load() {
+		native.ReachabilityOutcome(s.hash, true)
+		return
+	}
+	// Deliberately not bytesRead: it counts what the player received, and the SSD
+	// warmup feeds it too. A dead release left a 38-byte warmup file behind, served it
+	// back on the next session, and suppressed its own condemnation with it. The same
+	// measure decides both directions: only the swarm answers for a release.
+	if !s.readFailed.Load() {
+		return
+	}
+	if opened := s.openedAt.Load(); opened == 0 ||
+		time.Since(time.Unix(0, opened)) < sessionVerdictFloor {
+		return
+	}
+	logger.Printf("[DeadSwarm] session of %s ended after %s with a failed read and nothing served",
+		filepath.Base(s.path), time.Since(time.Unix(0, s.openedAt.Load())).Round(time.Second))
+	native.ReachabilityOutcome(s.hash, false)
+}
+
 // closeSession aggregates the session into the global histograms and logs one
 // [TTFF] line. Idempotent via closeOnce. Removes itself from the registry.
 func (s *TTFFSession) closeSession() {
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)
 		sessions.CompareAndDelete(s.path, s)
+		s.reportSwarmVerdict()
 		if !ttffIsReal(s.tailOrDeep.Load(), s.bytesRead.Load()) {
 			ttffStats.sessionsFiltered.Add(1)
 			return
@@ -319,7 +395,15 @@ func ttffRead(path string, src ttffSource, d time.Duration, n int, off int64) {
 		ttffStats.fetchBlock.Add(d)
 	}
 	if val, ok := sessions.Load(path); ok {
-		val.(*TTFFSession).recordRead(d, n, off)
+		val.(*TTFFSession).recordRead(src, d, n, off)
+	}
+}
+
+// ttffReadFailed marks the session behind path as having had a read give up. Only
+// the two exits that mean the swarm did not deliver call it (EAGAIN, EIO).
+func ttffReadFailed(path string) {
+	if val, ok := sessions.Load(path); ok {
+		val.(*TTFFSession).readFailed.Store(true)
 	}
 }
 

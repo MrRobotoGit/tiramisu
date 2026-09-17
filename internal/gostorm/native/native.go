@@ -41,12 +41,33 @@ func NewNativeClient() *NativeClient {
 	}
 }
 
-// ReachabilityOutcome reports whether a release answered: true when the swarm gave
-// something, false when it was waited out and gave nothing. Injected by main so this
-// package stays unaware of the state DB; nil when no DB is wired. The verdict is about
-// the swarm, not about the metainfo, which survives in the DB long after the peers are
-// gone (see reportReachability).
+// ReachabilityOutcome reports whether a release answered. Injected by main so this
+// package stays unaware of the state DB; nil when no DB is wired.
+//
+// Two reporters, and both watch something a single read cannot show:
+//
+//   - Wake acquits when the metainfo had to be waited for and arrived, which is the
+//     one thing that proves peers are there right now. It never condemns: the Open
+//     that called it registered a session, and that session is what condemns, once.
+//   - The session layer acquits on bytes served straight from the swarm, and condemns
+//     a whole playback session that ends with a read that gave up and nothing served.
+//
+// What neither does is judge one read: the 8s fetch timeout bounds a FUSE read under
+// the smbd D-state watchdog, and a swarm's health was never a question it could
+// answer.
 var ReachabilityOutcome func(hash string, resolved bool)
+
+// ActivePeers counts connections that exist for a hash, 0 when the torrent is not
+// hydrated. Deliberately not TotalPeers or PendingPeers: both count t.peers, which
+// AddTorrent refills from the PeerAddrs cached in the DB, so a release nobody is
+// sharing any more would carry phantom peers for good.
+func ActivePeers(hash string) int {
+	t := torr.PeekTorrent(hash)
+	if t == nil || t.Torrent == nil {
+		return 0
+	}
+	return t.Torrent.Stats().ActivePeers
+}
 
 // Wake triggers the start of a torrent (Ghost -> Active) entirely in-memory
 // Synchronous & Deduplicated.
@@ -107,10 +128,12 @@ func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
 					ReachabilityOutcome(hash, true)
 				}
 			case <-timer.C:
+				// Not reported: the FUSE Open that called this registered a session
+				// first, and that session condemns once when it closes. Reporting here
+				// too made a single playback attempt count three times, because a player
+				// that retries opens again and each 45s wait wrote its own failure. The
+				// counter counts occasions, not attempts.
 				log.Printf("[NativeBridge] Metadata timeout for %s", hash)
-				if ReachabilityOutcome != nil {
-					ReachabilityOutcome(hash, false)
-				}
 				return fmt.Errorf("torrent metadata timeout (45s): %s", hash)
 			}
 		}
@@ -524,8 +547,6 @@ func (c *NativeClient) FetchAhead(hash string, fileID int, offset int64, buf, de
 		finished := false
 		finish := func(n int, err error) {
 			finished = true
-			// Before the deferred cancel below, for the same reason as in FetchBlock.
-			reportReachability(hash, n, ctx.Err() != nil)
 			onFill(n, true, err)
 		}
 		defer func() {
@@ -622,10 +643,6 @@ func (c *NativeClient) FetchBlock(hash string, fileID int, offset int64, p []byt
 	n, err := io.ReadFull(pr, p)
 	pr.Close()
 
-	// Before the deferred cancel, so ctx.Err() still tells a waited-out read from one
-	// that ended on its own.
-	reportReachability(hash, n, ctx.Err() != nil)
-
 	if err == io.ErrUnexpectedEOF {
 		if n < len(p) {
 			shortReadFetch.Add(1)
@@ -652,7 +669,6 @@ func (c *NativeClient) ListTorrents() ([]TorrentStats, error) {
 // RemoveTorrent removes a torrent from the server
 func (c *NativeClient) RemoveTorrent(hash string) error {
 	torr.RemTorrent(hash)
-	forgetReachability(hash)
 	// V272: Clean up disk warmup files for this hash
 	if warmup.DiskWarmup != nil && hash != "" {
 		warmup.DiskWarmup.RemoveHash(hash)
