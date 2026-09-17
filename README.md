@@ -92,7 +92,6 @@ All of it, engine included, ships as a single `tiramisu` binary.
 
 - [The Setup: Tiramisu + Plex/Jellyfin/Infuse on Apple TV](#the-setup-tiramisu--plexjellyfininfuse-on-apple-tv)
 - [How the Magic Works](#how-the-magic-works)
-- [AI Tiramisu Pilot - Experimental](https://github.com/MrRobotoGit/tiramisu/blob/main/ai/docs/ai-pilot.md)
 - [Architecture](#architecture)
 - [Core Engineering](#core-engineering)
 - [Performance](#performance)
