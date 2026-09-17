@@ -3655,10 +3655,12 @@ func (t *Torrent) AnnounceTracked(onDone func(peers, errs int)) {
 	t.cl.unlock()
 
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
 		results := make(chan trackerAnnounceResult, len(scrapers))
 		for _, ts := range scrapers {
 			go func(ts *trackerScraper) {
-				results <- ts.announce(context.Background(), 0)
+				results <- ts.announce(ctx, 0)
 			}(ts)
 		}
 		var peers, errs int
