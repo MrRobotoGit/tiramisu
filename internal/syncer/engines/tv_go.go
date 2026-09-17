@@ -212,6 +212,14 @@ func (e *TVGoEngine) removeStub(ctx context.Context, path, hash string) {
 		if err := e.gostorm.RemoveTorrent(ctx, hash); err != nil {
 			e.logger.Printf("[TVSync] WARNING: failed to remove torrent %s for %s: %v", hash, filepath.Base(path), err)
 		}
+		// Same reason as the movie engine: the counter outlives the release otherwise.
+		// An upgrade leaves the replaced hash standing at the threshold for good, and
+		// whoever reads that table next is looking at a release nothing points at.
+		if e.db != nil {
+			if err := e.db.ClearMetadataFailure(hash); err != nil {
+				e.logger.Printf("[TVSync] WARNING: failed to clear metadata failures for %s: %v", hash, err)
+			}
+		}
 	}
 	e.removeStubFile(path)
 }
