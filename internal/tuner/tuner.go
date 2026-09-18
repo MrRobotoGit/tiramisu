@@ -45,12 +45,6 @@ func runCycle() {
 		return
 	}
 
-	hash := active.Hash().String()
-	if hash != lastAnnounceHash {
-		lastAnnounceHash = hash
-		lastAnnounceAt = time.Time{}
-	}
-
 	size := active.Size
 	if size == 0 {
 		size = active.Torrent.Length()
@@ -63,8 +57,18 @@ func runCycle() {
 		private = *info.Private
 	}
 
+	if !shouldBoost(st.ConnectedSeeders, speedMBs, st.LoadedSize, size, private, active.IsPriority.Load()) {
+		return
+	}
+
+	hash := active.Hash().String()
+	if hash != lastAnnounceHash {
+		lastAnnounceHash = hash
+		lastAnnounceAt = time.Time{}
+	}
+
 	now := time.Now()
-	if !shouldBoost(st.ConnectedSeeders, speedMBs, st.LoadedSize, size, private) || !announceDue(now, lastAnnounceAt) {
+	if !announceDue(now, lastAnnounceAt) {
 		return
 	}
 	lastAnnounceAt = now
@@ -106,10 +110,12 @@ func swarmWeak(connectedSeeders int, speedMBs, fileSizeGB float64) bool {
 	return connectedSeeders < 2 && speedMBs < fileSizeGB*weakSwarmRatio
 }
 
-// shouldBoost holds every reason not to re-announce: completed torrents have nothing to discover
-// (speed is zero by definition), and private trackers do not tolerate unscheduled announces.
-func shouldBoost(connectedSeeders int, speedMBs float64, loaded, size int64, private bool) bool {
-	if private || (size > 0 && loaded >= size) {
+// shouldBoost holds every reason not to re-announce: only a confirmed playback is worth
+// boosting (sync probes and scans never set the priority flag), completed torrents have
+// nothing to discover (speed is zero by definition), and private trackers do not tolerate
+// unscheduled announces.
+func shouldBoost(connectedSeeders int, speedMBs float64, loaded, size int64, private, priority bool) bool {
+	if private || !priority || (size > 0 && loaded >= size) {
 		return false
 	}
 	return swarmWeak(connectedSeeders, speedMBs, float64(size)/(1024*1024*1024))
