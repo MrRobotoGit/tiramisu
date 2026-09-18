@@ -1296,9 +1296,11 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 	if h.hash == "" {
 		// Late hash resolution for handles where Open() didn't complete it.
 		if hash, fileID, err := resolveTargetFile(h.url, h.size, h.path); err == nil {
+			h.mu.Lock()
 			h.hash = hash
 			h.fileID = fileID
-			logger.Printf("[Pump] Late resolution success: %s", h.hash[:8])
+			h.mu.Unlock()
+			logger.Printf("[Pump] Late resolution success: %s", hash[:8])
 		} else {
 			logger.Printf("[Pump] Warning: hash empty for %s, warmup disabled", filepath.Base(h.path))
 		}
@@ -2708,6 +2710,11 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	ttffReleaseClose(h.path)
 	logger.Printf("=== RELEASE VIRTUAL === path=%s", h.path)
 
+	// Delete from activeHandles here, not at the end: the early returns below (probe
+	// without slot, replaced pump) would otherwise leak this entry, and both the live
+	// handle checks (anyLiveHandleFor*) and cleanup's activePaths trust the map.
+	activeHandles.Delete(h)
+
 	if val, ok := activePumps.Load(h.path); ok {
 		ps := val.(*NativePumpState)
 		// Only primary handles persist position; secondary probes have arbitrary offsets.
@@ -2784,8 +2791,6 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 
 	// Nil local reference only; pump goroutine owns the reader lifecycle via captured copy.
 	h.nativeReader = nil
-
-	activeHandles.Delete(h)
 
 	// Fast-drop (5s) for scanner probes never confirmed by webhook; 30s otherwise.
 	retentionDelay := 30 * time.Second
@@ -3405,14 +3410,108 @@ func abs(n int64) int64 {
 	return n
 }
 
-func extractHashSuffix(filename string) string {
-	ext := filepath.Ext(filename)
-	base := strings.TrimSuffix(filename, ext)
-	idx := strings.LastIndex(base, "_")
-	if idx != -1 && len(base)-idx-1 == 8 {
-		return base[idx+1:]
+// exactMatchEntry is one playbackRegistry entry: a virtual path and its state.
+type exactMatchEntry struct {
+	path  string
+	state *PlaybackState
+}
+
+// exactMatchKeys carries the webhook-side keys used by pass-1 matching.
+type exactMatchKeys struct {
+	imdbID    string
+	basenames []string
+}
+
+// findExactMatch selects the pass-1 match among the registry entries.
+//
+// The hash suffix is deliberately NOT a key: every episode of a season pack shares
+// the same hash8 in its filename (HashPrefix = hash[:8]), so a suffix-only match can
+// bind the wrong episode — e.g. the media.stop of E01 killing the pump of E02 that
+// is actually playing. The filename (physical identity) wins over the IMDB ID
+// (metadata identity), which also protects against an IMDB id polluted by a
+// previous mis-matched media.play.
+func findExactMatch(keys exactMatchKeys, entries []exactMatchEntry) (string, *PlaybackState) {
+	for _, e := range entries {
+		if e.state == nil {
+			continue
+		}
+		base := filepath.Base(e.path)
+		for _, want := range keys.basenames {
+			if want == base {
+				return e.path, e.state
+			}
+		}
 	}
-	return ""
+	if keys.imdbID != "" {
+		for _, e := range entries {
+			if e.state == nil {
+				continue
+			}
+			if imdb := e.state.GetImdbID(); imdb != "" && imdb == keys.imdbID {
+				return e.path, e.state
+			}
+		}
+	}
+	return "", nil
+}
+
+// snapshotPlaybackEntries copies the registry into a slice: both pass-1 scans within
+// one call see the same entries and order, independent of concurrent registry writes.
+func snapshotPlaybackEntries() []exactMatchEntry {
+	entries := make([]exactMatchEntry, 0, 16)
+	playbackRegistry.Range(func(key, value interface{}) bool {
+		entries = append(entries, exactMatchEntry{path: key.(string), state: value.(*PlaybackState)})
+		return true
+	})
+	return entries
+}
+
+// anyLiveHandleFor reports whether a FUSE handle for path is still registered. It reads
+// activeHandles (the live source of truth) instead of globalOpenTracker on purpose: the
+// tracker is not decremented when media.stop deletes the pump before Release, so it can
+// latch a stale count and would block stops forever.
+func anyLiveHandleFor(path string) bool {
+	found := false
+	activeHandles.Range(func(key, _ interface{}) bool {
+		if key.(*MkvHandle).path == path {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// anyLiveHandleForHashExcept is anyLiveHandleForHash excluding one path: the file being
+// stopped still has its own handle open at webhook time and must not count as a sibling.
+func anyLiveHandleForHashExcept(hash, excludePath string) bool {
+	if hash == "" {
+		return false
+	}
+	found := false
+	activeHandles.Range(func(key, _ interface{}) bool {
+		h := key.(*MkvHandle)
+		if h.path == excludePath {
+			return true
+		}
+		h.mu.Lock()
+		hashOf := h.hash
+		h.mu.Unlock()
+		if hashOf == hash {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// shouldDropTorrentPriority reports whether a media.stop may deactivate priority for
+// the torrent: never while a file other than the one being stopped still has an open
+// handle on the same hash (season-pack episodes share it, so priority-off would hit
+// the live stream).
+func shouldDropTorrentPriority(hash, excludePath string) bool {
+	return hash != "" && !anyLiveHandleForHashExcept(hash, excludePath)
 }
 
 // handlePlexWebhook gestisce i messaggi in arrivo dal server Plex
@@ -3499,21 +3598,9 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			return true
 		})
 
-		// Two-pass matching: exact first (IMDB, hash, filename), fuzzy only as fallback.
-
-		// Extract hash suffix from webhook payload (once, outside loop)
-		targetSuffix := ""
-		for _, m := range payload.Metadata.Media {
-			for _, p := range m.Part {
-				if suffix := extractHashSuffix(p.File); suffix != "" {
-					targetSuffix = suffix
-					break
-				}
-			}
-			if targetSuffix != "" {
-				break
-			}
-		}
+		// Two-pass matching: exact first (filename, IMDB), fuzzy only as fallback.
+		// The hash suffix is not a key: season-pack episodes share it (HashPrefix =
+		// hash[:8]), so a suffix-only match can bind the wrong episode.
 
 		// Extract IMDB ID via regex on raw payload (struct unmarshal would cause UnmarshalTypeError
 		// due to Plex sending both lowercase "guid" and capital "Guid" fields).
@@ -3522,38 +3609,19 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			webhookImdbID = m[1]
 		}
 
-		// Pass 1: Exact matches only (IMDB ID, hash suffix, filename)
-		var exactMatch string
-		var exactState *PlaybackState
-		playbackRegistry.Range(func(key, value interface{}) bool {
-			path := key.(string)
-			state := value.(*PlaybackState)
-
-			// Tentativo 0a: Match per IMDB ID (V281 — immune a titoli localizzati)
-			if imdb := state.GetImdbID(); webhookImdbID != "" && imdb != "" && imdb == webhookImdbID {
-				exactMatch = path
-				exactState = state
-				return false
-			}
-
-			if targetSuffix != "" && extractHashSuffix(path) == targetSuffix {
-				exactMatch = path
-				exactState = state
-				return false
-			}
-
-			// Tentativo 1: Match per Filename (se presente nel payload)
-			for _, m := range payload.Metadata.Media {
-				for _, p := range m.Part {
-					if filepath.Base(p.File) == filepath.Base(path) {
-						exactMatch = path
-						exactState = state
-						return false
-					}
+		// Pass 1: Exact matches only (filename, IMDB ID).
+		var basenames []string
+		for _, m := range payload.Metadata.Media {
+			for _, p := range m.Part {
+				if b := filepath.Base(p.File); b != "" && b != "." {
+					basenames = append(basenames, b)
 				}
 			}
-			return true
-		})
+		}
+		exactMatch, exactState := findExactMatch(
+			exactMatchKeys{imdbID: webhookImdbID, basenames: basenames},
+			snapshotPlaybackEntries(),
+		)
 
 		// Pass 1c: IMDB bootstrap — if webhookImdbID is available but no state has it yet,
 		// find the unique registered path of the matching library type with empty ImdbID.
@@ -3646,6 +3714,8 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			exactState.mu.Lock()
 			exactState.IsStopped = false
 			// Cache webhookImdbID into state for fast IMDB matching in future sessions.
+			// A pass-1 match is precise (filename or IMDB ID) and cannot cross-pollinate
+			// episodes of a season pack; the pass-1c/fuzzy fallbacks are less precise.
 			if exactState.ImdbID == "" && webhookImdbID != "" {
 				exactState.ImdbID = webhookImdbID
 				logger.Printf("[PLEX] IMDB ID cached for future matching: %s → %s", filepath.Base(exactMatch), webhookImdbID)
@@ -3667,54 +3737,25 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		seriesTitle := strings.ToLower(payload.Metadata.GrandparentTitle)
 		targetYear := payload.Metadata.Year
 
-		stopTargetSuffix := ""
-		for _, m := range payload.Metadata.Media {
-			for _, p := range m.Part {
-				if suffix := extractHashSuffix(p.File); suffix != "" {
-					stopTargetSuffix = suffix
-					break
-				}
-			}
-			if stopTargetSuffix != "" {
-				break
-			}
-		}
-
 		stopImdbID := ""
 		if m := reImdbID.FindStringSubmatch(payloadStr); len(m) > 1 {
 			stopImdbID = m[1]
 		}
 
-		// Pass 1: Exact matches (IMDB ID, hash suffix, filename)
-		var stopMatch string
-		var stopState *PlaybackState
-		playbackRegistry.Range(func(key, value interface{}) bool {
-			path := key.(string)
-			state := value.(*PlaybackState)
-
-			if imdb := state.GetImdbID(); stopImdbID != "" && imdb != "" && imdb == stopImdbID {
-				stopMatch = path
-				stopState = state
-				return false
-			}
-
-			if stopTargetSuffix != "" && extractHashSuffix(path) == stopTargetSuffix {
-				stopMatch = path
-				stopState = state
-				return false
-			}
-
-			for _, m := range payload.Metadata.Media {
-				for _, p := range m.Part {
-					if filepath.Base(p.File) == filepath.Base(path) {
-						stopMatch = path
-						stopState = state
-						return false
-					}
+		var basenames []string
+		for _, m := range payload.Metadata.Media {
+			for _, p := range m.Part {
+				if b := filepath.Base(p.File); b != "" && b != "." {
+					basenames = append(basenames, b)
 				}
 			}
-			return true
-		})
+		}
+
+		// Pass 1: Exact matches (filename, IMDB ID) — never the shared hash suffix.
+		stopMatch, stopState := findExactMatch(
+			exactMatchKeys{imdbID: stopImdbID, basenames: basenames},
+			snapshotPlaybackEntries(),
+		)
 
 		// Pass 2: Fuzzy matches only if no exact match
 		if stopMatch == "" {
@@ -3762,12 +3803,34 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		if stopMatch != "" && stopState != nil {
+		// Only a filename match (pass 1) identifies the file by construction: it is the
+		// only case whose stop is honored unconditionally. IMDB-only and fuzzy matches
+		// are guesses and stay behind the open-handle safety net.
+		matchByBasename := false
+		if stopMatch != "" {
+			base := filepath.Base(stopMatch)
+			for _, b := range basenames {
+				if b == base {
+					matchByBasename = true
+					break
+				}
+			}
+		}
+
+		// Non-basename matches (IMDB-only or fuzzy) can be a sibling episode of the same
+		// show: if the guessed path still has a live handle it is being read right now,
+		// so a late or spurious stop must not kill its pump. A basename match is the
+		// right file by construction and its stop is always honored (production evidence:
+		// most genuine stops arrive while the pump is still alive, guarding them would
+		// leave pumps up to the 2h idle timeout, V262).
+		if stopMatch != "" && stopState != nil && !matchByBasename && anyLiveHandleFor(stopMatch) {
+			logger.Printf("[PLEX] STOP ignored for %s: non-basename match with handle still open", filepath.Base(stopMatch))
+		} else if stopMatch != "" && stopState != nil {
 			stopState.mu.Lock()
 			stopState.IsStopped = true
 			stopState.mu.Unlock()
 			stopState.SetHealthy(false) // persists with IsStopped=true
-			logger.Printf("[PLEX] Priority removed for: %s (Event: %s)", filepath.Base(stopMatch), payload.Event)
+			logger.Printf("[PLEX] STOP applied for: %s (Event: %s)", filepath.Base(stopMatch), payload.Event)
 
 			if val, ok := activePumps.Load(stopMatch); ok {
 				ps := val.(*NativePumpState)
@@ -3791,8 +3854,10 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// Deactivate Core Priority
-			if stopState.Hash != "" {
+			// Deactivate Core Priority unless a sibling episode of the same torrent is
+			// still live (shared hash): priority/aggressive off and the 30s expiry would
+			// hit the stream that is actually playing.
+			if shouldDropTorrentPriority(stopState.Hash, stopMatch) {
 				h := metainfo.NewHashFromHex(stopState.Hash)
 				if t := web.BTS.GetTorrent(h); t != nil {
 					t.IsPriority.Store(false)
