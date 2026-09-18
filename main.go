@@ -3757,6 +3757,8 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			snapshotPlaybackEntries(),
 		)
 
+		stopMatchFromFuzzy := false
+
 		// Pass 2: Fuzzy matches only if no exact match
 		if stopMatch == "" {
 			bestLevel := 0
@@ -3798,14 +3800,15 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 					bestLevel = level
 					stopMatch = path
 					stopState = value.(*PlaybackState)
+					stopMatchFromFuzzy = true
 				}
 				return true
 			})
 		}
 
-		// Only a filename match (pass 1) identifies the file by construction: it is the
-		// only case whose stop is honored unconditionally. IMDB-only and fuzzy matches
-		// are guesses and stay behind the open-handle safety net.
+		// Only a basename match (pass 1) is the file by construction. An IMDB-only match
+		// is precise on this deployment (episode-level IDs) but only when the registry
+		// holds exactly one entry with that ID; otherwise it is a guess like fuzzy.
 		matchByBasename := false
 		if stopMatch != "" {
 			base := filepath.Base(stopMatch)
@@ -3816,15 +3819,29 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		imdbUnique := false
+		if stopMatch != "" && !matchByBasename && !stopMatchFromFuzzy && stopImdbID != "" {
+			n := 0
+			playbackRegistry.Range(func(_, v interface{}) bool {
+				ps, ok := v.(*PlaybackState)
+				if !ok || ps == nil {
+					return true
+				}
+				if ps.GetImdbID() == stopImdbID {
+					n++
+				}
+				return n <= 1
+			})
+			imdbUnique = n == 1
+		}
 
-		// Non-basename matches (IMDB-only or fuzzy) can be a sibling episode of the same
-		// show: if the guessed path still has a live handle it is being read right now,
-		// so a late or spurious stop must not kill its pump. A basename match is the
-		// right file by construction and its stop is always honored (production evidence:
-		// most genuine stops arrive while the pump is still alive, guarding them would
-		// leave pumps up to the 2h idle timeout, V262).
-		if stopMatch != "" && stopState != nil && !matchByBasename && anyLiveHandleFor(stopMatch) {
-			logger.Printf("[PLEX] STOP ignored for %s: non-basename match with handle still open", filepath.Base(stopMatch))
+		// A fuzzy (pass 2) match is a name-similarity guess; an IMDB-only match is only
+		// trusted when unique. If such a match still has a live handle it is likely a
+		// sibling episode being read, so a late or spurious stop must not kill it.
+		// Basename and unique-IMDB matches are honored even with the handle open:
+		// ignoring them would leave the pump alive until the 2h idle timeout (V262).
+		if stopMatch != "" && stopState != nil && !matchByBasename && !imdbUnique && anyLiveHandleFor(stopMatch) {
+			logger.Printf("[PLEX] STOP ignored for %s: fuzzy or ambiguous match with handle still open", filepath.Base(stopMatch))
 		} else if stopMatch != "" && stopState != nil {
 			stopState.mu.Lock()
 			stopState.IsStopped = true
