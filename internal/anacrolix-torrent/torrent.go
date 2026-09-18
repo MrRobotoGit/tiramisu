@@ -3642,9 +3642,11 @@ func (t *Torrent) Announce() {
 }
 
 // AnnounceTracked forces a tracker announce for all trackers and reports the aggregate
-// result once every announce has returned: peers is the sum of the tracker responses and
-// errs counts the announces that failed. onDone runs on a separate goroutine and may be nil.
-func (t *Torrent) AnnounceTracked(onDone func(peers, errs int)) {
+// result once every announce has returned: peers is the sum of the tracker responses, errs
+// counts the announces that failed, total is the number of trackers announced to, and
+// failures carries one "url: error" entry per failed announce. onDone runs on a separate
+// goroutine and may be nil.
+func (t *Torrent) AnnounceTracked(onDone func(peers, errs, total int, failures []string)) {
 	t.cl.lock()
 	scrapers := make([]*trackerScraper, 0, len(t.trackerAnnouncers))
 	for _, ta := range t.trackerAnnouncers {
@@ -3655,24 +3657,30 @@ func (t *Torrent) AnnounceTracked(onDone func(peers, errs int)) {
 	t.cl.unlock()
 
 	go func() {
+		type trackedResult struct {
+			url string
+			res trackerAnnounceResult
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		results := make(chan trackerAnnounceResult, len(scrapers))
+		results := make(chan trackedResult, len(scrapers))
 		for _, ts := range scrapers {
 			go func(ts *trackerScraper) {
-				results <- ts.announce(ctx, 0)
+				results <- trackedResult{url: ts.u.String(), res: ts.announce(ctx, 0)}
 			}(ts)
 		}
 		var peers, errs int
+		var failures []string
 		for range scrapers {
-			res := <-results
-			peers += res.NumPeers
-			if res.Err != nil {
+			r := <-results
+			peers += r.res.NumPeers
+			if r.res.Err != nil {
 				errs++
+				failures = append(failures, r.url+": "+r.res.Err.Error())
 			}
 		}
 		if onDone != nil {
-			onDone(peers, errs)
+			onDone(peers, errs, len(scrapers), failures)
 		}
 	}()
 }

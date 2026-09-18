@@ -2,7 +2,9 @@ package tuner
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"tiramisu/internal/gostorm/torr"
@@ -12,6 +14,8 @@ const (
 	sampleInterval   = 5 * time.Second
 	announceCooldown = 120 * time.Second
 	weakSwarmRatio   = 0.15
+	maxFailureShown  = 5
+	maxFailureChars  = 120
 )
 
 var (
@@ -72,8 +76,9 @@ func runCycle() {
 		return
 	}
 	lastAnnounceAt = now
-	active.Torrent.AnnounceTracked(func(peers, errs int) {
-		log.Printf("[Tuner] DiscoveryBoost: announce completed peers=%d errs=%d", peers, errs)
+	active.Torrent.AnnounceTracked(func(peers, errs, total int, failures []string) {
+		log.Printf("[Tuner] DiscoveryBoost: announce completed peers=%d errs=%d total=%d failures=%s",
+			peers, errs, total, summarizeFailures(failures))
 	})
 	log.Printf("[Tuner] DiscoveryBoost: weak swarm (seeds=%d speed=%.1fMB/s threshold=%.1fMB/s) -> tracker re-announce triggered",
 		st.ConnectedSeeders, speedMBs, fileSizeGB*weakSwarmRatio)
@@ -123,4 +128,26 @@ func shouldBoost(connectedSeeders int, speedMBs float64, loaded, size int64, pri
 
 func announceDue(now, last time.Time) bool {
 	return last.IsZero() || now.Sub(last) >= announceCooldown
+}
+
+// summarizeFailures renders announce errors for one log line: a bounded sample, each entry
+// truncated, so a 35-tracker failure does not turn the line into a wall of text.
+func summarizeFailures(failures []string) string {
+	if len(failures) == 0 {
+		return ""
+	}
+	shown := failures
+	suffix := ""
+	if len(shown) > maxFailureShown {
+		suffix = fmt.Sprintf("; (+%d more)", len(shown)-maxFailureShown)
+		shown = shown[:maxFailureShown]
+	}
+	parts := make([]string, 0, len(shown))
+	for _, f := range shown {
+		if len(f) > maxFailureChars {
+			f = f[:maxFailureChars-3] + "..."
+		}
+		parts = append(parts, f)
+	}
+	return strings.Join(parts, "; ") + suffix
 }
