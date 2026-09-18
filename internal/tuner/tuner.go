@@ -14,8 +14,13 @@ const (
 	sampleInterval   = 5 * time.Second
 	announceCooldown = 120 * time.Second
 	weakSwarmRatio   = 0.15
-	maxFailureShown  = 5
-	maxFailureChars  = 120
+	// weakSwarmMaxSeeders is the seeder headroom below which the swarm counts as
+	// depleted. The 2 inherited from the AI era left slow streams with 3-4
+	// seeders uncovered; the announce diagnostic shows whether 5 finds peers or
+	// just adds churn.
+	weakSwarmMaxSeeders = 5
+	maxFailureShown     = 5
+	maxFailureChars     = 120
 )
 
 var (
@@ -112,7 +117,7 @@ func swarmWeak(connectedSeeders int, speedMBs, fileSizeGB float64) bool {
 	if fileSizeGB <= 0 {
 		return false
 	}
-	return connectedSeeders < 2 && speedMBs < fileSizeGB*weakSwarmRatio
+	return connectedSeeders < weakSwarmMaxSeeders && speedMBs < fileSizeGB*weakSwarmRatio
 }
 
 // shouldBoost holds every reason not to re-announce: only a confirmed playback is worth
