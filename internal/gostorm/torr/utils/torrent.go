@@ -30,22 +30,21 @@ var defTrackers = []string{
 	"udp://open.demonii.com:1337/announce",
 
 	// Tier 2: Affidabili globali
-	"udp://tracker.tiny-vps.com:6969/announce",
-	"udp://tracker.moeking.me:6969/announce",
 	"udp://tracker.dler.org:6969/announce",
-	"udp://opentracker.i2p.rocks:6969/announce",
 	"udp://tracker.openbittorrent.com:6969/announce",
 	"udp://tracker.theoks.net:6969/announce",
 
 	// Tier 3: HTTP/HTTPS fallback
 	"http://tracker.opentrackr.org:1337/announce",
-	"https://tracker.tamersunion.org:443/announce",
 	"https://tracker.lilithraws.org:443/announce",
 }
 var (
 	loadedTrackers []string
 	trackersMu     sync.Mutex
 	trackersOnce   sync.Once
+
+	onTrackersLoaded   func([]string)
+	onTrackersLoadedMu sync.Mutex
 )
 
 // trackersListURLs is the built-in mirror chain for the remote tracker list,
@@ -87,6 +86,38 @@ var trackersCtx, trackersCancel = context.WithCancel(context.Background())
 // StopTrackerLoader stops the periodic tracker refresh and cancels a fetch in
 // flight. Safe to call more than once.
 func StopTrackerLoader() { trackersCancel() }
+
+// SetOnTrackersLoaded registers a callback invoked after every successful
+// tracker-list load or refresh with the merged remote+built-in list. Torrents
+// that start before the first fetch returns (and long-lived ones predating a
+// refresh) would otherwise keep the fallback list for their whole life:
+// spec.Trackers is built once, and nothing else re-applies the list.
+func SetOnTrackersLoaded(fn func([]string)) {
+	onTrackersLoadedMu.Lock()
+	onTrackersLoaded = fn
+	onTrackersLoadedMu.Unlock()
+	if fn == nil {
+		return
+	}
+	// Catch-up: the loader starts on the first GetDefTrackers call, so a list
+	// may already be loaded before the hook is registered. Applying it here
+	// keeps the fan-out independent from initialization order.
+	trackersMu.Lock()
+	list := loadedTrackers
+	trackersMu.Unlock()
+	if len(list) > 0 {
+		fn(append([]string(nil), list...))
+	}
+}
+
+func notifyTrackersLoaded(list []string) {
+	onTrackersLoadedMu.Lock()
+	fn := onTrackersLoaded
+	onTrackersLoadedMu.Unlock()
+	if fn != nil {
+		fn(list)
+	}
+}
 
 func GetTrackerFromFile() []string {
 	name := filepath.Join(settings.Path, "trackers.txt")
@@ -189,6 +220,7 @@ func loadNewTracker(ctx context.Context) error {
 		trackersMu.Lock()
 		loadedTrackers = merged
 		trackersMu.Unlock()
+		notifyTrackersLoaded(merged)
 		return nil
 	}
 	return fmt.Errorf("all %d mirrors failed: %w", len(trackersListURLs), errors.Join(errs...))

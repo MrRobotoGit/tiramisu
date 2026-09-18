@@ -148,6 +148,12 @@ func (bt *BTServer) Connect() error {
 	// V1.4.0: Align anacrolix reader max readahead with configured CacheSize
 	torrent.SetMaxReadahead(settings.BTsets.CacheSize)
 
+	// Trackers loaded or refreshed after startup must reach the torrents that
+	// already exist: spec.Trackers is built once in NewTorrent, and without
+	// this fan-out the first torrents of a process stay on the built-in
+	// fallback for life and refreshed entries never arrive at all.
+	utils.SetOnTrackersLoaded(bt.applyTrackersToLoadedTorrents)
+
 	// V227: InitApiHelper takes btsMu.Lock — must be called OUTSIDE bt.mu
 	// to prevent AB/BA deadlock with SetSettings (btsMu → bt.mu)
 	InitApiHelper(bt)
@@ -424,6 +430,26 @@ func (bt *BTServer) GetTorrent(hash torrent.InfoHash) *Torrent {
 		return torr
 	}
 	return nil
+}
+
+// applyTrackersToLoadedTorrents fans a newly loaded tracker list out to every
+// hydrated torrent. The first torrents of a process start before the remote
+// fetch returns, and later refreshes introduce new entries, so neither group
+// would otherwise ever see them (spec.Trackers is built once in NewTorrent).
+// addTrackers dedups tiers and scrapers, so re-applying the full list is safe.
+func (bt *BTServer) applyTrackersToLoadedTorrents(list []string) {
+	tiers := [][]string{list}
+	bt.mu.Lock()
+	torrents := make([]*Torrent, 0, len(bt.torrents))
+	for _, t := range bt.torrents {
+		torrents = append(torrents, t)
+	}
+	bt.mu.Unlock()
+	for _, t := range torrents {
+		if t != nil && t.Torrent != nil {
+			t.Torrent.AddTrackers(tiers)
+		}
+	}
 }
 
 func (bt *BTServer) ListTorrents() map[metainfo.Hash]*Torrent {
