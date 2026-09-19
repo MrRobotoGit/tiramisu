@@ -2151,6 +2151,11 @@ func appendMissingTrackerTiers(existing [][]string, minNumTiers int) (ret [][]st
 }
 
 func (t *Torrent) addTrackers(announceList [][]string) {
+	if t.closed.IsSet() {
+		// A closed torrent may have skipped registering announce states, so don't alter it.
+		// Backported from anacrolix/torrent upstream (commit 77e010b).
+		return
+	}
 	fullAnnounceList := &t.metainfo.AnnounceList
 	t.metainfo.AnnounceList = appendMissingTrackerTiers(*fullAnnounceList, len(announceList))
 	for tierIndex, trackerURLs := range announceList {
