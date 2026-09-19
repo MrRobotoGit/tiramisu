@@ -348,6 +348,23 @@ func (t *Torrent) setChunkSize(size pp.Integer) {
 	}
 }
 
+// Get a chunk buffer from the pool. It should be returned when it's no longer in use.
+// Backported from anacrolix/torrent upstream (commit 4f0e00d).
+func (t *Torrent) getChunkBuffer() []byte {
+	b := *t.chunkPool.Get().(*[]byte)
+	b = b[:t.chunkSize.Int()]
+	return b
+}
+
+func (t *Torrent) putChunkBuffer(b []byte) {
+	// chunkSize is fixed when the Torrent is created (setChunkSize) and never changes while a hash
+	// is in flight, so the capacity of a buffer taken by getChunkBuffer still matches here.
+	if cap(b) != t.chunkSize.Int() {
+		panic("chunk buffer returned with unexpected capacity")
+	}
+	t.chunkPool.Put(&b)
+}
+
 func (t *Torrent) pieceComplete(piece pieceIndex) bool {
 	return t._completedPieces.Contains(bitmap.BitIndex(piece))
 }
@@ -1531,7 +1548,7 @@ func (t *Torrent) smartBanBlockCheckingWriter(piece pieceIndex) *blockCheckingWr
 	return &blockCheckingWriter{
 		cache:        &t.smartBanCache,
 		requestIndex: t.pieceRequestIndexOffset(piece),
-		chunkSize:    t.chunkSize.Int(),
+		chunkBuffer:  t.getChunkBuffer(),
 	}
 }
 
@@ -1557,6 +1574,10 @@ func (t *Torrent) hashPiece(piece pieceIndex) (
 	hash := pieceHash.New()
 	const logPieceContents = false
 	smartBanWriter := t.smartBanBlockCheckingWriter(piece)
+	defer func() {
+		t.putChunkBuffer(smartBanWriter.chunkBuffer)
+		smartBanWriter.chunkBuffer = nil
+	}()
 	writers := []io.Writer{hash, smartBanWriter}
 	var examineBuf bytes.Buffer
 	if logPieceContents {
