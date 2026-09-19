@@ -5,29 +5,32 @@ import (
 	"fmt"
 	"time"
 	"unsafe"
-
-	"github.com/anacrolix/multiless"
-	"github.com/anacrolix/sync"
 )
 
+// Fields are ordered widest first so the struct packs: there's one of these per conn ranked.
 type worseConnInput struct {
-	BadDirection        bool
-	Useful              bool
-	LastHelpful         time.Time
-	CompletedHandshake  time.Time
-	GetPeerPriority     func() (peerPriority, error)
-	getPeerPriorityOnce sync.Once
-	peerPriority        peerPriority
-	peerPriorityErr     error
-	Pointer             uintptr
+	LastHelpful        time.Time
+	CompletedHandshake time.Time
+	GetPeerPriority    func() (peerPriority, error)
+	Pointer            uintptr
+
+	peerPriorityErr  error
+	peerPriority     peerPriority
+	peerPriorityDone bool
+
+	BadDirection bool
+	Useful       bool
 }
 
-func (me *worseConnInput) doGetPeerPriority() {
-	me.peerPriority, me.peerPriorityErr = me.GetPeerPriority()
-}
-
-func (me *worseConnInput) doGetPeerPriorityOnce() {
-	me.getPeerPriorityOnce.Do(me.doGetPeerPriority)
+// getPeerPriority memoizes the peer priority lookup. Ranking runs single-threaded under the client
+// lock, so this doesn't need to synchronize. Backported from anacrolix/torrent upstream (commit
+// 746940840): the previous sync.Once field made every heap swap copy a lock.
+func (me *worseConnInput) getPeerPriority() (peerPriority, error) {
+	if !me.peerPriorityDone {
+		me.peerPriority, me.peerPriorityErr = me.GetPeerPriority()
+		me.peerPriorityDone = true
+	}
+	return me.peerPriority, me.peerPriorityErr
 }
 
 type worseConnLensOpts struct {
@@ -50,33 +53,34 @@ func worseConnInputFromPeer(p *PeerConn, opts worseConnLensOpts) worseConnInput 
 	return ret
 }
 
+// Less applies the connection ordering from lowest to highest desirability, deferring peer-priority
+// lookup until earlier fields tie and falling back to the pointer for a total ordering. Backported
+// from anacrolix/torrent upstream (commit 746940840): the previous multiless chain let the trailing
+// pointer comparison overwrite the priority result, so priority never affected ranking.
 func (l *worseConnInput) Less(r *worseConnInput) bool {
-	less, ok := multiless.New().Bool(
-		r.BadDirection, l.BadDirection).Bool(
-		l.Useful, r.Useful).CmpInt64(
-		l.LastHelpful.Sub(r.LastHelpful).Nanoseconds()).CmpInt64(
-		l.CompletedHandshake.Sub(r.CompletedHandshake).Nanoseconds()).LazySameLess(
-		func() (same, less bool) {
-			l.doGetPeerPriorityOnce()
-			if l.peerPriorityErr != nil {
-				same = true
-				return
-			}
-			r.doGetPeerPriorityOnce()
-			if r.peerPriorityErr != nil {
-				same = true
-				return
-			}
-			same = l.peerPriority == r.peerPriority
-			less = l.peerPriority < r.peerPriority
-			return
-		}).Uintptr(
-		l.Pointer, r.Pointer,
-	).LessOk()
-	if !ok {
+	if l.BadDirection != r.BadDirection {
+		return l.BadDirection && !r.BadDirection
+	}
+	if l.Useful != r.Useful {
+		return !l.Useful && r.Useful
+	}
+	if !l.LastHelpful.Equal(r.LastHelpful) {
+		return l.LastHelpful.Before(r.LastHelpful)
+	}
+	if !l.CompletedHandshake.Equal(r.CompletedHandshake) {
+		return l.CompletedHandshake.Before(r.CompletedHandshake)
+	}
+	lPeerPriority, lPeerPriorityErr := l.getPeerPriority()
+	if lPeerPriorityErr == nil {
+		rPeerPriority, rPeerPriorityErr := r.getPeerPriority()
+		if rPeerPriorityErr == nil && lPeerPriority != rPeerPriority {
+			return lPeerPriority < rPeerPriority
+		}
+	}
+	if l.Pointer == r.Pointer {
 		panic(fmt.Sprintf("cannot differentiate %#v and %#v", l, r))
 	}
-	return less
+	return l.Pointer < r.Pointer
 }
 
 type worseConnSlice struct {
