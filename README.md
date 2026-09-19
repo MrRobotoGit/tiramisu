@@ -36,8 +36,8 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 torrent that the media server sees as an ordinary file: the correct size,
 seekable, with no temporary copies and nothing downloaded to disk. Below it sits
 **GoStorm**, a deeply patched fork of
-[TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer) and
-[anacrolix/torrent v1.55](https://github.com/anacrolix/torrent), running in the
+[TorrServer Matrix](https://github.com/YouROK/TorrServer) and
+[anacrolix/torrent](https://github.com/anacrolix/torrent), running in the
 same OS process as the FUSE layer, so there is no HTTP proxy and no serialization
 between the swarm and the player. Both upstreams carry streaming patches that do
 not exist in the originals.
@@ -443,9 +443,9 @@ worth roughly **5–7% of CPU**.
 
 ### 11. GoStorm Engine: a deep fork of TorrServer Matrix + anacrolix/torrent
 
-GoStorm is a fork of **[TorrServer Matrix 1.37](https://github.com/YouROK/TorrServer)**
+GoStorm is a fork of **[TorrServer Matrix](https://github.com/YouROK/TorrServer)**
 (BitTorrent management layer) and
-**[anacrolix/torrent v1.55](https://github.com/anacrolix/torrent)** (peer
+**[anacrolix/torrent](https://github.com/anacrolix/torrent)** (peer
 protocol engine). Both upstreams have been patched extensively for streaming
 correctness and performance, in ways that are not present in the originals:
 
