@@ -1730,6 +1730,10 @@ func getPeerConnSlice(cap int) []*PeerConn {
 func (t *Torrent) withUnclosedConns(f func([]*PeerConn)) {
 	sl := t.appendUnclosedConns(getPeerConnSlice(len(t.conns)))
 	f(sl)
+	// Don't let the pooled backing array keep conns alive until the pool drains. The full capacity
+	// is cleared, not just the length, because a longer earlier use can have left conns beyond the
+	// current length. Backported from anacrolix/torrent upstream.
+	clear(sl[:cap(sl)])
 	peerConnSlices.Put(sl)
 }
 
@@ -2105,7 +2109,9 @@ func appendMissingStrings(old, new []string) (ret []string) {
 	ret = old
 new:
 	for _, n := range new {
-		for _, o := range old {
+		// Compare against ret, not old: this skips URLs repeated within new too.
+		// Backported from anacrolix/torrent upstream (#1099).
+		for _, o := range ret {
 			if o == n {
 				continue new
 			}
@@ -3042,13 +3048,16 @@ func (t *Torrent) finishHash(index pieceIndex) {
 	t.cl.activePieceHashers--
 }
 
-// Return the connections that touched a piece, and clear the entries while doing it.
+// Forget the connections that touched a piece, on both the piece and the peers.
 func (t *Torrent) clearPieceTouchers(pi pieceIndex) {
 	p := t.piece(pi)
 	for c := range p.dirtiers {
 		delete(c.peerTouchedPieces, pi)
-		delete(p.dirtiers, c)
 	}
+	// Release the map instead of just emptying it. Go maps never shrink, so an emptied map retains
+	// its backing storage for the life of the Torrent; onDirtiedPiece remakes it on demand.
+	// Backported from anacrolix/torrent upstream.
+	p.dirtiers = nil
 }
 
 func (t *Torrent) queuePieceCheck(pieceIndex pieceIndex) {
