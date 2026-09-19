@@ -73,6 +73,10 @@ func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 		if cn.closed.IsSet() {
 			return
 		}
+		// Backported from anacrolix/torrent upstream (#1078): install the wakeup channel before
+		// filling the buffer, so a Broadcast that lands during fillWriteBuffer closes a channel the
+		// select below observes, instead of being dropped.
+		writeCond := cn.writeCond.Signaled()
 		cn.fillWriteBuffer()
 		keepAlive := cn.keepAlive()
 		cn.mu.Lock()
@@ -81,8 +85,21 @@ func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 			torrent.Add("written keepalives", 1)
 		}
 		if cn.writeBuffer.Len() == 0 {
-			writeCond := cn.writeCond.Signaled()
 			cn.mu.Unlock()
+			// Backported from anacrolix/torrent upstream (#1071): wake at the keepalive deadline.
+			// If it has already passed (a keepalive wasn't wanted above), poll again in a full
+			// interval. Without this the single-shot timer stays drained forever after firing.
+			//
+			// NOTE: this Reset may run on a still-armed timer (the select can exit via writeCond
+			// or closed without draining keepAliveTimer.C), which is safe only with the Go 1.23+
+			// timer semantics. The production binary is built from the main module, whose
+			// go directive (1.26.0) selects the new semantics; do not lower it below 1.23
+			// without adding a Stop+drain here.
+			wait := keepAliveTimeout - time.Since(lastWrite)
+			if wait <= 0 {
+				wait = keepAliveTimeout
+			}
+			keepAliveTimer.Reset(wait)
 			select {
 			case <-cn.closed.Done():
 			case <-writeCond:
@@ -114,7 +131,6 @@ func (cn *peerConnMsgWriter) run(keepAliveTimeout time.Duration) {
 			return
 		}
 		lastWrite = time.Now()
-		keepAliveTimer.Reset(keepAliveTimeout)
 	}
 }
 
