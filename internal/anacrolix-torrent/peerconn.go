@@ -677,7 +677,13 @@ func (c *PeerConn) servePeerRequest(r Request, prs *peerRequestState) {
 	c.locker().Lock()
 	if err != nil {
 		c.logger.WithDefaultLevel(log.Debug).Levelf(log.ErrorLevel(err), "waiting for alloc limit reservation: %v", err)
-		c.deletePeerRequest(r)
+		if cur, ok := c.peerRequests[r]; ok && cur == prs {
+			c.deletePeerRequest(r)
+		} else {
+			// Removed or replaced while waiting: only resolve this serve's own reservation, never
+			// someone else's entry.
+			prs.allocReservation.Drop()
+		}
 		return
 	}
 	if cur, ok := c.peerRequests[r]; !ok || cur != prs {
