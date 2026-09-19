@@ -3350,6 +3350,7 @@ func (t *Torrent) addWebSeed(url string, opts ...AddWebSeedsOpt) {
 		},
 		activeRequests: make(map[Request]webseed.Request, maxRequests),
 	}
+	ws.peer.initClosedCtx()
 	ws.peer.initRequestState()
 	for _, opt := range opts {
 		opt(&ws.client)

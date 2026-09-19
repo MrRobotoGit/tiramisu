@@ -3,7 +3,6 @@ package torrent
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -246,8 +245,18 @@ func (cn *PeerConn) onPeerSentCancel(r Request) {
 	if cn.fastEnabled() {
 		cn.reject(r)
 	} else {
-		delete(cn.peerRequests, r)
+		cn.deletePeerRequest(r)
 	}
+}
+
+// Removes a peer request, releasing its allocation reservation. Safe on absent requests.
+func (me *PeerConn) deletePeerRequest(r Request) {
+	state, ok := me.peerRequests[r]
+	if !ok {
+		return
+	}
+	state.allocReservation.Drop()
+	delete(me.peerRequests, r)
 }
 
 func (cn *PeerConn) choke(msg messageWriter) (more bool) {
@@ -540,10 +549,7 @@ func (c *PeerConn) reject(r Request) {
 	}
 	c.write(r.ToMsg(pp.Reject))
 	// It is possible to reject a request before it is added to peer requests due to being invalid.
-	if state, ok := c.peerRequests[r]; ok {
-		state.allocReservation.Drop()
-		delete(c.peerRequests, r)
-	}
+	c.deletePeerRequest(r)
 }
 
 func (c *PeerConn) maximumPeerRequestChunkLength() (_ Option[int]) {
@@ -554,7 +560,10 @@ func (c *PeerConn) maximumPeerRequestChunkLength() (_ Option[int]) {
 	return Some(uploadRateLimiter.Burst())
 }
 
-// startFetch is for testing purposes currently.
+// startFetch controls whether the request server is kicked. Production callers must pass true: a
+// request added with startFetch false is not picked up by the server loop, and nothing else will
+// ever serve it, so the peer would wait for a chunk that never arrives. (Tests pass false to drive
+// serving explicitly.)
 func (c *PeerConn) onReadRequest(r Request, startFetch bool) error {
 	requestedChunkLengths.Add(strconv.FormatUint(r.Length.Uint64(), 10), 1)
 	if _, ok := c.peerRequests[r]; ok {
@@ -605,41 +614,98 @@ func (c *PeerConn) onReadRequest(r Request, startFetch bool) error {
 	if c.peerRequests == nil {
 		c.peerRequests = make(map[Request]*peerRequestState, localClientReqq)
 	}
+	// Defense in depth: the duplicate guard above means this never fires today, but the assignment
+	// must never orphan a previous entry's reservation (it would leak alloclim budget forever).
+	c.deletePeerRequest(r)
 	value := &peerRequestState{
 		allocReservation: c.peerRequestDataAllocLimiter.Reserve(int64(r.Length)),
 	}
 	c.peerRequests[r] = value
 	if startFetch {
-		// TODO: Limit peer request data read concurrency.
-		go c.peerRequestDataReader(r, value)
+		c.startPeerRequestServer()
 	}
 	return nil
 }
 
-func (c *PeerConn) peerRequestDataReader(r Request, prs *peerRequestState) {
-	// Should we depend on Torrent closure here? I think it's okay to get cancelled from elsewhere,
-	// or fail to read and then cleanup. Also, we used to hang here if the reservation was never
-	// dropped, that was fixed.
-	ctx := context.Background()
+// Ensures a single goroutine serves this connection's outstanding requests, instead of spawning one
+// goroutine per request (backported from anacrolix/torrent upstream, commits a74bebf + e849b36).
+func (c *PeerConn) startPeerRequestServer() {
+	if !c.peerRequestServerRunning {
+		c.peerRequestServerRunning = true
+		go c.peerRequestServer()
+	}
+}
+
+func (c *PeerConn) peerRequestServer() {
+	c.locker().Lock()
+again:
+	if !c.closed.IsSet() {
+		for r, state := range c.peerRequests {
+			if state.data != nil {
+				continue
+			}
+			c.servePeerRequest(r, state)
+			goto again
+		}
+	}
+	c.peerRequestServerRunning = false
+	c.locker().Unlock()
+}
+
+// Handles an outstanding peer request: reads it into the request state so the writer can send it.
+// Called by peerRequestServer with the client lock held, and returns with it held. The request must
+// either be resolved (data set) or removed on every outcome, or the server loop spins.
+func (c *PeerConn) servePeerRequest(r Request, prs *peerRequestState) {
+	// Tripwire ported from anacrolix/torrent upstream (commit a74bebf): an unresolved request left
+	// behind would make the server loop spin, so fail loudly instead. Only this serve's own entry
+	// counts: a replacement under the same key is handled by the branch below (defense in depth).
+	defer func() {
+		if cur, ok := c.peerRequests[r]; ok && cur == prs && prs.data == nil {
+			panic("peer request server left an unresolved request")
+		}
+	}()
+	// Wait for the per-connection allocation without holding the client lock. Peers get closedCtx
+	// from setTorrent; fall back to the torrent's, which every client-created Torrent has. No
+	// background fallback: a nil context here means a harness never initialized either, and a loud
+	// panic is preferable to a silent non-cancellable wait.
+	ctx := c.closedCtx
+	if ctx == nil {
+		ctx = c.t.closedCtx
+	}
+	c.locker().Unlock()
 	err := prs.allocReservation.Wait(ctx)
+	c.locker().Lock()
 	if err != nil {
 		c.logger.WithDefaultLevel(log.Debug).Levelf(log.ErrorLevel(err), "waiting for alloc limit reservation: %v", err)
+		c.deletePeerRequest(r)
 		return
 	}
+	if cur, ok := c.peerRequests[r]; !ok || cur != prs {
+		// Removed while waiting for the reservation.
+		prs.allocReservation.Drop()
+		return
+	}
+	c.locker().Unlock()
 	b, err := c.readPeerRequestData(r)
 	c.locker().Lock()
-	defer c.locker().Unlock()
 	if err != nil {
 		c.peerRequestDataReadFailed(err, r)
-	} else {
-		if b == nil {
-			panic("data must be non-nil to trigger send")
-		}
-		torrent.Add("peer request data read successes", 1)
-		prs.data = b
-		// This might be required for the error case too (#752 and #753).
-		c.tickleWriter()
+		return
 	}
+	if cur, ok := c.peerRequests[r]; !ok || cur != prs {
+		c.logger.WithDefaultLevel(log.Debug).Printf("read data for peer request but no longer wanted")
+		// Defense in depth: usually redundant (the remover drops), but if this entry were ever
+		// replaced instead of removed, this releases the served reservation.
+		prs.allocReservation.Drop()
+		return
+	}
+	if b == nil {
+		panic("data must be non-nil to trigger send")
+	}
+	torrent.Add("peer request data read successes", 1)
+	prs.data = b
+	// This might be required for the error case too (#752 and #753).
+	c.tickleWriter()
 }
 
 // If this is maintained correctly, we might be able to support optional synchronous reading for
@@ -654,6 +720,9 @@ func (c *PeerConn) peerRequestDataReadFailed(err error, r Request) {
 	}
 	c.logger.Levelf(logLevel, "error reading chunk for peer Request %v: %v", r, err)
 	if c.t.closed.IsSet() {
+		// The request server loop needs the request removed on every outcome, including a read
+		// against closed storage. Backported from anacrolix/torrent upstream (commit 0aa61207b).
+		c.deletePeerRequest(r)
 		return
 	}
 	i := pieceIndex(r.Index)
@@ -681,6 +750,9 @@ func (c *PeerConn) peerRequestDataReadFailed(err error, r Request) {
 		// Choking a non-fast peer should cause them to flush all their requests.
 		c.choke(c.write)
 	}
+	// reject above removes the request; the choke path does not (this fork keeps requests across
+	// chokes). The server loop requires the failed request to be gone so it can make progress.
+	c.deletePeerRequest(r)
 }
 
 func (c *PeerConn) readPeerRequestData(r Request) ([]byte, error) {
@@ -1082,6 +1154,7 @@ func (c *Peer) setTorrent(t *Torrent) {
 		panic("connection already associated with a torrent")
 	}
 	c.t = t
+	c.initClosedCtx()
 	c.logger.WithDefaultLevel(log.Debug).Printf("set torrent=%v", t)
 	t.reconcileHandshakeStats(c)
 }

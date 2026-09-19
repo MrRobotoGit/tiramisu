@@ -1,6 +1,7 @@
 package torrent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -46,6 +47,11 @@ type (
 		Discovery       PeerSource
 		trusted         bool
 		closed          chansync.SetOnce
+		// Cancelled when the Peer is closed. Derived from the Torrent's closedCtx. Lets blocked
+		// storage reads and reservation waits abort on peer close (backported from anacrolix/torrent
+		// upstream, commit a74bebf).
+		closedCtx       context.Context
+		closedCtxCancel context.CancelFunc
 		// Set true after we've added our ConnStats generated during handshake to
 		// other ConnStat instances as determined when the *Torrent became known.
 		reconciledHandshakeStats bool
@@ -88,10 +94,12 @@ type (
 		sentHaves        bitmap.Bitmap
 
 		// Stuff controlled by the remote peer.
-		peerInterested        bool
-		peerChoking           bool
-		peerRequests          map[Request]*peerRequestState
-		PeerPrefersEncryption bool // as indicated by 'e' field in extension handshake
+		peerInterested bool
+		peerChoking    bool
+		peerRequests   map[Request]*peerRequestState
+		// True while the single request-serving goroutine is running. Guarded by the client lock.
+		peerRequestServerRunning bool
+		PeerPrefersEncryption    bool // as indicated by 'e' field in extension handshake
 		// The highest possible number of pieces the torrent could have based on
 		// communication with the peer. Generally only useful until we have the
 		// torrent info.
@@ -321,6 +329,10 @@ func (p *Peer) close() {
 	if !p.closed.Set() {
 		return
 	}
+	// Not set until the Torrent is known.
+	if p.closedCtx != nil {
+		p.closedCtxCancel()
+	}
 	if p.updateRequestsTimer != nil {
 		p.updateRequestsTimer.Stop()
 	}
@@ -334,6 +346,13 @@ func (p *Peer) close() {
 	for _, f := range p.callbacks.PeerClosed {
 		f(p)
 	}
+}
+
+func (p *Peer) initClosedCtx() {
+	if p.closedCtx != nil {
+		panic("closed context already initialized")
+	}
+	p.closedCtx, p.closedCtxCancel = context.WithCancel(p.t.closedCtx)
 }
 
 func (p *Peer) Close() error {
