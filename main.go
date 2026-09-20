@@ -7,6 +7,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/cespare/xxhash/v2"
@@ -491,8 +492,8 @@ func (r *VirtualMkvRoot) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(r.sourcePath, name)
 
-	if strings.HasSuffix(name, ".mkv") {
-		meta, err := getOrReadMeta(fullPath)
+	if classifyVFSPath(fullPath).Stub {
+		meta, err := stubMeta(fullPath)
 		if err == nil {
 			addFileToInodeMap(fullPath, meta.URL)
 			ino := getFileInodeFromMap(fullPath)
@@ -647,6 +648,18 @@ var _ fs.NodeGetattrer = (*VirtualDirNode)(nil)
 var _ fs.NodeUnlinker = (*VirtualDirNode)(nil)
 
 func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	// Inside an audio section before reconciliation has published, the committed
+	// set is unknown. Wait for it rather than answering: an empty-but-successful
+	// listing tells a scanner the library was deleted (spec 9: never a plausible
+	// but incomplete tree).
+	//
+	// This check stays AHEAD of the directory cache deliberately. A listing cached
+	// while the namespace was Ready would otherwise still be served after a later
+	// MarkFailed, masking a terminal failure behind stale entries.
+	if errno := audioWaitServable(ctx, d.physicalPath); errno != 0 {
+		return nil, errno
+	}
+
 	if entries, found := globalDirCache.Get(d.physicalPath); found {
 		return &nfsDirStream{entries: entries}, 0
 	}
@@ -668,7 +681,7 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 				Ino:  ino,
 				Off:  uint64(i + 1),
 			})
-		} else if strings.HasSuffix(e.Name(), ".mkv") {
+		} else if classifyVFSPath(fullPath).Stub {
 			ino := getFileInodeFromMap(fullPath)
 			result = append(result, fuse.DirEntry{
 				Name: e.Name(),
@@ -687,8 +700,21 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(d.physicalPath, name)
 
-	if strings.HasSuffix(name, ".mkv") {
-		meta, err := getOrReadMeta(fullPath)
+	// Only Readdir used to check readiness, so a stat during the unready window
+	// fell through to ENOENT below - semantic absence rather than refusal, which
+	// a non-zero NegativeTimeoutSeconds then let the kernel cache past
+	// publication. Waiting here removes the false negative at its source, so the
+	// correctness no longer depends on that timeout being zero.
+	//
+	// Directories inside an audio section wait too. The caller is about to read
+	// the directory anyway, so exempting them would only move the wait one call
+	// later while adding a branch.
+	if errno := audioWaitServable(ctx, d.physicalPath); errno != 0 {
+		return nil, errno
+	}
+
+	if classifyVFSPath(fullPath).Stub {
+		meta, err := stubMeta(fullPath)
 		if err == nil {
 			addFileToInodeMap(fullPath, meta.URL)
 			ino := getFileInodeFromMap(fullPath)
@@ -827,7 +853,9 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	} else if success {
 		logger.Printf("UNLINK: torrent successfully removed from GoStorm")
 	} else {
-		logger.Printf("UNLINK: no matching torrent found (already removed?), but hash was blacklisted")
+		// Also reached when an audio projection still owns the torrent, which the
+		// guard logs with its own reason.
+		logger.Printf("UNLINK: torrent not removed (already gone, or still referenced), but hash was blacklisted")
 	}
 
 	// Delete physical .mkv file
@@ -884,9 +912,14 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 
 	// hasFullWarmup: Open returns instantly only if both head and tail warmup files are ready.
 	// headReady: Allows async Wake and direct ID injection for instant start.
+	// Audio projections skip the movie/TV head/tail SSD warmup entirely, and Phase 1
+	// puts nothing in its place: demand fetch plus the existing read-ahead is the
+	// whole policy. Decided once here rather than special-cased at each warmup site.
+	usesWarmup := pathUsesSSDWarmup(n.vMeta.Path)
+
 	headReady := false
 	tailReady := false
-	if warmup.DiskWarmup != nil && hashStr != "" {
+	if usesWarmup && warmup.DiskWarmup != nil && hashStr != "" {
 		headReady = warmup.DiskWarmup.HeadReady(hashStr, urlFileIdx)
 		tailReady = warmup.DiskWarmup.TailReady(hashStr, urlFileIdx)
 	}
@@ -968,6 +1001,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		lastOff:          -1,
 		lastActivityTime: now,       // Initialize activity tracking
 		hasWarmup:        headReady, // Eligibility for fast SSD probes
+		usesWarmup:       usesWarmup,
 	}
 	h.state.Store(stateWarmup) // Initial state; transitions to stateStreaming on seek/resume.
 
@@ -975,13 +1009,15 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		h.hash = finalHash
 		h.fileID = fileIdx
 		// media.stop only knows the path; keep what EnsureTail needs to reach the file.
-		tailFillTargets.Store(n.vMeta.Path, tailFillTarget{hash: finalHash, fileID: fileIdx, size: n.vMeta.Size})
+		if usesWarmup {
+			tailFillTargets.Store(n.vMeta.Path, tailFillTarget{hash: finalHash, fileID: fileIdx, size: n.vMeta.Size})
+		}
 		// Gillian: proactive pump start at Open() — pump ready before first Read().
 		// pumpOnce ensures single start; late rescue path in Read() handles hash=='' case.
 		h.pumpOnce.Do(func() {
 			h.startNativePump(finalHash, fileIdx)
 		})
-		if !headReady {
+		if usesWarmup && !headReady {
 			// Real cold start: no warmup data present yet. Signal warmupActive here, at Open(),
 			// rather than waiting for the first WriteChunk - that first-connection burst is
 			// exactly the window aggressive PEX churn (Task 3) needs to catch, and by the time
@@ -1046,6 +1082,7 @@ type MkvHandle struct {
 	pumpState       *NativePumpState
 	isWatching      bool
 	hasWarmup       bool          // true if both head+tail warmup available at Open time
+	usesWarmup      bool          // false for audio projections: they skip SSD warmup entirely
 	state           atomic.Uint32 // handleState: stateWarmup | stateStreaming
 	pumpOnce        sync.Once
 	isPrimaryHandle atomic.Bool  // pump creator, primary reconnects (refCount 0→1), proven readers
@@ -1223,7 +1260,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		resumeOffset := raCache.MaxCachedOffset(h.path)
 
 		// Start pump near end of warmup zone so it buffers past 64MB before SSD handover.
-		if warmup.DiskWarmup != nil && h.hash != "" {
+		if h.usesWarmup && warmup.DiskWarmup != nil && h.hash != "" {
 			diskOffset := warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID)
 			if diskOffset > 16*1024*1024 {
 				safetyMargin := int64(16 * 1024 * 1024)
@@ -1248,7 +1285,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			// New handle: reset stale MaxCachedOffset unless warmup is active and covers the range.
 			// If resumeOffset >= warmup.FileSize, pump skip cannot fire → dead zone in raCache.
 			warmupCoverage := int64(0)
-			if warmup.DiskWarmup != nil && h.hash != "" {
+			if h.usesWarmup && warmup.DiskWarmup != nil && h.hash != "" {
 				warmupCoverage = warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID)
 			}
 			if warmupCoverage == 0 || resumeOffset >= warmup.FileSize {
@@ -1593,7 +1630,7 @@ func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, p
 	// playback, so only pay for Get()'s up-to-16MB defensive copy when DiskWarmup actually
 	// needs the bytes.
 	if raCache.Covered(h.path, offset, end-1) {
-		if warmup.DiskWarmup != nil && h.hash != "" && offset <= warmup.FileSize {
+		if h.usesWarmup && warmup.DiskWarmup != nil && h.hash != "" && offset <= warmup.FileSize {
 			if data := raCache.Get(h.path, offset, end-1); data != nil {
 				warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, data, offset)
 			}
@@ -1603,7 +1640,7 @@ func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, p
 
 	// Skip warmup zone during initial play (SSD serves 0-80MB); pump jumps ahead to pre-fill raCache.
 	// Gated on stateWarmup to avoid skip on resume/seek.
-	if warmup.DiskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup {
+	if h.usesWarmup && warmup.DiskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup {
 		warmupCoverage := warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID)
 		if warmupCoverage >= offset+chunkSize {
 			return false, offset + chunkSize
@@ -1617,7 +1654,7 @@ func (h *MkvHandle) nativePumpChunk(r *native.NativeReader, offset, chunkSize, p
 	n, err := r.ReadAt((*bufPtr)[:end-offset], offset)
 	if n > 0 {
 		raCache.Put(h.path, offset, offset+int64(n)-1, (*bufPtr)[:n])
-		if warmup.DiskWarmup != nil && h.hash != "" && offset <= warmup.FileSize {
+		if h.usesWarmup && warmup.DiskWarmup != nil && h.hash != "" && offset <= warmup.FileSize {
 			warmup.DiskWarmup.WriteChunk(h.hash, h.fileID, (*bufPtr)[:n], offset)
 		}
 	}
@@ -2005,7 +2042,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 // always, the tail only until playback is confirmed (the frozen tail is the discovery snapshot).
 // Runs off the read path, from FetchAhead's completion callback.
 func writeWarmupFromFetch(h *MkvHandle, off int64, data []byte) {
-	if warmup.DiskWarmup == nil || h.hash == "" || len(data) == 0 {
+	if !h.usesWarmup || warmup.DiskWarmup == nil || h.hash == "" || len(data) == 0 {
 		return
 	}
 	if off <= warmup.FileSize {
@@ -2235,7 +2272,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	}
 
 	// Serve warmup zone from SSD (up to 80MB with boundary chunk); stateWarmup gate skips SSD on resume/seek.
-	if warmup.DiskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup {
+	if h.usesWarmup && warmup.DiskWarmup != nil && h.hash != "" && h.state.Load() == stateWarmup {
 		warmupCoverage := warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID)
 		if off < warmupCoverage {
 			n, _ := warmup.DiskWarmup.ReadAt(h.hash, h.fileID, dest, off)
@@ -2263,7 +2300,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	// FetchBlock instead of the complete SSD tail file (~16s TTFF on a 36.6GB remux,
 	// 2026-08-06). ReadTail is range-safe: returns (0,nil) when the tail file's coverage
 	// doesn't include the offset.
-	if warmup.DiskWarmup != nil && shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize) {
+	if h.usesWarmup && warmup.DiskWarmup != nil && shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize) {
 		n, _ := warmup.DiskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
 		if n > 0 {
 			timing.UsedCache = true
@@ -2278,7 +2315,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		// On SSD tail miss, use stateless FetchBlock to preserve head pump.
 		nFetch, err := nativeBridge.FetchBlock(h.hash, h.fileID, off, dest)
 		if err == nil && nFetch > 0 {
-			if warmup.DiskWarmup != nil {
+			if h.usesWarmup && warmup.DiskWarmup != nil {
 				warmup.DiskWarmup.WriteTail(h.hash, h.fileID, dest[:nFetch], off, h.size)
 			}
 
@@ -2557,7 +2594,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		// warmupActive with no way back to false, since processWrite's off>FileSize
 		// early return (warmup.go) means COMPLETED - the only call site that clears
 		// it - never fires for writes past the head window.
-		if isFirstBlock && off <= warmup.FileSize {
+		if h.usesWarmup && isFirstBlock && off <= warmup.FileSize {
 			forceTorrentWarmupActive(h.hash, h.fileID)
 		}
 		fetchStart := time.Now()
@@ -2910,7 +2947,7 @@ func getOrReadMeta(path string) (*vfs.Metadata, error) {
 		if val, ok := metaCache.Get(path); ok {
 			m = val
 		} else {
-			fileMeta, err := vfs.ReadMetadataFromFile(path)
+			fileMeta, err := vfs.ReadMetadataFromFileWithLimits(path, stubSizeLimits(path))
 			if err != nil {
 				return nil, err
 			}
@@ -4195,6 +4232,11 @@ func main() {
 
 	finishGlobalInodeMapInit(logger)
 
+	// The dir cache must exist before the startup builder runs: audio
+	// reconciliation invalidates stale listings when it publishes, and a nil cache
+	// there is a panic in a bare goroutine that would kill the process before mount.
+	globalDirCache = vfs.NewDirCache(10 * time.Second)
+
 	// Pre-populate cache at startup to improve Plex scan performance.
 	cacheBuilder := NewStartupCacheBuilder(source, metaCache, logger)
 	cacheBuilder.Start()
@@ -4244,8 +4286,6 @@ func main() {
 			}
 		}
 	}()
-
-	globalDirCache = vfs.NewDirCache(10 * time.Second)
 
 	http.HandleFunc("/plex/webhook", handlePlexWebhook)
 
@@ -4549,6 +4589,7 @@ func main() {
 				QualityScoring:  gc().QualityScoringConfig,
 				InvalidatePath:  invalidateSyncRemovedPath,
 				DB:              stateDB,
+				AudioRegistry:   audioOwnershipRegistry(),
 			}),
 			"tv": engines.NewTVSyncer(engines.TVSyncerConfig{
 				GoStormURL:      gc().GoStormBaseURL,
@@ -4565,10 +4606,13 @@ func main() {
 				Language:        gc().Language,
 				QualityScoring:  gc().QualityScoringConfig,
 				DB:              stateDB,
+				AudioRegistry:   audioOwnershipRegistry(),
 				InvalidatePath:  invalidateSyncRemovedPath,
 			}),
 			"watchlist": engines.NewWatchlistSyncer(engines.WatchlistSyncerConfig{
 				GoStormURL:      gc().GoStormBaseURL,
+				DB:              stateDB,
+				AudioRegistry:   audioOwnershipRegistry(),
 				TMDBAPIKey:      gc().TMDBAPIKey,
 				TorrentioURL:    gc().TorrentioURL,
 				PlexURL:         gc().Plex.URL,
@@ -4632,11 +4676,19 @@ func main() {
 			registry = stateDB
 		}
 		libMgr := library.New(library.Config{
-			MoviesDir:      filepath.Join(gc().PhysicalSourcePath, "movies"),
-			TVDir:          filepath.Join(gc().PhysicalSourcePath, "tv"),
-			GoStormURL:     gc().GoStormBaseURL,
-			GoStorm:        engines.NewGoStormClient(gc().GoStormBaseURL),
-			Registry:       registry,
+			MoviesDir:  filepath.Join(gc().PhysicalSourcePath, "movies"),
+			TVDir:      filepath.Join(gc().PhysicalSourcePath, "tv"),
+			GoStormURL: gc().GoStormBaseURL,
+			GoStorm:    engines.NewGoStormClient(gc().GoStormBaseURL),
+			Registry:   registry,
+			// Without this the drop path sees only movie and tv stubs, and removing
+			// the last one for a shared hash takes the torrent out from under any
+			// audio projection still backed by it.
+			//
+			// audioOwnershipRegistry(), not a raw stateDB value: on a boot where
+			// EnableStateDB is true but the DB failed to open, the raw value is nil
+			// and this path would permit exactly that drop.
+			AudioRegistry:  audioOwnershipRegistry(),
 			InvalidatePath: invalidateSyncRemovedPath,
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.
@@ -5155,4 +5207,134 @@ type vfsLogger struct{ logger *log.Logger }
 
 func (l *vfsLogger) Printf(format string, args ...interface{}) {
 	l.logger.Printf(format, args...)
+}
+
+// pathUsesSSDWarmup reports whether a projection at this physical path takes the
+// movie/TV head/tail SSD warmup. A path outside every known section keeps the
+// existing behavior; only the audio sections opt out.
+func pathUsesSSDWarmup(path string) bool {
+	section, ok := library.SectionForPath(physicalSourcePath, path)
+	if !ok {
+		return true
+	}
+	return library.UsesSSDWarmup(section)
+}
+
+// classifyVFSPath is the single dispatch decision every FUSE entry point shares:
+// Readdir, Lookup, Getattr and Open must agree about what is a virtual file, or a
+// scanner sees names it cannot open. physicalSourcePath is the effective root,
+// which is the CLI argument when one was given.
+// globalAudioNamespace is the committed audio namespace the VFS dispatches on.
+// Extension alone must not publish a projection: a stub the registry disowned,
+// or one nobody ever committed, would otherwise be listed and served.
+var globalAudioNamespace = library.NewAudioNamespace()
+
+func classifyVFSPath(fullPath string) library.VFSClass {
+	return library.ClassifyProjection(physicalSourcePath, fullPath, globalAudioNamespace)
+}
+
+// stubSizeLimits picks the size guard for a stub. Audio drops the movie-sized
+// floor: a valid track or book part is legitimately small.
+// Size limits follow the file format, not ownership: reading a stub must work
+// even for a projection the registry has disowned, or recovery could not see it.
+func stubSizeLimits(fullPath string) vfs.SizeLimits {
+	if library.ClassifyPath(physicalSourcePath, fullPath).Audio {
+		return vfs.AudioSizeLimits
+	}
+	return vfs.VideoSizeLimits
+}
+
+// audioOwnershipRegistry is what every drop guard consults. The nil case means
+// audio is genuinely not configured; when the state DB was expected but could not
+// be opened, an unavailable registry is returned instead so a tolerated
+// persistence failure cannot become permission to delete shared torrents.
+func audioOwnershipRegistry() library.AudioRegistry {
+	if stateDB != nil {
+		return stateDB
+	}
+	if gc().EnableStateDB {
+		return library.UnavailableAudioRegistry{Err: errStateDBUnavailable}
+	}
+	return nil
+}
+
+var errStateDBUnavailable = errors.New("state DB is enabled but was not opened")
+
+// audioReadyWait bounds how long a VFS operation waits for reconciliation. The
+// wait exists because reconciliation always finishes; the bound exists because
+// "always" is a claim about code that could regress. Without it, a builder that
+// never runs would hang the mount for the life of the process, and a hung mount
+// is harder to diagnose than an I/O error.
+const audioReadyWait = 2 * time.Minute
+
+// audioWaitServable blocks until an audio directory may be served, and reports
+// the errno to fail with when it may not.
+//
+// Movies and tv return immediately in every state: they are read straight from
+// disk and must never wait on the audio registry.
+//
+// This replaced a bare syscall.EAGAIN. Pass 4 read the scanner sources: GNU ls
+// reports and stops, Navidrome retries once then returns the entries it has
+// (none), and Audiobookshelf converts the error to an empty slice and then marks
+// existing items missing. The errno chosen to avoid an apparent-empty library
+// produced exactly that on two supported scanners. Blocking is what a network
+// filesystem does, and scanners tolerate slow far better than empty.
+func audioWaitServable(ctx context.Context, dir string) syscall.Errno {
+	section, ok := library.SectionForPath(physicalSourcePath, filepath.Join(dir, "x"))
+	if !ok || !library.IsAudioSection(section) {
+		return 0
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, audioReadyWait)
+	defer cancel()
+
+	err := globalAudioNamespace.WaitServable(waitCtx)
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, library.ErrAudioReconcileFailed):
+		// Terminal. Never ENOENT: a scanner reads absence as a deletion.
+		return syscall.EIO
+	case ctx.Err() != nil:
+		// The caller gave up, not us. EINTR says interrupted rather than failed.
+		return syscall.EINTR
+	default:
+		// Our own deadline expired, so reconciliation never terminated.
+		logger.Printf("AUDIO: readiness wait expired after %s for %s", audioReadyWait, dir)
+		return syscall.EIO
+	}
+}
+
+// audioProjectionMeta builds an audio file's metadata from its committed registry
+// row instead of the physical stub. The registry is authoritative for audio
+// (spec §5.1), and the stream URL is recomputed from (hash, file_index) rather
+// than read back from the stub, which spec §5.2 calls a second potentially stale
+// source of truth. A stub swapped underneath therefore cannot change what is
+// served, and a stub with an unparseable URL cannot make a committed row
+// unreadable.
+func audioProjectionMeta(fullPath string, p library.AudioProjection) *vfs.Metadata {
+	return &vfs.Metadata{
+		URL:   fmt.Sprintf("%s/stream?link=%s&index=%d&play", strings.TrimRight(gc().GoStormBaseURL, "/"), p.Hash, p.FileIndex),
+		Size:  p.Size,
+		Mtime: time.Unix(0, p.MtimeNS),
+		Path:  fullPath,
+	}
+}
+
+// committedAudioMeta returns registry-derived metadata when the namespace owns
+// the path. ok is false for video and for anything uncommitted.
+func committedAudioMeta(fullPath string) (*vfs.Metadata, bool) {
+	p, ok := library.CommittedProjectionFor(physicalSourcePath, fullPath, globalAudioNamespace)
+	if !ok {
+		return nil, false
+	}
+	return audioProjectionMeta(fullPath, p), true
+}
+
+// stubMeta returns a virtual file's metadata. Audio comes from its committed
+// registry row; video keeps reading its physical stub exactly as before.
+func stubMeta(fullPath string) (*vfs.Metadata, error) {
+	if meta, ok := committedAudioMeta(fullPath); ok {
+		return meta, nil
+	}
+	return getOrReadMeta(fullPath)
 }
