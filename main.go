@@ -4688,8 +4688,12 @@ func main() {
 			// audioOwnershipRegistry(), not a raw stateDB value: on a boot where
 			// EnableStateDB is true but the DB failed to open, the raw value is nil
 			// and this path would permit exactly that drop.
-			AudioRegistry:  audioOwnershipRegistry(),
-			InvalidatePath: invalidateSyncRemovedPath,
+			AudioRegistry: audioOwnershipRegistry(),
+			// The audio sections live beside movies/ and tv/, and the projection
+			// registry is authoritative for what is published under them.
+			AudioRoot:        gc().PhysicalSourcePath,
+			AudioProjections: audioProjectionRegistry(),
+			InvalidatePath:   invalidateSyncRemovedPath,
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.
 			Gaps: func() ([]library.Gap, error) {
@@ -4731,6 +4735,7 @@ func main() {
 		http.HandleFunc("/api/library/add", libHandler.Add)
 		http.HandleFunc("/api/library/remove", libHandler.Remove)
 		http.HandleFunc("/api/library/list", libHandler.List)
+		http.HandleFunc("/api/library/inspect", libHandler.Inspect)
 	}
 
 	// Health Monitor + Dashboard (Fase 5)
@@ -5256,6 +5261,15 @@ func audioOwnershipRegistry() library.AudioRegistry {
 		return library.UnavailableAudioRegistry{Err: errStateDBUnavailable}
 	}
 	return nil
+}
+
+// audioProjectionRegistry returns the projection registry only when it is really
+// open: a typed-nil *metadb.DB would satisfy the interface and then panic.
+func audioProjectionRegistry() library.AudioProjectionRegistry {
+	if stateDB == nil {
+		return nil
+	}
+	return stateDB
 }
 
 var errStateDBUnavailable = errors.New("state DB is enabled but was not opened")

@@ -71,17 +71,17 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	if err := ctx.Err(); err != nil {
 		return nil, errf(http.StatusRequestTimeout, "request cancelled: %v", err)
 	}
+	// Routing is decided from the type alone, before validation, so an unknown
+	// type keeps the legacy path's canonical error rather than an audio one.
+	if section, canonical := SectionForType(req.Type); !canonical || !IsAudioSection(section) {
+		return nil, &Error{
+			Status:  http.StatusInternalServerError,
+			Message: fmt.Sprintf("type %q is not handled by AddAudio", req.Type),
+			Err:     ErrRequestNotAudio,
+		}
+	}
 	intent, err := ValidateAudioAddRequest(req)
 	if err != nil {
-		// A video type reaching here is the server routing to the wrong function,
-		// so it must not be reported to the caller as an invalid audio request.
-		if intent.Section == SectionMovies || intent.Section == SectionTV {
-			return nil, &Error{
-				Status:  http.StatusInternalServerError,
-				Message: fmt.Sprintf("type %q is handled by Add, not AddAudio", req.Type),
-				Err:     ErrRequestNotAudio,
-			}
-		}
 		return nil, err
 	}
 	if m.cfg.AudioProjections == nil {

@@ -30,6 +30,16 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Audio first, falling through on the routing sentinel so every video
+	// request reaches the legacy path unchanged.
+	if audio, err := h.mgr.AddAudio(r.Context(), req); !errors.Is(err, ErrRequestNotAudio) {
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, audio)
+		return
+	}
 	resp, err := h.mgr.Add(r.Context(), req)
 	if err != nil {
 		writeAPIError(w, err)
@@ -60,6 +70,26 @@ func (h *Handler) Remove(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// Inspect reports a torrent's source files so a caller can map them to virtual
+// paths before adding them.
+func (h *Handler) Inspect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	var req InspectRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := h.mgr.Inspect(r.Context(), req)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "GET only")
@@ -77,6 +107,25 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		// client reading a capped page cannot tell there is more behind it.
 		w.Header().Set("X-Total-Count", strconv.Itoa(total))
 		writeJSON(w, http.StatusOK, gaps)
+		return
+	}
+	// Audio pages rather than returning the whole section, so it answers an
+	// object with a cursor where the legacy types answer an array.
+	if section, canonical := SectionForType(r.URL.Query().Get("type")); canonical && IsAudioSection(section) {
+		query := r.URL.Query()
+		// A non-numeric limit falls back to the bounded default rather than failing.
+		limit, _ := strconv.Atoi(query.Get("limit"))
+		audio, err := h.mgr.ListAudio(AudioListRequest{
+			Type:   query.Get("type"),
+			Prefix: query.Get("prefix"),
+			Limit:  limit,
+			Cursor: query.Get("cursor"),
+		})
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, audio)
 		return
 	}
 	items, err := h.mgr.List(r.URL.Query().Get("type"))
