@@ -230,7 +230,7 @@ func (e *TVGoEngine) dropReplacedPack(ctx context.Context, pack deadPack, search
 		// One call for the whole pack: every episode points at the same torrent. A stub
 		// kept above still needs it, so the torrent only goes when none is left.
 		if kept == 0 {
-			if err := e.gostorm.RemoveTorrent(ctx, pack.Hash); err != nil {
+			if _, err := e.dropTorrent(ctx, pack.Hash); err != nil {
 				e.logger.Printf("[TVSync] WARNING: failed to remove torrent %s: %v", pack.Hash[:8], err)
 			}
 		}

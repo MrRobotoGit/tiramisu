@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"tiramisu/internal/config"
+	"tiramisu/internal/library"
 	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
@@ -35,7 +36,8 @@ type MoviesSyncerConfig struct {
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
 	// DB is optional: without it the engine simply never reaps dead releases.
-	DB *metadb.DB
+	DB            *metadb.DB
+	AudioRegistry library.AudioRegistry
 }
 
 // NewMoviesSyncer creates a new Go-based movie syncer.
@@ -72,6 +74,7 @@ func NewMoviesSyncer(cfg MoviesSyncerConfig) *MoviesSyncer {
 		Weights:         cfg.QualityScoring.MovieWeights(),
 		InvalidatePath:  cfg.InvalidatePath,
 		DB:              cfg.DB,
+		AudioRegistry:   cfg.AudioRegistry,
 	}
 
 	return &MoviesSyncer{

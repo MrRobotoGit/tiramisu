@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 
 	"tiramisu/internal/config"
+	"tiramisu/internal/library"
+	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -17,6 +19,8 @@ type WatchlistSyncer struct {
 
 // WatchlistSyncerConfig holds config for the Go watchlist engine.
 type WatchlistSyncerConfig struct {
+	DB              *metadb.DB
+	AudioRegistry   library.AudioRegistry
 	GoStormURL      string
 	TMDBAPIKey      string
 	TorrentioURL    string
@@ -58,6 +62,8 @@ func NewWatchlistSyncer(cfg WatchlistSyncerConfig) *WatchlistSyncer {
 		ProwlarrCfg:     cfg.ProwlarrCfg,
 		Weights:         cfg.QualityScoring.MovieWeights(),
 		Language:        cfg.Language,
+		DB:              cfg.DB,
+		AudioRegistry:   cfg.AudioRegistry,
 	}
 
 	return &WatchlistSyncer{
