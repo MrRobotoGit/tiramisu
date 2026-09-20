@@ -284,6 +284,11 @@ func (cm *CleanupManager) runCleanup() {
 				if stateDB != nil {
 					stateDB.DeletePlaybackState(path)
 				}
+				// F1 backstop: terminate any pump still registered for this path, otherwise it
+				// keeps its master slot and keeps fetching until the reader idle timeout.
+				if terminateOrphanPump(path) {
+					cm.logger.Printf("[Cleanup] Force-terminated orphan pump for zombie path: %s", filepath.Base(path))
+				}
 			}
 			return true
 		}
@@ -295,6 +300,9 @@ func (cm *CleanupManager) runCleanup() {
 			// V750: Also remove from SQLite
 			if stateDB != nil {
 				stateDB.DeletePlaybackState(path)
+			}
+			if terminateOrphanPump(path) {
+				cm.logger.Printf("[Cleanup] Force-terminated orphan pump for entry older than 24h: %s", filepath.Base(path))
 			}
 		}
 		return true

@@ -262,6 +262,42 @@ type NativePumpState struct {
 	interruptPending atomic.Bool // prevents cascade: only the first handle per seek fires Interrupt()
 }
 
+// attachToExistingPumpLocked links the handle to a running pump exactly once. It returns
+// false when the handle already owns a slot, which happens when two concurrent reads race
+// on the same handle: a double attach increments refCount twice and Release can never bring
+// it back to zero, pinning the pump and its slot until the reader idle timeout.
+func (h *MkvHandle) attachToExistingPumpLocked(ps *NativePumpState) bool {
+	h.mu.Lock()
+	if h.hasSlot {
+		h.mu.Unlock()
+		return false
+	}
+	h.hasSlot = true
+	h.pumpState = ps
+	h.isWatching = true
+	h.nativeReader = ps.reader
+	h.pumpCancel = ps.cancel
+	h.mu.Unlock()
+	atomic.AddInt32(&ps.refCount, 1)
+	globalOpenTracker.Inc(h.hash, h.path)
+	return true
+}
+
+// terminateOrphanPump cancels and forgets any pump registered for path. The cleanup sweep
+// uses it when pruning a zombie registry entry: without it the pump keeps its slot and keeps
+// fetching until the reader idle timeout (V262, up to 2h with an open handle).
+func terminateOrphanPump(path string) bool {
+	val, ok := activePumps.Load(path)
+	if !ok {
+		return false
+	}
+	if ps, ok := val.(*NativePumpState); ok && ps.cancel != nil {
+		ps.cancel()
+	}
+	activePumps.Delete(path)
+	return true
+}
+
 // resolveTargetFile finds the torrent hash and file index for a given URL and size.
 func resolveTargetFile(url string, targetSize int64, physicalPath string) (string, int, error) {
 	if nativeBridge == nil {
@@ -1164,11 +1200,15 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 
 		h.hasSlot = true
 		becomePrimary(h) // pump creator is always primary
-		h.nativeReader = nativeBridge.NewStreamReader(finalHash, fileIdx, h.size)
+		// Capture the reader now and pass it to the pump goroutine: re-reading h.nativeReader
+		// inside the goroutine raced with Release setting it to nil, and the resulting early
+		// return (before the teardown defer) leaked the master slot.
+		pumpReader := nativeBridge.NewStreamReader(finalHash, fileIdx, h.size)
+		h.nativeReader = pumpReader
 		if tr := torr.PeekTorrent(finalHash); tr != nil && tr.Torrent != nil {
 			if info := tr.Torrent.Info(); info != nil && info.PieceLength > 0 {
 				pl := int64(info.PieceLength)
-				h.nativeReader.SetPieceLen(pl)
+				pumpReader.SetPieceLen(pl)
 				raCache.SetPieceLen(h.path, pl)
 			}
 		}
@@ -1178,7 +1218,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		h.pumpCancel = pumpCancel
 		sharedState := &NativePumpState{
 			cancel:   pumpCancel,
-			reader:   h.nativeReader,
+			reader:   pumpReader,
 			path:     h.path,
 			refCount: 1,
 		}
@@ -1276,7 +1316,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		pumpStart := resumeOffset
 		capturedState := sharedState
 		safeGo(func() {
-			h.nativePump(pumpCtx, pumpStart, capturedState)
+			h.nativePump(pumpCtx, pumpReader, pumpStart, capturedState)
 		})
 	default:
 		// If slots are full, it will fall back to per-request slots in Read
@@ -1285,9 +1325,22 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 }
 
 // nativePump reads continuously from the Native pipe and fills raCache.
-// sharedState guards against orphan-delete in defer.
-func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedState *NativePumpState) {
-	pumpReader := h.nativeReader
+// sharedState guards against orphan-delete in defer. pumpReader is captured by the caller
+// so a concurrent Release cannot nil it out from under the goroutine.
+func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *native.NativeReader, startOffset int64, sharedState *NativePumpState) {
+	// The master slot must be returned on every exit, including the early return below.
+	// It used to be released only by the teardown defer, which the nil-reader return path
+	// never reached, leaking one slot per event.
+	defer func() {
+		if h.hasSlot {
+			select {
+			case <-masterDataSemaphore:
+			default:
+			}
+			h.hasSlot = false
+		}
+	}()
+
 	if pumpReader == nil {
 		logger.Printf("[Pump] reader is nil at startup for %s", filepath.Base(h.path))
 		return
@@ -1330,15 +1383,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 			logger.Printf("[V306] WARNING: pump goroutine exited during healthy playback for %s — priority preserved via IsHealthy", filepath.Base(h.path))
 		}
 
-		if h.hasSlot {
-			select {
-			case <-masterDataSemaphore:
-				// Slot released
-			default:
-				// Should not happen
-			}
-			h.hasSlot = false
-		}
+		// The master slot is released by the defer installed at the top of nativePump.
 		pumpReader.Close()
 		h.mu.Unlock()
 		logger.Printf("[V239] Native Pump Goroutine Ended: %s", filepath.Base(h.path))
@@ -2385,19 +2430,18 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	if !h.hasSlot {
 		pumpCreationMu.Lock()
 
+		// Re-check under the creation mutex: a concurrent read on this same handle may have
+		// attached while we waited, and a double attach would pin the pump in refCount.
+		if h.hasSlot {
+			pumpCreationMu.Unlock()
+			goto pumpSlotResolved
+		}
 		// Attach to existing pump if one is already running for this path.
 		if val, ok := activePumps.Load(h.path); ok {
 			ps := val.(*NativePumpState)
-			atomic.AddInt32(&ps.refCount, 1) // Increment reference count
-			h.mu.Lock()
-			h.hasSlot = true
-			h.pumpState = ps
-			h.isWatching = true
-			h.nativeReader = ps.reader
-			h.pumpCancel = ps.cancel
-			h.mu.Unlock()
-			globalOpenTracker.Inc(h.hash, h.path)
-			logger.Printf("[V258] Handle ATTACHED to existing active pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
+			if h.attachToExistingPumpLocked(ps) {
+				logger.Printf("[V258] Handle ATTACHED to existing active pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
+			}
 		}
 		// Unlock early if attached or not needed
 		if h.hasSlot {
@@ -2410,13 +2454,14 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 						select {
 						case masterDataSemaphore <- struct{}{}:
 							h.hasSlot = true
-							h.nativeReader = nativeBridge.NewStreamReader(h.hash, h.fileID, h.size)
+							upReader := nativeBridge.NewStreamReader(h.hash, h.fileID, h.size)
+							h.nativeReader = upReader
 							pumpCtx, pumpCancel := context.WithCancel(context.Background())
 							h.pumpCancel = pumpCancel
 
 							sharedState := &NativePumpState{
 								cancel:   pumpCancel,
-								reader:   h.nativeReader,
+								reader:   upReader,
 								path:     h.path,
 								refCount: 1,
 							}
@@ -2434,7 +2479,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 
 							upgradedState := sharedState
 							safeGo(func() {
-								h.nativePump(pumpCtx, off, upgradedState)
+								h.nativePump(pumpCtx, upReader, off, upgradedState)
 							})
 						default:
 							// Reserve full, stay in burst mode for now
@@ -2444,18 +2489,19 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 			}
 			pumpCreationMu.Unlock() // Final unlock
 		}
+	}
 
-		// If still no slot (scan or reserve full), acquire a temporary slot for this read
-		if !h.hasSlot {
-			select {
-			case masterDataSemaphore <- struct{}{}:
-				defer func() { <-masterDataSemaphore }()
-			case <-fuseCtx.Done():
-				return nil, syscall.EINTR
-			case <-time.After(30 * time.Second):
-				logger.Printf("[MasterSemaphore] Timeout waiting for slot: %s", filepath.Base(h.path))
-				return nil, syscall.ETIMEDOUT
-			}
+pumpSlotResolved:
+	// If still no slot (scan or reserve full), acquire a temporary slot for this read
+	if !h.hasSlot {
+		select {
+		case masterDataSemaphore <- struct{}{}:
+			defer func() { <-masterDataSemaphore }()
+		case <-fuseCtx.Done():
+			return nil, syscall.EINTR
+		case <-time.After(30 * time.Second):
+			logger.Printf("[MasterSemaphore] Timeout waiting for slot: %s", filepath.Base(h.path))
+			return nil, syscall.ETIMEDOUT
 		}
 	}
 
