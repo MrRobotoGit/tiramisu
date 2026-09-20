@@ -64,6 +64,11 @@ type Config struct {
 	// row rather than a stub under the media directories, so the filesystem scan
 	// cannot see it.
 	AudioRegistry AudioRegistry
+	// AudioRoot is the physical directory holding the audio section roots.
+	AudioRoot string
+	// AudioProjections is the registry an audio add stages, commits and rolls
+	// back through. *metadb.DB satisfies it.
+	AudioProjections AudioProjectionRegistry
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what
@@ -91,9 +96,16 @@ func New(cfg Config) *Manager {
 type Error struct {
 	Status  int
 	Message string
+	// Err is an optional sentinel a caller can route on with errors.Is, while
+	// Status stays what a client is told.
+	Err error
 }
 
 func (e *Error) Error() string { return e.Message }
+
+// Unwrap lets one value carry both an HTTP status and a sentinel, so a caller
+// can route on errors.Is while a client still gets a status.
+func (e *Error) Unwrap() error { return e.Err }
 
 func errf(status int, format string, args ...interface{}) *Error {
 	return &Error{Status: status, Message: fmt.Sprintf(format, args...)}

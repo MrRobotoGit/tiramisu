@@ -1,0 +1,308 @@
+package library
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base32"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"tiramisu/internal/metadb"
+)
+
+// ErrRequestNotAudio marks a request a video type owns. A caller routes on it
+// with errors.Is rather than on the status, which is for clients.
+var ErrRequestNotAudio = errors.New("library: request is not an audio type")
+
+type AudioAddedFile struct {
+	Path       string                `json:"path"`
+	SourcePath string                `json:"source_path"`
+	FileIndex  int                   `json:"file_index"`
+	Size       int64                 `json:"size"`
+	Status     AudioProjectionStatus `json:"status"`
+}
+
+type AudioAddResponse struct {
+	Hash  string           `json:"hash"`
+	Title string           `json:"title"`
+	Type  string           `json:"type"`
+	Files []AudioAddedFile `json:"files"`
+}
+
+// AudioProjectionRegistry is the read and write side of the projection
+// registry. *metadb.DB satisfies it.
+type AudioProjectionRegistry interface {
+	AudioProjectionLookup
+	StageAudioProjections(txnID string, ps []metadb.AudioProjection) error
+	CommitAudioProjections(txnID string, updatedAtNS int64) (int, error)
+	RollbackAudioProjections(txnID string) (int, error)
+}
+
+// canonicalHashKey folds a valid base32 info hash onto its 40-hex spelling so
+// one torrent has one lock key and one ownership identity.
+func canonicalHashKey(hash string) string {
+	h := strings.ToLower(strings.TrimSpace(hash))
+	if len(h) != 32 {
+		return h
+	}
+	raw, err := base32.StdEncoding.DecodeString(strings.ToUpper(h))
+	if err != nil || len(raw) != 20 {
+		return h
+	}
+	return hex.EncodeToString(raw)
+}
+
+// audioErr gives a failure its API status while keeping the sentinel reachable
+// through errors.Is.
+func audioErr(err error) *Error {
+	return &Error{Status: StatusForError(err), Message: err.Error(), Err: err}
+}
+
+// AddAudio publishes N projections of one torrent through the registry batch,
+// which is the publication boundary: nothing reaches a final name until the
+// registry has committed, so a partial request is never committed library state.
+func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, errf(http.StatusRequestTimeout, "request cancelled: %v", err)
+	}
+	intent, err := ValidateAudioAddRequest(req)
+	if err != nil {
+		// A video type reaching here is the server routing to the wrong function,
+		// so it must not be reported to the caller as an invalid audio request.
+		if intent.Section == SectionMovies || intent.Section == SectionTV {
+			return nil, &Error{
+				Status:  http.StatusInternalServerError,
+				Message: fmt.Sprintf("type %q is handled by Add, not AddAudio", req.Type),
+				Err:     ErrRequestNotAudio,
+			}
+		}
+		return nil, err
+	}
+	if m.cfg.AudioProjections == nil {
+		return nil, errf(http.StatusServiceUnavailable, "the audio projection registry is unavailable")
+	}
+	if m.cfg.AudioRoot == "" {
+		return nil, errf(http.StatusServiceUnavailable, "no audio root configured")
+	}
+
+	// Identity resolution mirrors validate() and Inspect: the magnet's own hash
+	// wins, so cleanup removes what the engine was actually asked to add.
+	hash := strings.ToLower(strings.TrimSpace(req.Hash))
+	magnet := strings.TrimSpace(req.Magnet)
+	if magnet != "" {
+		if fromMagnet := HashFromMagnet(magnet); fromMagnet != "" {
+			hash = fromMagnet
+		} else if hash == "" {
+			return nil, errf(http.StatusBadRequest, "magnet carries no info hash")
+		}
+	}
+	if hash == "" {
+		return nil, errf(http.StatusBadRequest, "hash or magnet is required")
+	}
+	if !reInfoHash.MatchString(hash) {
+		return nil, errf(http.StatusBadRequest, "malformed info hash %q", hash)
+	}
+	if magnet == "" {
+		magnet = BuildMagnet(hash, intent.Title, DefaultTrackers())
+	}
+
+	// Locked on the canonical spelling: a base32 magnet and its hex form are one
+	// torrent, and locking them separately leaves a window a concurrent Remove
+	// or Add can act in.
+	lockKey := canonicalHashKey(hash)
+	defer m.lockHash(lockKey)()
+
+	known, ok := m.knownTorrentHashes(ctx)
+	if !ok {
+		return nil, errf(http.StatusBadGateway, "cannot list torrents to establish ownership")
+	}
+	preexisting := known[lockKey]
+
+	addedHash, err := m.cfg.GoStorm.AddTorrent(ctx, magnet, intent.Title)
+	if err != nil || addedHash == "" {
+		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)
+	}
+	engineHash := strings.ToLower(strings.TrimSpace(addedHash))
+	if !reInfoHash.MatchString(engineHash) {
+		if !preexisting {
+			m.dropTorrent(ctx, hash)
+		}
+		return nil, errf(http.StatusBadGateway, "gostorm returned a malformed info hash %q", addedHash)
+	}
+	if engineKey := canonicalHashKey(engineHash); engineKey != lockKey {
+		defer m.lockHash(engineKey)()
+		preexisting = preexisting || known[engineKey]
+	}
+	// Everything after the torrent exists must undo it on the way out, exactly as
+	// Add does, or a failed request leaves a torrent hydrated with no projection.
+	abandon := func() {
+		if !preexisting {
+			m.dropTorrent(ctx, engineHash)
+		}
+	}
+
+	wait := req.MetadataWait
+	if wait <= 0 {
+		wait = defaultMetadataWait
+	} else if wait > maxMetadataWait {
+		wait = maxMetadataWait
+	}
+	info, err := m.cfg.GoStorm.GetTorrentInfo(ctx, engineHash, wait)
+	if err != nil || info == nil {
+		abandon()
+		return nil, errf(http.StatusGatewayTimeout, "no metadata after %ds: %v", wait, err)
+	}
+
+	sourcePaths := make([]string, len(intent.Files))
+	for i, file := range intent.Files {
+		sourcePaths[i] = file.SourcePath
+	}
+	sources, err := ResolveSources(info.FileStats, sourcePaths)
+	if err != nil {
+		abandon()
+		return nil, audioErr(err)
+	}
+	// Validated against the hash the engine reported: a base32 magnet comes back
+	// in hex, and the _hash8 suffix has to match the spelling that is stored.
+	for i, file := range intent.Files {
+		if _, err := ValidateProjectionPath(intent.Section, file.Path, sources[i].SourcePath, engineHash); err != nil {
+			abandon()
+			return nil, audioErr(err)
+		}
+	}
+	plans, err := PlanAudioProjections(m.cfg.AudioProjections, intent.Section, engineHash, intent.Files, sources)
+	if err != nil {
+		abandon()
+		return nil, audioErr(err)
+	}
+
+	txnID, err := newAudioTxnID()
+	if err != nil {
+		abandon()
+		return nil, errf(http.StatusInternalServerError, "cannot start an audio transaction: %v", err)
+	}
+	now := time.Now().UnixNano()
+	sectionRoot := filepath.Join(m.cfg.AudioRoot, string(intent.Section))
+
+	var rows []metadb.AudioProjection
+	for i, plan := range plans {
+		if plan.Status != AudioProjectionCreated {
+			continue
+		}
+		rows = append(rows, metadb.AudioProjection{
+			Section:         string(intent.Section),
+			VirtualPath:     plan.VirtualPath,
+			PortablePathKey: PortablePathKey(plan.VirtualPath),
+			Hash:            engineHash,
+			FileIndex:       plan.Source.FileIndex,
+			SourcePath:      plan.Source.SourcePath,
+			Size:            plan.Source.Size,
+			MtimeNS:         now,
+			Title:           intent.Title,
+			Magnet:          magnet,
+			StagingName:     fmt.Sprintf(".tiramisu-%s-%d", txnID, i),
+			CreatedAtNS:     now,
+			UpdatedAtNS:     now,
+		})
+	}
+
+	if len(rows) > 0 {
+		// The registry is consulted before the filesystem is touched, so a
+		// conflicting batch writes nothing at all.
+		if err := m.cfg.AudioProjections.StageAudioProjections(txnID, rows); err != nil {
+			abandon()
+			return nil, audioErr(err)
+		}
+	}
+
+	staged := make([]string, 0, len(rows))
+	unwind := func() {
+		for _, path := range staged {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove staged audio stub %s: %v", path, err)
+			}
+			// rmdir upwards: it only removes empty directories, so a directory a
+			// concurrent request is still using is left alone.
+			pruneEmptyDirs(filepath.Dir(path), sectionRoot)
+		}
+		if len(rows) > 0 {
+			if _, err := m.cfg.AudioProjections.RollbackAudioProjections(txnID); err != nil {
+				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot roll back audio transaction %s: %v", txnID, err)
+			}
+		}
+		abandon()
+	}
+
+	for _, row := range rows {
+		final := filepath.Join(sectionRoot, filepath.FromSlash(row.VirtualPath))
+		stagedPath := filepath.Join(filepath.Dir(final), row.StagingName)
+		if err := WriteAudioStub(stagedPath, m.streamURL(row.Hash, row.FileIndex), row.Size, row.Magnet, row.ExternalID, row.ExternalIDNamespace); err != nil {
+			unwind()
+			return nil, errf(http.StatusInternalServerError, "cannot stage audio stub for %s: %v", row.VirtualPath, err)
+		}
+		staged = append(staged, stagedPath)
+	}
+
+	if len(rows) > 0 {
+		committed, err := m.cfg.AudioProjections.CommitAudioProjections(txnID, now)
+		if err != nil {
+			unwind()
+			return nil, audioErr(err)
+		}
+		// Publishing a final name for a row that was not committed would put a
+		// file on disk that no registry row owns.
+		if committed != len(rows) {
+			unwind()
+			return nil, errf(http.StatusInternalServerError, "committed %d of %d audio projections", committed, len(rows))
+		}
+	}
+
+	// Several renames are not one filesystem transaction; the registry commit is
+	// the boundary a scanner's view is built from.
+	for i, row := range rows {
+		final := filepath.Join(sectionRoot, filepath.FromSlash(row.VirtualPath))
+		if err := os.Rename(staged[i], final); err != nil {
+			return nil, errf(http.StatusInternalServerError, "cannot publish audio stub %s: %v", row.VirtualPath, err)
+		}
+		if m.cfg.InvalidatePath != nil {
+			m.cfg.InvalidatePath(final)
+		}
+	}
+
+	files := make([]AudioAddedFile, 0, len(plans))
+	for _, plan := range plans {
+		files = append(files, AudioAddedFile{
+			Path:       plan.VirtualPath,
+			SourcePath: plan.Source.SourcePath,
+			FileIndex:  plan.Source.FileIndex,
+			Size:       plan.Source.Size,
+			Status:     plan.Status,
+		})
+	}
+	return &AudioAddResponse{Hash: engineHash, Title: intent.Title, Type: req.Type, Files: files}, nil
+}
+
+func newAudioTxnID() (string, error) {
+	var raw [12]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+// pruneEmptyDirs removes now-empty directories from dir up to but excluding
+// root. A non-empty directory stops the walk, so nothing in use is removed.
+func pruneEmptyDirs(dir, root string) {
+	for dir != root && strings.HasPrefix(dir, root+string(filepath.Separator)) {
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+		dir = filepath.Dir(dir)
+	}
+}

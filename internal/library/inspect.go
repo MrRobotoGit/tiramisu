@@ -64,8 +64,10 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 	}
 
 	// Held across the ownership check, the add and the cleanup, so a concurrent
-	// Add or Inspect of the same torrent cannot slip between them.
-	defer m.lockHash(hash)()
+	// Add or Inspect of the same torrent cannot slip between them. Keyed on the
+	// canonical spelling: base32 and hex are one torrent.
+	lockKey := canonicalHashKey(hash)
+	defer m.lockHash(lockKey)()
 
 	known, ok := m.knownTorrentHashes(ctx)
 	if !ok {
@@ -73,7 +75,7 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 		// there would be no way to tell whether this call hydrated the torrent.
 		return nil, errf(http.StatusBadGateway, "cannot list torrents to establish ownership")
 	}
-	preexisting := known[hash]
+	preexisting := known[lockKey]
 
 	addedHash, err := m.cfg.GoStorm.AddTorrent(ctx, magnet, title)
 	if err != nil || addedHash == "" {
@@ -89,9 +91,9 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 	}
 	// A base32 magnet comes back in hex, and everything from here is keyed on the
 	// spelling the engine reported, so the lock has to cover it too.
-	if engineHash != hash {
-		defer m.lockHash(engineHash)()
-		preexisting = preexisting || known[engineHash]
+	if engineKey := canonicalHashKey(engineHash); engineKey != lockKey {
+		defer m.lockHash(engineKey)()
+		preexisting = preexisting || known[engineKey]
 	}
 
 	wait := req.MetadataWait
@@ -125,7 +127,7 @@ func (m *Manager) knownTorrentHashes(ctx context.Context) (map[string]bool, bool
 	}
 	known := make(map[string]bool, len(torrents))
 	for _, torrent := range torrents {
-		known[strings.ToLower(strings.TrimSpace(torrent.Hash))] = true
+		known[canonicalHashKey(torrent.Hash)] = true
 	}
 	return known, true
 }
