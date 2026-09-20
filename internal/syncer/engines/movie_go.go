@@ -57,7 +57,8 @@ type MovieGoEngine struct {
 	blacklist     BlacklistData
 	blacklistFile string
 
-	db *metadb.DB
+	db       *metadb.DB
+	audioReg library.AudioRegistry
 	// deadTitles holds the IMDB ids whose current release stopped resolving its
 	// metadata. They are re-searched this run, and dropped only if nothing live
 	// turns up.
@@ -106,8 +107,11 @@ type MovieEngineConfig struct {
 	LogsDir         string
 	ProwlarrCfg     prowlarr.ConfigProwlarr
 	DB              *metadb.DB
-	Language        config.LanguageConfig
-	Weights         config.MovieWeights
+	// AudioRegistry lets the host say "audio is configured but its registry is
+	// unavailable", which a nil DB cannot express and must not be read as "no audio".
+	AudioRegistry library.AudioRegistry
+	Language      config.LanguageConfig
+	Weights       config.MovieWeights
 	// InvalidatePath, when set, is called after removing a stub file so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -205,6 +209,7 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 	}
 
 	e.db = cfg.DB
+	e.audioReg = cfg.AudioRegistry
 	e.noMKVCache = e.loadNoMKVCache()
 	e.noStreamsCache = e.loadCache(e.noStreamsCFile)
 	e.recheckCache = e.loadCache(e.recheckCFile)
@@ -223,7 +228,7 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 // block the stub deletion.
 func (e *MovieGoEngine) removeStub(ctx context.Context, path, hash string) {
 	if hash != "" {
-		if err := e.gostorm.RemoveTorrent(ctx, hash); err != nil {
+		if _, err := e.dropTorrent(ctx, hash); err != nil {
 			e.logger.Printf("[MovieSync] WARNING: failed to remove torrent %s for %s: %v", hash, filepath.Base(path), err)
 		}
 		// The failure counter outlives the release otherwise: if this hash is ever
@@ -704,14 +709,14 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 		info, err := e.gostorm.GetTorrentInfo(ctx, hash, maxWait)
 		if err != nil {
 			e.setCache(e.noMKVCache, hash, CacheEntry{Reason: "metadata_timeout", TS: time.Now().Unix()})
-			e.gostorm.RemoveTorrent(ctx, hash)
+			_, _ = e.dropTorrent(ctx, hash)
 			continue
 		}
 
 		videoFiles := e.filterVideoFiles(info.FileStats, c.Is4K)
 		if len(videoFiles) == 0 {
 			e.setCache(e.noMKVCache, hash, CacheEntry{Reason: "no_valid_files", TS: time.Now().Unix()})
-			e.gostorm.RemoveTorrent(ctx, hash)
+			_, _ = e.dropTorrent(ctx, hash)
 			continue
 		}
 
@@ -750,7 +755,7 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 			return true
 		}
 
-		e.gostorm.RemoveTorrent(ctx, hash)
+		_, _ = e.dropTorrent(ctx, hash)
 	}
 
 	// Every candidate was exhausted without a live one: the stub points at a swarm

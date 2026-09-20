@@ -1,0 +1,67 @@
+package library
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// WriteAudioStub writes an audio virtual stub, creating the tree on the way like
+// WriteStub does for video. The caller owns the virtual path, so the directories
+// under a section root only ever come into existence here.
+//
+// The imdb field WriteStub carries is absent rather than empty: audio has no IMDb
+// ID, and the engine must not invent a field a caller cannot fill.
+func WriteAudioStub(path, streamURL string, size int64, magnet string) error {
+	data, err := json.Marshal(map[string]interface{}{
+		"url":    streamURL,
+		"size":   size,
+		"magnet": magnet,
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// EnsureSectionRoots creates the audio section roots under sourcePath when they are
+// missing, so an install that predates audio gains them on update rather than
+// needing a manual step. Video roots are install.sh's job and are left alone.
+func EnsureSectionRoots(sourcePath string) error {
+	if sourcePath == "" {
+		// Not a no-op: an empty path would resolve the sections against the
+		// process working directory, which for a service install is /.
+		return errors.New("library: empty source path")
+	}
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("library: source path %q is not a directory", sourcePath)
+	}
+
+	for _, section := range []Section{SectionMusic, SectionAudiobooks} {
+		root := filepath.Join(sourcePath, string(section))
+		// Mkdir rather than MkdirAll: an existing root keeps its own mode and
+		// contents, and only the one missing level is ever created.
+		if err := os.Mkdir(root, 0755); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			existing, statErr := os.Stat(root)
+			if statErr != nil {
+				return statErr
+			}
+			if !existing.IsDir() {
+				return fmt.Errorf("library: section root %q is not a directory", root)
+			}
+		}
+	}
+	return nil
+}

@@ -22,6 +22,8 @@ import (
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/catalog/torrentio"
 	"tiramisu/internal/config"
+	"tiramisu/internal/library"
+	"tiramisu/internal/metadb"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -39,6 +41,8 @@ type WatchlistGoEngine struct {
 	sectionID  int
 	limiter    *rate.Limiter
 	logger     *log.Logger
+	db         *metadb.DB
+	audioReg   library.AudioRegistry
 
 	weights       config.MovieWeights
 	preferredLang *regexp.Regexp
@@ -46,6 +50,10 @@ type WatchlistGoEngine struct {
 
 // WatchlistConfig holds all config needed for the engine.
 type WatchlistConfig struct {
+	// DB is the state DB the audio ownership guard consults before dropping a
+	// torrent. Optional: nil means no audio is configured.
+	DB              *metadb.DB
+	AudioRegistry   library.AudioRegistry
 	GoStormURL      string
 	TMDBAPIKey      string
 	TorrentioURL    string
@@ -84,6 +92,8 @@ func NewWatchlistGoEngine(cfg WatchlistConfig) *WatchlistGoEngine {
 		sectionID:  cfg.PlexSection,
 		limiter:    rate.NewLimiter(rate.Every(500*time.Millisecond), 1),
 		logger:     logger,
+		db:         cfg.DB,
+		audioReg:   cfg.AudioRegistry,
 
 		weights:       cfg.Weights,
 		preferredLang: CompileLanguageRegex(cfg.Language.PreferredTerms, cfg.Language.PreferredFlags),
@@ -160,7 +170,7 @@ func (e *WatchlistGoEngine) Run(ctx context.Context) error {
 
 			torrentInfo, err := e.gostorm.GetTorrentInfo(ctx, hash, 25)
 			if err != nil {
-				e.gostorm.RemoveTorrent(ctx, hash)
+				_, _ = e.dropTorrent(ctx, hash)
 				continue
 			}
 
@@ -172,7 +182,7 @@ func (e *WatchlistGoEngine) Run(ctx context.Context) error {
 				}
 			}
 			if isBDMV {
-				e.gostorm.RemoveTorrent(ctx, hash)
+				_, _ = e.dropTorrent(ctx, hash)
 				continue
 			}
 
@@ -186,7 +196,7 @@ func (e *WatchlistGoEngine) Run(ctx context.Context) error {
 				}
 			}
 			if bestFile == nil {
-				e.gostorm.RemoveTorrent(ctx, hash)
+				_, _ = e.dropTorrent(ctx, hash)
 				continue
 			}
 

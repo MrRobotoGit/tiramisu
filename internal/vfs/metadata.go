@@ -53,6 +53,10 @@ type MkvJSON struct {
 // ReadMetadataFromFile reads metadata from a virtual .mkv file.
 // Supports both JSON (new) and line-based (legacy) formats.
 func ReadMetadataFromFile(path string) (*FileMetadata, error) {
+	return ReadMetadataFromFileWithLimits(path, VideoSizeLimits)
+}
+
+func readMetadataFromFile(path string, limits SizeLimits) (*FileMetadata, error) {
 	// Get file info for mtime
 	info, err := os.Stat(path)
 	if err != nil {
@@ -70,14 +74,14 @@ func ReadMetadataFromFile(path string) (*FileMetadata, error) {
 
 	// Detect JSON format
 	if strings.HasPrefix(trimmed, "{") {
-		return parseJSONFormat(trimmed, info, path)
+		return parseJSONFormat(trimmed, info, path, limits)
 	}
 
 	// Legacy line-based format
-	return parseLineFormat(content, info, path)
+	return parseLineFormat(content, info, path, limits)
 }
 
-func parseJSONFormat(content string, info os.FileInfo, path string) (*FileMetadata, error) {
+func parseJSONFormat(content string, info os.FileInfo, path string, limits SizeLimits) (*FileMetadata, error) {
 	var j MkvJSON
 	if err := json.Unmarshal([]byte(content), &j); err != nil {
 		return nil, fmt.Errorf("parse JSON: %w", err)
@@ -88,7 +92,7 @@ func parseJSONFormat(content string, info os.FileInfo, path string) (*FileMetada
 		return nil, ErrInvalidURL
 	}
 
-	if j.Size < MinFileSize || j.Size > MaxFileSize {
+	if j.Size < limits.Min || j.Size > limits.Max {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidSize, j.Size)
 	}
 
@@ -107,7 +111,7 @@ func parseJSONFormat(content string, info os.FileInfo, path string) (*FileMetada
 	}, nil
 }
 
-func parseLineFormat(content string, info os.FileInfo, path string) (*FileMetadata, error) {
+func parseLineFormat(content string, info os.FileInfo, path string, limits SizeLimits) (*FileMetadata, error) {
 	lines := strings.Split(content, "\n")
 	if len(lines) < 2 {
 		return nil, ErrInvalidFormat
@@ -127,7 +131,7 @@ func parseLineFormat(content string, info os.FileInfo, path string) (*FileMetada
 	}
 
 	// Validate size range (100MB - 100GB)
-	if size < MinFileSize || size > MaxFileSize {
+	if size < limits.Min || size > limits.Max {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidSize, size)
 	}
 

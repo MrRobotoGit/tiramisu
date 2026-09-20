@@ -231,5 +231,9 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 		return err
 	}
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (8, 'add episode_gaps.last_attempt')`)
-	return nil
+
+	// The audio projection registry is authoritative for audio ownership, so it is
+	// created here rather than lazily: a missing table would look like an empty
+	// library and let cleanup drop torrents that are still projected.
+	return d.execAudioSchema()
 }
