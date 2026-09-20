@@ -14,12 +14,19 @@ import (
 //
 // The imdb field WriteStub carries is absent rather than empty: audio has no IMDb
 // ID, and the engine must not invent a field a caller cannot fill.
-func WriteAudioStub(path, streamURL string, size int64, magnet string) error {
-	data, err := json.Marshal(map[string]interface{}{
+func WriteAudioStub(path, streamURL string, size int64, magnet, externalID, externalIDNS string) error {
+	stub := map[string]interface{}{
 		"url":    streamURL,
 		"size":   size,
 		"magnet": magnet,
-	})
+	}
+	// Absent rather than empty, like the imdb field this deliberately omits: a
+	// key the caller did not fill is an identity the engine would be inventing.
+	if externalID != "" || externalIDNS != "" {
+		stub["external_id"] = externalID
+		stub["external_id_ns"] = externalIDNS
+	}
+	data, err := json.Marshal(stub)
 	if err != nil {
 		return err
 	}

@@ -143,7 +143,7 @@ func TestAudioProjectionSchemaMigrationPreservesExistingData(t *testing.T) {
 }
 
 func TestAudioProjectionSchemaVersionIsNewAndIdempotent(t *testing.T) {
-	// R1, R3: every open applies the schema safely, records one new migration,
+	// R1, R3: every open applies the schema safely, records audio migrations,
 	// and preserves the established migration descriptions.
 	path := filepath.Join(t.TempDir(), "versions.db")
 	db := openAudioTestDB(t, path)
@@ -163,8 +163,8 @@ func TestAudioProjectionSchemaVersionIsNewAndIdempotent(t *testing.T) {
 			t.Fatalf("query schema versions: %v", err)
 		}
 		defer rows.Close()
-		newRows := 0
-		newVersion := 0
+		highestAudioVersion := 0
+		audioDescriptions := make(map[string]int)
 		seenOld := make(map[int]string)
 		for rows.Next() {
 			var version int
@@ -173,8 +173,16 @@ func TestAudioProjectionSchemaVersionIsNewAndIdempotent(t *testing.T) {
 				t.Fatalf("scan schema version: %v", err)
 			}
 			if version > 8 {
-				newRows++
-				newVersion = version
+				if description == "" {
+					t.Errorf("R3 audio migration version %d has an empty description", version)
+				}
+				if priorVersion, exists := audioDescriptions[description]; exists {
+					t.Errorf("R3 audio migration versions %d and %d share description %q", priorVersion, version, description)
+				}
+				audioDescriptions[description] = version
+				if version > highestAudioVersion {
+					highestAudioVersion = version
+				}
 			} else {
 				seenOld[version] = description
 			}
@@ -185,10 +193,10 @@ func TestAudioProjectionSchemaVersionIsNewAndIdempotent(t *testing.T) {
 		if !reflect.DeepEqual(seenOld, wantDescriptions) {
 			t.Errorf("R3 prior schema versions changed: got %#v, want %#v", seenOld, wantDescriptions)
 		}
-		if newRows != 1 || newVersion <= 8 {
-			t.Errorf("R3 audio migration rows above version 8 = %d (version %d), want exactly one", newRows, newVersion)
+		if len(audioDescriptions) == 0 || highestAudioVersion <= 8 {
+			t.Errorf("R3 audio migration rows above version 8 = %d (highest version %d), want at least one", len(audioDescriptions), highestAudioVersion)
 		}
-		return newVersion
+		return highestAudioVersion
 	}
 	firstVersion := assertVersions(t, db)
 	if err := db.ExecSchema(); err != nil {

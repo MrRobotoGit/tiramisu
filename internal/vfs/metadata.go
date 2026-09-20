@@ -25,6 +25,12 @@ type FileMetadata struct {
 	Mtime  time.Time // File modification time
 	Path   string    // Original file path
 	ImdbID string    // IMDB ID from line 4 (optional)
+
+	// Caller-supplied external identity, engine-opaque. Video carries an IMDb ID;
+	// audio has no single identity space, so the namespace travels with the id.
+	// Both empty when the caller supplied none.
+	ExternalID          string
+	ExternalIDNamespace string
 }
 
 // Validation constants
@@ -48,6 +54,10 @@ type MkvJSON struct {
 	Size   int64  `json:"size"`
 	Magnet string `json:"magnet"`
 	Imdb   string `json:"imdb"`
+	// Omitted entirely when absent: the engine must not write an identity the
+	// caller did not supply.
+	ExternalID          string `json:"external_id,omitempty"`
+	ExternalIDNamespace string `json:"external_id_ns,omitempty"`
 }
 
 // ReadMetadataFromFile reads metadata from a virtual .mkv file.
@@ -103,11 +113,13 @@ func parseJSONFormat(content string, info os.FileInfo, path string, limits SizeL
 	}
 
 	return &FileMetadata{
-		URL:    url,
-		Size:   j.Size,
-		Mtime:  info.ModTime(),
-		Path:   path,
-		ImdbID: imdbID,
+		URL:                 url,
+		Size:                j.Size,
+		Mtime:               info.ModTime(),
+		Path:                path,
+		ImdbID:              imdbID,
+		ExternalID:          j.ExternalID,
+		ExternalIDNamespace: j.ExternalIDNamespace,
 	}, nil
 }
 
