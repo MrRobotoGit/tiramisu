@@ -122,6 +122,9 @@ type AddRequest struct {
 	// to replace the episode with any release it scores above zero.
 	QualityScore int `json:"quality_score"`
 	MetadataWait int `json:"metadata_wait"`
+	// Files carries the requested projections for an audio type: one torrent
+	// can back many of them, and the caller names each one.
+	Files []AudioFileRequest `json:"files"`
 }
 
 // AddedFile is one stub written to disk.
