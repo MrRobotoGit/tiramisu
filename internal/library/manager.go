@@ -59,6 +59,11 @@ type Config struct {
 	TVSection    int
 	// RefreshDelay is how long refreshes are coalesced for; 0 means the default.
 	RefreshDelay time.Duration
+	// AudioRegistry, when set, is asked whether an audio projection still
+	// references a torrent before it is dropped. An audio projection is a registry
+	// row rather than a stub under the media directories, so the filesystem scan
+	// cannot see it.
+	AudioRegistry AudioRegistry
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what
@@ -663,6 +668,11 @@ func (m *Manager) deleteStub(_ context.Context, path string) error {
 // would look absent here and end up registered against a torrent this call had just
 // removed; two concurrent Removes would both see the last stub gone and drop twice.
 func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) {
+	// A stub that carries no hash identifies no torrent: findByHash would match on a
+	// bare "_.mkv" suffix and the engine would be asked to remove the empty hash.
+	if hash == "" {
+		return
+	}
 	// Never wait: whoever holds this hash is adding that same release right now, so
 	// either it needs the torrent or its own cleanup will drop it.
 	unlock, ok := m.hashLocks.TryLock(hash)
@@ -678,6 +688,20 @@ func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) {
 			return
 		}
 		if len(found) > 0 {
+			return
+		}
+	}
+	// Audio lives in the projection registry, not as a stub under the media
+	// directories, so the scan above cannot see it: one torrent behind both a movie
+	// and an album would be dropped from under the album. Staged and removing rows
+	// count too - a removal still in flight may have a reader holding the file open.
+	if m.cfg.AudioRegistry != nil {
+		referenced, err := m.cfg.AudioRegistry.AudioHashReferenced(hash)
+		if err != nil {
+			m.cfg.Logger.Printf("[LibraryAPI] WARNING: keeping torrent %s, cannot check its audio projections: %v", hash, err)
+			return
+		}
+		if referenced {
 			return
 		}
 	}
