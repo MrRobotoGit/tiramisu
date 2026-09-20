@@ -293,16 +293,18 @@ func (cm *CleanupManager) runCleanup() {
 			return true
 		}
 
-		// Remove entries older than 24h (just in case)
+		// Remove entries older than 24h (just in case). This branch is only reached with
+		// activePaths[path] == true, so a FUSE handle is open: its pump is not an orphan, it
+		// may be serving a playback that has been running for days (audio handles stay open).
+		// Terminating it here would cut the data path under a live reader, and a leaked handle
+		// cannot be told apart from a long playback. Reclaiming is left to the idle handle
+		// reaper and to the 15-minute branch above, which runs once no handle is open.
 		if now.Sub(ps.GetOpenedAt()) > 24*time.Hour {
 			playbackRegistry.Delete(key)
 			stats.PlaybackRegistryPruned++
 			// V750: Also remove from SQLite
 			if stateDB != nil {
 				stateDB.DeletePlaybackState(path)
-			}
-			if terminateOrphanPump(path) {
-				cm.logger.Printf("[Cleanup] Force-terminated orphan pump for entry older than 24h: %s", filepath.Base(path))
 			}
 		}
 		return true

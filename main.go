@@ -262,17 +262,18 @@ type NativePumpState struct {
 	interruptPending atomic.Bool // prevents cascade: only the first handle per seek fires Interrupt()
 }
 
-// attachToExistingPumpLocked links the handle to a running pump exactly once. It returns
-// false when the handle already owns a slot, which happens when two concurrent reads race
-// on the same handle: a double attach increments refCount twice and Release can never bring
-// it back to zero, pinning the pump and its slot until the reader idle timeout.
-func (h *MkvHandle) attachToExistingPumpLocked(ps *NativePumpState) bool {
+// attachToExistingPump links the handle to a running pump exactly once. The caller holds
+// pumpCreationMu, which serializes attaches on this path, and the hasSlot re-check under
+// h.mu keeps the state assignment and the refCount increment together: two reads racing on
+// the same handle would otherwise both attach, and Release could never bring refCount back
+// to zero, pinning the pump and its slot until the reader idle timeout.
+func (h *MkvHandle) attachToExistingPump(ps *NativePumpState) bool {
 	h.mu.Lock()
-	if h.hasSlot {
+	if h.hasSlot.Load() {
 		h.mu.Unlock()
 		return false
 	}
-	h.hasSlot = true
+	h.hasSlot.Store(true)
 	h.pumpState = ps
 	h.isWatching = true
 	h.nativeReader = ps.reader
@@ -1075,7 +1076,7 @@ type MkvHandle struct {
 	fileID       int
 	mu           sync.Mutex
 	pumpCancel   context.CancelFunc
-	hasSlot      bool
+	hasSlot      atomic.Bool
 	// pumpState is the state this handle incremented. activePumps is keyed by path
 	// and the state is replaced wholesale, so Release must not decrement a pump it
 	// never counted.
@@ -1106,7 +1107,7 @@ func scanSlotLimit(capacity int, anyHealthyPlayback bool) int {
 
 func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 	// 1. Verify we don't already have a slot or an active pump
-	if h.hasSlot {
+	if h.hasSlot.Load() {
 		return
 	}
 
@@ -1149,7 +1150,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		ps := val.(*NativePumpState)
 		newRefs := atomic.AddInt32(&ps.refCount, 1)
 		h.mu.Lock()
-		h.hasSlot = true
+		h.hasSlot.Store(true)
 		h.pumpState = ps
 		h.isWatching = true
 		h.nativeReader = ps.reader
@@ -1181,7 +1182,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			ps := val.(*NativePumpState)
 			newRefs := atomic.AddInt32(&ps.refCount, 1)
 			h.mu.Lock()
-			h.hasSlot = true
+			h.hasSlot.Store(true)
 			h.pumpState = ps
 			h.isWatching = true
 			h.nativeReader = ps.reader
@@ -1198,7 +1199,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			return
 		}
 
-		h.hasSlot = true
+		h.hasSlot.Store(true)
 		becomePrimary(h) // pump creator is always primary
 		// Capture the reader now and pass it to the pump goroutine: re-reading h.nativeReader
 		// inside the goroutine raced with Release setting it to nil, and the resulting early
@@ -1332,12 +1333,12 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *native.NativeRea
 	// It used to be released only by the teardown defer, which the nil-reader return path
 	// never reached, leaking one slot per event.
 	defer func() {
-		if h.hasSlot {
+		if h.hasSlot.Load() {
 			select {
 			case <-masterDataSemaphore:
 			default:
 			}
-			h.hasSlot = false
+			h.hasSlot.Store(false)
 		}
 	}()
 
@@ -2350,7 +2351,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		chunkSize := raCache.ChunkSize(h.path)
 		nextChunkStart := (off/chunkSize + 1) * chunkSize
 
-		if (!h.hasSlot || (nextChunkStart-off < chunkSize/4)) && !raCache.Exists(h.path, nextChunkStart) {
+		if (!h.hasSlot.Load() || (nextChunkStart-off < chunkSize/4)) && !raCache.Exists(h.path, nextChunkStart) {
 			prefetchKey := fmt.Sprintf("%s:%d", h.path, nextChunkStart)
 			if _, loaded := inFlightPrefetches.LoadOrStore(prefetchKey, true); !loaded {
 				goStart, goKey, goHash, goFileID := nextChunkStart, prefetchKey, h.hash, h.fileID
@@ -2427,24 +2428,25 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	h.mu.Unlock()
 	atomic.StoreInt64(&h.lastOff, off)
 
-	if !h.hasSlot {
+	if !h.hasSlot.Load() {
 		pumpCreationMu.Lock()
 
-		// Re-check under the creation mutex: a concurrent read on this same handle may have
-		// attached while we waited, and a double attach would pin the pump in refCount.
-		if h.hasSlot {
+		// pumpCreationMu serializes attaches on this path: a concurrent read on this same
+		// handle may have attached while we waited, and a double attach would pin the pump in
+		// refCount. The hasSlot write itself is guarded by h.mu inside attachToExistingPump.
+		if h.hasSlot.Load() {
 			pumpCreationMu.Unlock()
 			goto pumpSlotResolved
 		}
 		// Attach to existing pump if one is already running for this path.
 		if val, ok := activePumps.Load(h.path); ok {
 			ps := val.(*NativePumpState)
-			if h.attachToExistingPumpLocked(ps) {
+			if h.attachToExistingPump(ps) {
 				logger.Printf("[V258] Handle ATTACHED to existing active pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
 			}
 		}
 		// Unlock early if attached or not needed
-		if h.hasSlot {
+		if h.hasSlot.Load() {
 			pumpCreationMu.Unlock()
 		} else {
 			// On-the-fly pump upgrade for confirmed playback with available slot.
@@ -2453,7 +2455,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 					if ps, ok := val.(*PlaybackState); ok && (ps.GetStatus() || ps.IsInferredPlayback()) {
 						select {
 						case masterDataSemaphore <- struct{}{}:
-							h.hasSlot = true
+							h.hasSlot.Store(true)
 							upReader := nativeBridge.NewStreamReader(h.hash, h.fileID, h.size)
 							h.nativeReader = upReader
 							pumpCtx, pumpCancel := context.WithCancel(context.Background())
@@ -2493,7 +2495,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 
 pumpSlotResolved:
 	// If still no slot (scan or reserve full), acquire a temporary slot for this read
-	if !h.hasSlot {
+	if !h.hasSlot.Load() {
 		select {
 		case masterDataSemaphore <- struct{}{}:
 			defer func() { <-masterDataSemaphore }()
@@ -2680,7 +2682,7 @@ DATA_READY:
 		maxCached := raCache.MaxCachedOffset(h.path)
 		isLagging := maxCached < nextChunkStart
 
-		if isStreaming && (!h.hasSlot || isLagging) {
+		if isStreaming && (!h.hasSlot.Load() || isLagging) {
 			if distanceToNext < chunkSize/4 {
 				prefetchKey := fmt.Sprintf("%s:%d", h.path, nextChunkStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(prefetchKey, true); !loaded {
@@ -2770,7 +2772,7 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 			}
 		}
 		// Only decrement if this handle acquired a slot; probe/header reads must not decrement.
-		if !h.hasSlot {
+		if !h.hasSlot.Load() {
 			return 0
 		}
 		globalOpenTracker.Dec(h.hash, h.path)
