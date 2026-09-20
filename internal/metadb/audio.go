@@ -247,6 +247,16 @@ func (d *DB) GetAudioProjection(section, virtualPath string) (*AudioProjection, 
 		 WHERE section = ? AND virtual_path = ?`, section, virtualPath)
 }
 
+// AudioProjectionByPortableKey returns the row owning a section's portable
+// collision key. The key has its own UNIQUE constraint, so two spellings that
+// differ only by case or normal form cannot both exist even when virtual_path
+// misses.
+func (d *DB) AudioProjectionByPortableKey(section, portableKey string) (*AudioProjection, bool, error) {
+	return d.audioProjectionRow(
+		`SELECT `+audioProjectionColumns+` FROM audio_projections
+		 WHERE section = ? AND portable_path_key = ?`, section, portableKey)
+}
+
 // AudioProjectionBySource returns the row owning a torrent file identity.
 func (d *DB) AudioProjectionBySource(hash string, fileIndex int) (*AudioProjection, bool, error) {
 	return d.audioProjectionRow(
