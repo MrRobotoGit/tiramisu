@@ -45,6 +45,15 @@ func NewStartupCacheBuilder(sourcePath string, metaCache *cache.LRUCache, logger
 func (b *StartupCacheBuilder) Start() {
 	b.logger.Printf("Starting cache pre-population from %s", b.sourcePath)
 
+	// Synchronous, and ahead of the goroutine: an install that predates audio has
+	// no music/ or audiobooks/ on disk, and a scanner reaching the mount before
+	// they exist sees a missing directory rather than an empty one. Not fatal --
+	// a source path this cannot use will fail louder elsewhere.
+	if err := library.EnsureSectionRoots(b.sourcePath); err != nil {
+		b.logger.Printf("Audio: cannot ensure section roots under %s: %v", b.sourcePath, err)
+		b.incrementErrors()
+	}
+
 	go func() {
 		// Process movies directory
 		moviesPath := filepath.Join(b.sourcePath, "movies")

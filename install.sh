@@ -591,6 +591,8 @@ create_directories() {
     local data_dirs=(
         "${STORAGE_PATH}/movies"
         "${STORAGE_PATH}/tv"
+        "${STORAGE_PATH}/music"
+        "${STORAGE_PATH}/audiobooks"
         "${FUSE_MOUNT}"
     )
 
