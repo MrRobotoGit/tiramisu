@@ -40,3 +40,37 @@ func TestAudioNamespacePublishMergedKeepsLiveAdditions_H4(t *testing.T) {
 		t.Error("Publish must replace the whole set, live additions included")
 	}
 }
+
+// H4 (audit): Remove must clear the live set too, or the next PublishMerged re-applies
+// the path and a removed projection reappears on the mount.
+func TestAudioNamespaceRemoveDoesNotResurrect_H4(t *testing.T) {
+	n := NewAudioNamespace()
+	snapshot := AudioProjection{Section: SectionMusic, VirtualPath: "Old/1.flac", Hash: "a", FileIndex: 1}
+	n.Publish([]AudioProjection{snapshot})
+
+	live := AudioProjection{Section: SectionMusic, VirtualPath: "Live/2.flac", Hash: "b", FileIndex: 2}
+	n.AddProjections([]AudioProjection{live})
+	n.Remove(live.Path())
+	n.PublishMerged([]AudioProjection{snapshot})
+
+	if _, ok := n.Lookup(live.Section, live.VirtualPath); ok {
+		t.Error("a removed live projection reappeared after PublishMerged")
+	}
+}
+
+// A full rebuild supersedes pending live additions rather than resurrecting them.
+func TestAudioNamespaceReplaceDropsLive_H4(t *testing.T) {
+	n := NewAudioNamespace()
+	live := AudioProjection{Section: SectionMusic, VirtualPath: "Live/2.flac", Hash: "b", FileIndex: 2}
+	n.AddProjections([]AudioProjection{live})
+	n.Replace([]AudioPath{})
+	kept := AudioProjection{Section: SectionMusic, VirtualPath: "Kept/1.flac", Hash: "c", FileIndex: 3}
+	n.PublishMerged([]AudioProjection{kept})
+
+	if _, ok := n.Lookup(live.Section, live.VirtualPath); ok {
+		t.Error("Replace left a live addition pending; PublishMerged resurrected it")
+	}
+	if _, ok := n.Lookup(kept.Section, kept.VirtualPath); !ok {
+		t.Error("the rebuilt set is missing from the namespace")
+	}
+}

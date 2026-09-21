@@ -466,10 +466,16 @@ func (n *AudioNamespace) Replace(paths []AudioPath) {
 	}
 	n.mu.Lock()
 	n.entries = next
+	// A full rebuild carries the whole set, so it supersedes any live addition that
+	// was pending: keeping them would resurrect paths the rebuild left out.
+	n.live = nil
 	n.transitionLocked(Ready, nil)
 	n.mu.Unlock()
 }
 
+// Add records membership for one path. It carries no identity, so it is not a live
+// publication: a live addition must go through AddProjections, or a later
+// PublishMerged will visibly drop what Add put there.
 func (n *AudioNamespace) Add(p AudioPath) {
 	n.mu.Lock()
 	if n.entries == nil {
@@ -479,9 +485,13 @@ func (n *AudioNamespace) Add(p AudioPath) {
 	n.mu.Unlock()
 }
 
+// Remove drops a path from the namespace. It must clear the live set too: a path
+// removed from entries but left in live would be re-applied by the next PublishMerged
+// and reappear on the mount.
 func (n *AudioNamespace) Remove(p AudioPath) {
 	n.mu.Lock()
 	delete(n.entries, p)
+	delete(n.live, p)
 	n.mu.Unlock()
 }
 
@@ -550,7 +560,10 @@ func (p AudioProjection) Path() AudioPath {
 
 // Publish replaces the namespace with the committed set and marks it ready. It is
 // how reconciliation says "this is the whole committed namespace"; an empty
-// publish is a coherent answer, which an unpublished namespace is not.
+// publish is a coherent answer, which an unpublished namespace is not. Startup uses
+// PublishMerged instead, which keeps live additions that landed during the pass;
+// this one is the rebuild path for tests and for callers that already hold the whole
+// set, and it deliberately supersedes anything still pending in live.
 func (n *AudioNamespace) Publish(projections []AudioProjection) {
 	next := make(map[AudioPath]AudioProjection, len(projections))
 	for _, p := range projections {
