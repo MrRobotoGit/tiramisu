@@ -69,9 +69,10 @@ type Config struct {
 	// AudioProjections is the registry an audio add stages, commits and rolls
 	// back through. *metadb.DB satisfies it.
 	AudioProjections AudioProjectionRegistry
-	// PublishAudioPath, when set, adds a committed projection to the namespace
-	// the VFS dispatches on. Without it it is invisible until reconciliation.
-	PublishAudioPath func(AudioProjection)
+	// PublishAudioPath, when set, adds a committed batch of projections to the
+	// namespace the VFS dispatches on, in one update so a Readdir cannot see half an
+	// album. Without it the projections are invisible until reconciliation.
+	PublishAudioPath func([]AudioProjection)
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what

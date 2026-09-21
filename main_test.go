@@ -828,7 +828,7 @@ func TestAudioLivePublicationRegistersInode_H3(t *testing.T) {
 	e.setState(t, library.Ready)
 
 	row := committedA(rel)
-	publishAudioProjectionLive(row)
+	publishAudioProjectionsLive([]library.AudioProjection{row})
 
 	entries, errno := readdirEntries(nil, filepath.Dir(full))
 	if errno != 0 {

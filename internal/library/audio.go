@@ -302,6 +302,9 @@ type AudioOwnership interface {
 type AudioNamespace struct {
 	mu      sync.RWMutex
 	entries map[AudioPath]AudioProjection
+	// live holds entries added after the last full publish, so a reconciliation pass
+	// that started before them can keep them (see PublishMerged).
+	live    map[AudioPath]AudioProjection
 	state   NamespaceState
 	failErr error
 	// wake is closed when this generation leaves Unreconciled, releasing every
@@ -555,6 +558,27 @@ func (n *AudioNamespace) Publish(projections []AudioProjection) {
 	}
 	n.mu.Lock()
 	n.entries = next
+	n.live = nil
+	n.transitionLocked(Ready, nil)
+	n.mu.Unlock()
+}
+
+// PublishMerged replaces the committed set with projections and then re-applies the
+// entries added live while the pass that produced projections was running. That pass
+// reads the registry before it publishes, so a live add committed in between is absent
+// from its rows; without the merge a successful, committed add would silently vanish
+// from the mount. A live add is authoritative for its own path.
+func (n *AudioNamespace) PublishMerged(projections []AudioProjection) {
+	next := make(map[AudioPath]AudioProjection, len(projections))
+	for _, p := range projections {
+		next[p.Path()] = p
+	}
+	n.mu.Lock()
+	for path, p := range n.live {
+		next[path] = p
+	}
+	n.entries = next
+	n.live = nil
 	n.transitionLocked(Ready, nil)
 	n.mu.Unlock()
 }
@@ -586,15 +610,32 @@ func (n *AudioNamespace) MarkUnready() {
 	n.mu.Unlock()
 }
 
-// AddProjection inserts one projection with its identity. Add keeps taking a bare
-// path for callers that only need membership.
-func (n *AudioNamespace) AddProjection(p AudioProjection) {
+// AddProjections inserts a committed batch in one namespace update, so a reader can
+// never observe half an album: a Readdir interleaved with per-row inserts would list a
+// partial batch as if it were the whole library. The entries also count as live
+// additions for a reconciliation pass that is already running (see PublishMerged).
+func (n *AudioNamespace) AddProjections(projections []AudioProjection) {
+	if len(projections) == 0 {
+		return
+	}
 	n.mu.Lock()
 	if n.entries == nil {
 		n.entries = make(map[AudioPath]AudioProjection)
 	}
-	n.entries[p.Path()] = p
+	if n.live == nil {
+		n.live = make(map[AudioPath]AudioProjection)
+	}
+	for _, p := range projections {
+		n.entries[p.Path()] = p
+		n.live[p.Path()] = p
+	}
 	n.mu.Unlock()
+}
+
+// AddProjection inserts one projection with its identity. Add keeps taking a bare
+// path for callers that only need membership.
+func (n *AudioNamespace) AddProjection(p AudioProjection) {
+	n.AddProjections([]AudioProjection{p})
 }
 
 // CommittedProjectionFor returns the committed projection a physical path maps

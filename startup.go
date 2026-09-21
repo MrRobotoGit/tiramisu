@@ -325,7 +325,11 @@ func (b *StartupCacheBuilder) reconcileAudio() {
 	// Publishing marks the namespace ready. Until this point audio enumeration
 	// fails rather than returning an empty directory, which a scanner would read
 	// as the user having deleted their library (spec 9).
-	globalAudioNamespace.Publish(committed)
+	//
+	// Merged, not replaced: a live add committed between this pass's registry read
+	// and this publish is absent from committed, and replacing would drop it from
+	// the mount although its row and its stub are both on disk.
+	globalAudioNamespace.PublishMerged(committed)
 	invalidateAudioDirCaches(committed)
 
 	b.logger.Printf("Audio reconciliation: %d projection(s) registered, %d missing stub(s), %d size mismatch(es), %d torrent(s) referenced",

@@ -4747,7 +4747,7 @@ func main() {
 			AudioProjections: audioProjectionRegistry(),
 			// Without this a projection stays invisible to Readdir and Lookup
 			// until the next startup reconciliation.
-			PublishAudioPath: publishAudioProjectionLive,
+			PublishAudioPath: publishAudioProjectionsLive,
 			InvalidatePath:   invalidateSyncRemovedPath,
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.
@@ -5237,18 +5237,21 @@ func getFileInodeFromMap(fullPath string) uint64 {
 	return hashFilenameToInode(filepath.Base(fullPath)) & vfs.InodeFileMask
 }
 
-// publishAudioProjectionLive wires a committed audio projection into the live VFS. The
-// inode is registered before the namespace gains the path, exactly as startup
+// publishAudioProjectionsLive wires a committed audio batch into the live VFS. Every
+// inode is registered before the namespace gains the paths, exactly as startup
 // reconciliation does, so a Readdir that lands before the first Lookup emits the
 // content-derived inode instead of a basename-derived fallback (or, through the basename
-// map, the inode of a different projection that happens to share the basename).
-func publishAudioProjectionLive(p library.AudioProjection) {
-	if globalInodeMap != nil {
-		full := filepath.Join(physicalSourcePath, string(p.Section), filepath.FromSlash(p.VirtualPath))
-		globalInodeMap.AddFile(full, p.Hash, p.FileIndex)
+// map, the inode of a different projection that happens to share the basename). The batch
+// lands in one namespace update, so no reader observes half an album.
+func publishAudioProjectionsLive(ps []library.AudioProjection) {
+	for _, p := range ps {
+		if globalInodeMap != nil {
+			full := filepath.Join(physicalSourcePath, string(p.Section), filepath.FromSlash(p.VirtualPath))
+			globalInodeMap.AddFile(full, p.Hash, p.FileIndex)
+		}
 	}
 	if globalAudioNamespace != nil {
-		globalAudioNamespace.AddProjection(p)
+		globalAudioNamespace.AddProjections(ps)
 	}
 }
 

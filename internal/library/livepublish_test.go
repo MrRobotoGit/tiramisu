@@ -20,9 +20,9 @@ const livePubHash = "fedcba9876543210fedcba9876543210fedcba98"
 // livePubEvent is one observable side effect of AddAudio, recorded in the order
 // it happened.
 type livePubEvent struct {
-	kind string          // "publish" or "invalidate"
-	row  AudioProjection // the projection handed to the publisher
-	file string          // the physical path, for invalidate
+	kind string            // "publish" or "invalidate"
+	rows []AudioProjection // the batch handed to the publisher
+	file string            // the physical path, for invalidate
 }
 
 type livePubEngine struct{ info *TorrentStats }
@@ -177,7 +177,7 @@ type livePubFixture struct {
 type livePubOptions struct {
 	noPublisher  bool
 	noInvalidate bool
-	onPublish    func(AudioProjection) // runs inside the publisher, before it records
+	onPublish    func([]AudioProjection) // runs inside the publisher, before it records
 }
 
 func newLivePubFixture(t *testing.T, files []FileStat, opts livePubOptions, initial ...metadb.AudioProjection) *livePubFixture {
@@ -201,11 +201,11 @@ func newLivePubFixture(t *testing.T, files []FileStat, opts livePubOptions, init
 		Logger:           log.New(io.Discard, "", 0),
 	}
 	if !opts.noPublisher {
-		cfg.PublishAudioPath = func(p AudioProjection) {
+		cfg.PublishAudioPath = func(ps []AudioProjection) {
 			if opts.onPublish != nil {
-				opts.onPublish(p)
+				opts.onPublish(ps)
 			}
-			f.record(livePubEvent{kind: "publish", row: p})
+			f.record(livePubEvent{kind: "publish", rows: ps})
 		}
 	}
 	if !opts.noInvalidate {
@@ -243,7 +243,7 @@ func (f *livePubFixture) publishedRows() []AudioProjection {
 	var out []AudioProjection
 	for _, e := range f.all() {
 		if e.kind == "publish" {
-			out = append(out, e.row)
+			out = append(out, e.rows...)
 		}
 	}
 	return out
@@ -427,15 +427,17 @@ func TestAddAudioLivePublication_P5_PublishedOnlyAfterFinalFileExists(t *testing
 	var f *livePubFixture
 	var problems []string
 	f = newLivePubFixture(t, files, livePubOptions{
-		onPublish: func(p AudioProjection) {
-			final := f.finalPath(p.Section, p.VirtualPath)
-			info, err := os.Stat(final)
-			if err != nil {
-				problems = append(problems, fmt.Sprintf("%s: final file missing at publish time: %v", p.VirtualPath, err))
-				return
-			}
-			if !info.Mode().IsRegular() {
-				problems = append(problems, fmt.Sprintf("%s: final path is not a regular file", p.VirtualPath))
+		onPublish: func(ps []AudioProjection) {
+			for _, p := range ps {
+				final := f.finalPath(p.Section, p.VirtualPath)
+				info, err := os.Stat(final)
+				if err != nil {
+					problems = append(problems, fmt.Sprintf("%s: final file missing at publish time: %v", p.VirtualPath, err))
+					continue
+				}
+				if !info.Mode().IsRegular() {
+					problems = append(problems, fmt.Sprintf("%s: final path is not a regular file", p.VirtualPath))
+				}
 			}
 		},
 	})
@@ -578,14 +580,19 @@ func TestAddAudioLivePublication_P9_PublishPrecedesInvalidateForSamePath(t *test
 	}
 	t.Run("P9_publish_is_recorded_before_invalidate_for_every_path", func(t *testing.T) {
 		events := f.all()
-		if len(events) != 8 {
-			t.Fatalf("events = %d, want 4 publishes + 4 invalidates: %#v", len(events), events)
+		if len(events) != 5 {
+			t.Fatalf("events = %d, want 1 publish batch + 4 invalidates: %#v", len(events), events)
+		}
+		if batch := events[0]; batch.kind != "publish" || len(batch.rows) != 4 {
+			t.Fatalf("first event = %+v, want one publish carrying all four rows", batch)
 		}
 		publishedAt := map[string]int{}
 		for i, e := range events {
 			switch e.kind {
 			case "publish":
-				publishedAt[f.finalPath(e.row.Section, e.row.VirtualPath)] = i
+				for _, row := range e.rows {
+					publishedAt[f.finalPath(row.Section, row.VirtualPath)] = i
+				}
 			case "invalidate":
 				pi, ok := publishedAt[e.file]
 				if !ok {

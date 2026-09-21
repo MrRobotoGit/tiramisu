@@ -310,12 +310,12 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		}
 	}
 
-	for _, row := range rows {
-		final := filepath.Join(sectionRoot, filepath.FromSlash(row.VirtualPath))
-		// Published before the cache is dropped: a Readdir racing between the two
-		// would otherwise refill a cache from a namespace without this path.
-		if m.cfg.PublishAudioPath != nil {
-			m.cfg.PublishAudioPath(AudioProjection{
+	// The whole album reaches the namespace in one update: a Readdir interleaved with
+	// per-row inserts would list a partial batch as if it were the whole library.
+	if m.cfg.PublishAudioPath != nil && len(rows) > 0 {
+		batch := make([]AudioProjection, 0, len(rows))
+		for _, row := range rows {
+			batch = append(batch, AudioProjection{
 				Section:     intent.Section,
 				VirtualPath: row.VirtualPath,
 				Hash:        row.Hash,
@@ -324,8 +324,13 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 				MtimeNS:     row.MtimeNS,
 			})
 		}
+		m.cfg.PublishAudioPath(batch)
+	}
+	for _, row := range rows {
+		// Published before the cache is dropped: a Readdir racing between the two
+		// would otherwise refill a cache from a namespace without this path.
 		if m.cfg.InvalidatePath != nil {
-			m.cfg.InvalidatePath(final)
+			m.cfg.InvalidatePath(filepath.Join(sectionRoot, filepath.FromSlash(row.VirtualPath)))
 		}
 	}
 
