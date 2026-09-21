@@ -263,6 +263,43 @@ type NativePumpState struct {
 	interruptPending atomic.Bool // prevents cascade: only the first handle per seek fires Interrupt()
 }
 
+// attachToExistingPump links the handle to a running pump exactly once. The caller holds
+// pumpCreationMu, which serializes attaches on this path, and the hasSlot re-check under
+// h.mu keeps the state assignment and the refCount increment together: two reads racing on
+// the same handle would otherwise both attach, and Release could never bring refCount back
+// to zero, pinning the pump and its slot until the reader idle timeout.
+func (h *MkvHandle) attachToExistingPump(ps *NativePumpState) bool {
+	h.mu.Lock()
+	if h.hasSlot.Load() {
+		h.mu.Unlock()
+		return false
+	}
+	h.hasSlot.Store(true)
+	h.pumpState = ps
+	h.isWatching = true
+	h.nativeReader = ps.reader
+	h.pumpCancel = ps.cancel
+	h.mu.Unlock()
+	atomic.AddInt32(&ps.refCount, 1)
+	globalOpenTracker.Inc(h.hash, h.path)
+	return true
+}
+
+// terminateOrphanPump cancels and forgets any pump registered for path. The cleanup sweep
+// uses it when pruning a zombie registry entry: without it the pump keeps its slot and keeps
+// fetching until the reader idle timeout (V262, up to 2h with an open handle).
+func terminateOrphanPump(path string) bool {
+	val, ok := activePumps.Load(path)
+	if !ok {
+		return false
+	}
+	if ps, ok := val.(*NativePumpState); ok && ps.cancel != nil {
+		ps.cancel()
+	}
+	activePumps.Delete(path)
+	return true
+}
+
 // resolveTargetFile finds the torrent hash and file index for a given URL and size.
 func resolveTargetFile(url string, targetSize int64, physicalPath string) (string, int, error) {
 	if nativeBridge == nil {
@@ -1075,7 +1112,7 @@ type MkvHandle struct {
 	fileID       int
 	mu           sync.Mutex
 	pumpCancel   context.CancelFunc
-	hasSlot      bool
+	hasSlot      atomic.Bool
 	// pumpState is the state this handle incremented. activePumps is keyed by path
 	// and the state is replaced wholesale, so Release must not decrement a pump it
 	// never counted.
@@ -1107,7 +1144,7 @@ func scanSlotLimit(capacity int, anyHealthyPlayback bool) int {
 
 func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 	// 1. Verify we don't already have a slot or an active pump
-	if h.hasSlot {
+	if h.hasSlot.Load() {
 		return
 	}
 
@@ -1150,7 +1187,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		ps := val.(*NativePumpState)
 		newRefs := atomic.AddInt32(&ps.refCount, 1)
 		h.mu.Lock()
-		h.hasSlot = true
+		h.hasSlot.Store(true)
 		h.pumpState = ps
 		h.isWatching = true
 		h.nativeReader = ps.reader
@@ -1182,7 +1219,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			ps := val.(*NativePumpState)
 			newRefs := atomic.AddInt32(&ps.refCount, 1)
 			h.mu.Lock()
-			h.hasSlot = true
+			h.hasSlot.Store(true)
 			h.pumpState = ps
 			h.isWatching = true
 			h.nativeReader = ps.reader
@@ -1199,13 +1236,17 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			return
 		}
 
-		h.hasSlot = true
+		h.hasSlot.Store(true)
 		becomePrimary(h) // pump creator is always primary
-		h.nativeReader = nativeBridge.NewStreamReader(finalHash, fileIdx, h.size)
+		// Capture the reader now and pass it to the pump goroutine: re-reading h.nativeReader
+		// inside the goroutine raced with Release setting it to nil, and the resulting early
+		// return (before the teardown defer) leaked the master slot.
+		pumpReader := nativeBridge.NewStreamReader(finalHash, fileIdx, h.size)
+		h.nativeReader = pumpReader
 		if tr := torr.PeekTorrent(finalHash); tr != nil && tr.Torrent != nil {
 			if info := tr.Torrent.Info(); info != nil && info.PieceLength > 0 {
 				pl := int64(info.PieceLength)
-				h.nativeReader.SetPieceLen(pl)
+				pumpReader.SetPieceLen(pl)
 				raCache.SetPieceLen(h.path, pl)
 			}
 		}
@@ -1215,7 +1256,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		h.pumpCancel = pumpCancel
 		sharedState := &NativePumpState{
 			cancel:   pumpCancel,
-			reader:   h.nativeReader,
+			reader:   pumpReader,
 			path:     h.path,
 			refCount: 1,
 		}
@@ -1313,7 +1354,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		pumpStart := resumeOffset
 		capturedState := sharedState
 		safeGo(func() {
-			h.nativePump(pumpCtx, pumpStart, capturedState)
+			h.nativePump(pumpCtx, pumpReader, pumpStart, capturedState)
 		})
 	default:
 		// If slots are full, it will fall back to per-request slots in Read
@@ -1322,9 +1363,22 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 }
 
 // nativePump reads continuously from the Native pipe and fills raCache.
-// sharedState guards against orphan-delete in defer.
-func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedState *NativePumpState) {
-	pumpReader := h.nativeReader
+// sharedState guards against orphan-delete in defer. pumpReader is captured by the caller
+// so a concurrent Release cannot nil it out from under the goroutine.
+func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *native.NativeReader, startOffset int64, sharedState *NativePumpState) {
+	// The master slot must be returned on every exit, including the early return below.
+	// It used to be released only by the teardown defer, which the nil-reader return path
+	// never reached, leaking one slot per event.
+	defer func() {
+		if h.hasSlot.Load() {
+			select {
+			case <-masterDataSemaphore:
+			default:
+			}
+			h.hasSlot.Store(false)
+		}
+	}()
+
 	if pumpReader == nil {
 		logger.Printf("[Pump] reader is nil at startup for %s", filepath.Base(h.path))
 		return
@@ -1367,15 +1421,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, startOffset int64, sharedSta
 			logger.Printf("[V306] WARNING: pump goroutine exited during healthy playback for %s — priority preserved via IsHealthy", filepath.Base(h.path))
 		}
 
-		if h.hasSlot {
-			select {
-			case <-masterDataSemaphore:
-				// Slot released
-			default:
-				// Should not happen
-			}
-			h.hasSlot = false
-		}
+		// The master slot is released by the defer installed at the top of nativePump.
 		pumpReader.Close()
 		h.mu.Unlock()
 		logger.Printf("[V239] Native Pump Goroutine Ended: %s", filepath.Base(h.path))
@@ -2342,7 +2388,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		chunkSize := raCache.ChunkSize(h.path)
 		nextChunkStart := (off/chunkSize + 1) * chunkSize
 
-		if (!h.hasSlot || (nextChunkStart-off < chunkSize/4)) && !raCache.Exists(h.path, nextChunkStart) {
+		if (!h.hasSlot.Load() || (nextChunkStart-off < chunkSize/4)) && !raCache.Exists(h.path, nextChunkStart) {
 			prefetchKey := fmt.Sprintf("%s:%d", h.path, nextChunkStart)
 			if _, loaded := inFlightPrefetches.LoadOrStore(prefetchKey, true); !loaded {
 				goStart, goKey, goHash, goFileID := nextChunkStart, prefetchKey, h.hash, h.fileID
@@ -2419,25 +2465,25 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	h.mu.Unlock()
 	atomic.StoreInt64(&h.lastOff, off)
 
-	if !h.hasSlot {
+	if !h.hasSlot.Load() {
 		pumpCreationMu.Lock()
 
+		// pumpCreationMu serializes attaches on this path: a concurrent read on this same
+		// handle may have attached while we waited, and a double attach would pin the pump in
+		// refCount. The hasSlot write itself is guarded by h.mu inside attachToExistingPump.
+		if h.hasSlot.Load() {
+			pumpCreationMu.Unlock()
+			goto pumpSlotResolved
+		}
 		// Attach to existing pump if one is already running for this path.
 		if val, ok := activePumps.Load(h.path); ok {
 			ps := val.(*NativePumpState)
-			atomic.AddInt32(&ps.refCount, 1) // Increment reference count
-			h.mu.Lock()
-			h.hasSlot = true
-			h.pumpState = ps
-			h.isWatching = true
-			h.nativeReader = ps.reader
-			h.pumpCancel = ps.cancel
-			h.mu.Unlock()
-			globalOpenTracker.Inc(h.hash, h.path)
-			logger.Printf("[V258] Handle ATTACHED to existing active pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
+			if h.attachToExistingPump(ps) {
+				logger.Printf("[V258] Handle ATTACHED to existing active pump (Refs: %d): %s", atomic.LoadInt32(&ps.refCount), filepath.Base(h.path))
+			}
 		}
 		// Unlock early if attached or not needed
-		if h.hasSlot {
+		if h.hasSlot.Load() {
 			pumpCreationMu.Unlock()
 		} else {
 			// On-the-fly pump upgrade for confirmed playback with available slot.
@@ -2446,14 +2492,15 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 					if ps, ok := val.(*PlaybackState); ok && (ps.GetStatus() || ps.IsInferredPlayback()) {
 						select {
 						case masterDataSemaphore <- struct{}{}:
-							h.hasSlot = true
-							h.nativeReader = nativeBridge.NewStreamReader(h.hash, h.fileID, h.size)
+							h.hasSlot.Store(true)
+							upReader := nativeBridge.NewStreamReader(h.hash, h.fileID, h.size)
+							h.nativeReader = upReader
 							pumpCtx, pumpCancel := context.WithCancel(context.Background())
 							h.pumpCancel = pumpCancel
 
 							sharedState := &NativePumpState{
 								cancel:   pumpCancel,
-								reader:   h.nativeReader,
+								reader:   upReader,
 								path:     h.path,
 								refCount: 1,
 							}
@@ -2471,7 +2518,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 
 							upgradedState := sharedState
 							safeGo(func() {
-								h.nativePump(pumpCtx, off, upgradedState)
+								h.nativePump(pumpCtx, upReader, off, upgradedState)
 							})
 						default:
 							// Reserve full, stay in burst mode for now
@@ -2481,18 +2528,19 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 			}
 			pumpCreationMu.Unlock() // Final unlock
 		}
+	}
 
-		// If still no slot (scan or reserve full), acquire a temporary slot for this read
-		if !h.hasSlot {
-			select {
-			case masterDataSemaphore <- struct{}{}:
-				defer func() { <-masterDataSemaphore }()
-			case <-fuseCtx.Done():
-				return nil, syscall.EINTR
-			case <-time.After(30 * time.Second):
-				logger.Printf("[MasterSemaphore] Timeout waiting for slot: %s", filepath.Base(h.path))
-				return nil, syscall.ETIMEDOUT
-			}
+pumpSlotResolved:
+	// If still no slot (scan or reserve full), acquire a temporary slot for this read
+	if !h.hasSlot.Load() {
+		select {
+		case masterDataSemaphore <- struct{}{}:
+			defer func() { <-masterDataSemaphore }()
+		case <-fuseCtx.Done():
+			return nil, syscall.EINTR
+		case <-time.After(30 * time.Second):
+			logger.Printf("[MasterSemaphore] Timeout waiting for slot: %s", filepath.Base(h.path))
+			return nil, syscall.ETIMEDOUT
 		}
 	}
 
@@ -2671,7 +2719,7 @@ DATA_READY:
 		maxCached := raCache.MaxCachedOffset(h.path)
 		isLagging := maxCached < nextChunkStart
 
-		if isStreaming && (!h.hasSlot || isLagging) {
+		if isStreaming && (!h.hasSlot.Load() || isLagging) {
 			if distanceToNext < chunkSize/4 {
 				prefetchKey := fmt.Sprintf("%s:%d", h.path, nextChunkStart)
 				if _, loaded := inFlightPrefetches.LoadOrStore(prefetchKey, true); !loaded {
@@ -2761,7 +2809,7 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 			}
 		}
 		// Only decrement if this handle acquired a slot; probe/header reads must not decrement.
-		if !h.hasSlot {
+		if !h.hasSlot.Load() {
 			return 0
 		}
 		globalOpenTracker.Dec(h.hash, h.path)
@@ -4312,23 +4360,27 @@ func main() {
 
 		// Task 4: hedge counters live per-Torrent on the fork - sum trigger count across active
 		// torrents, report circuit breaker as open if any active torrent currently has it tripped.
-		var hedgeTriggerTotal, peerEjectTotal int64
+		var hedgeTriggerTotal int64
+		deadlinePieces := 0
 		hedgeCircuitOpenAny := false
 		for _, tr := range torr.ListActiveTorrent() {
 			if tr.Torrent == nil {
 				continue
 			}
 			hedgeTriggerTotal += tr.Torrent.HedgeTriggerCount()
-			peerEjectTotal += tr.Torrent.PeerEjectCount()
+			deadlinePieces += tr.Torrent.PieceDeadlineCount()
 			if tr.Torrent.HedgeCircuitOpen() {
 				hedgeCircuitOpenAny = true
 			}
 		}
+		// Peer view split by transport - conn slots are capped, so a transport is only worth
+		// the share of useful bytes it returns for the share of slots it takes.
+		peerStats := torr.CollectPeerTransportStats()
 
 		shortStream, shortFetch := native.ShortReadCounts()
 		repairedStream, unfilledStream := native.ShortReadRepairCounts()
 
-		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d}`,
+		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d, "peer_conns_tcp":%d, "peer_conns_utp":%d, "peer_rated_tcp":%d, "peer_rated_utp":%d, "peer_useful_bps_tcp":%.0f, "peer_useful_bps_utp":%.0f, "peer_eject_count_utp":%d, "peer_churn_count":%d, "peer_churn_count_utp":%d, "deadline_pieces":%d}`,
 			AppVersion,
 			gc().ConfigPath,
 			time.Since(startTime),
@@ -4346,9 +4398,12 @@ func main() {
 			natPort,
 			updater.LatestVersion(), updater.UpdateAvailable(),
 			warmupBucketsJSON,
-			hedgeTriggerTotal, hedgeCircuitOpenAny, fetchFlightDedupCount.Load(), peerEjectTotal, torr.V304BannedCount(),
+			hedgeTriggerTotal, hedgeCircuitOpenAny, fetchFlightDedupCount.Load(), peerStats.EjectTotal, torr.V304BannedCount(),
 			torrent.IPBlocklistRejections(), torrent.IPBlocklistDistinctIPs(),
-			fuseShortReadCount.Load(), fuseShortReadRepaired.Load(), fuseShortReadFailed.Load(), shortStream, shortFetch, repairedStream, unfilledStream)
+			fuseShortReadCount.Load(), fuseShortReadRepaired.Load(), fuseShortReadFailed.Load(), shortStream, shortFetch, repairedStream, unfilledStream,
+			peerStats.ConnsTCP, peerStats.ConnsUTP, peerStats.RatedTCP, peerStats.RatedUTP,
+			peerStats.UsefulBpsTCP, peerStats.UsefulBpsUTP,
+			peerStats.EjectUTP, peerStats.ChurnTotal, peerStats.ChurnUTP, deadlinePieces)
 	})
 
 	// Which blocklist ranges are actually rejecting peers. The aggregate counters say

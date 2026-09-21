@@ -1,6 +1,8 @@
 package requestStrategy
 
 import (
+	"math"
+
 	g "github.com/anacrolix/generics"
 
 	"github.com/anacrolix/torrent/metainfo"
@@ -33,6 +35,20 @@ type PieceRequestOrderState struct {
 	Availability int
 	Priority     piecePriority
 	Partial      bool
+	// Deadline is the instant this piece must be complete by, as Unix milliseconds; 0 means the
+	// piece is not on the playout critical path. Stored as an absolute value so the relative
+	// order of two deadlines never changes as time advances - the btree only reorders when a
+	// deadline is actually reassigned.
+	Deadline int64
+}
+
+// deadlineRank maps a state to a sortable urgency, where a piece without a deadline sorts after
+// every piece that has one.
+func (me PieceRequestOrderState) deadlineRank() int64 {
+	if me.Deadline == 0 {
+		return math.MaxInt64
+	}
+	return me.Deadline
 }
 
 type pieceRequestOrderItem struct {

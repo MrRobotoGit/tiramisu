@@ -27,6 +27,7 @@ func (t *Torrent) requestStrategyPieceOrderState(i int) requestStrategy.PieceReq
 		Priority:     t.piece(i).purePriority(),
 		Partial:      t.piecePartiallyDownloaded(i),
 		Availability: t.piece(i).availability(),
+		Deadline:     t.pieceDeadlines[i],
 	}
 }
 
