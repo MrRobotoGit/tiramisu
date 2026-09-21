@@ -935,23 +935,44 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		headReady = warmup.DiskWarmup.HeadReady(hashStr, urlFileIdx)
 		tailReady = warmup.DiskWarmup.TailReady(hashStr, urlFileIdx)
 	}
-	ttffRegister(n.vMeta.Path, n.vMeta.Size, hashStr, headReady, tailReady)
-
 	magnetCandidate := n.vMeta.URL
 	if hashStr != "" && (strings.HasPrefix(n.vMeta.URL, "http://") || strings.HasPrefix(n.vMeta.URL, "https://")) {
 		magnetCandidate = "magnet:?xt=urn:btih:" + hashStr
 	}
 
 	// Async Wake when head warmup is ready (Open returns instantly); sync Wake otherwise.
-	if nativeBridge != nil && magnetCandidate != "" {
+	wake := n.wake
+	if wake == nil && nativeBridge != nil {
+		wake = nativeBridge.Wake
+	}
+	if wake != nil && magnetCandidate != "" {
 		if headReady {
 			safeGo(func() {
-				_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
+				_ = wake(magnetCandidate, urlFileIdx)
 			})
 		} else {
-			_ = nativeBridge.Wake(magnetCandidate, urlFileIdx)
+			if ctx.Err() != nil {
+				return nil, 0, syscall.EINTR
+			}
+			// A synchronous activation that cannot start is terminal: returning a
+			// handle here gives a scanner a file whose reads can never be served.
+			activated := make(chan error, 1)
+			go func() { activated <- wake(magnetCandidate, urlFileIdx) }()
+			select {
+			case err := <-activated:
+				if err != nil {
+					logger.Printf("[VFS] activation failed for %s: %v", n.vMeta.Path, err)
+					return nil, 0, syscall.EIO
+				}
+			case <-ctx.Done():
+				return nil, 0, syscall.EINTR
+			}
 		}
 	}
+
+	// Registered only once activation succeeded: a session for an Open that is
+	// about to fail outlives the call and is never closed.
+	ttffRegister(n.vMeta.Path, n.vMeta.Size, hashStr, headReady, tailReady)
 
 	if val, exists := playbackRegistry.Load(n.vMeta.Path); !exists {
 		playbackRegistry.Store(n.vMeta.Path, &PlaybackState{
@@ -2664,9 +2685,10 @@ pumpSlotResolved:
 		}
 	}
 
-	// If everything fails, return EAGAIN as last resort
+	// Terminal once the bounded retries are spent. EAGAIN reads as "try again" to
+	// a scanner, which then blocks or loops on bytes that are never coming.
 	ttffReadFailed(h.path)
-	return nil, syscall.EAGAIN
+	return nil, syscall.EIO
 
 DATA_READY:
 
