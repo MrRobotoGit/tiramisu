@@ -3768,14 +3768,26 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Normalize Jellyfin ItemType values to Plex-style ("Movie"→"movie", "Episode"→"show")
+	// and Plex music section types ("artist", "album") to one audio marker. Audio is
+	// accepted so the identity pass can run, but its fuzzy name fallbacks stay behind:
+	// an album id is shared by every track, and a name-similarity guess would be worse
+	// than no match.
+	audioWebhook := false
 	switch payload.Metadata.LibrarySectionType {
 	case "Movie":
 		payload.Metadata.LibrarySectionType = "movie"
 	case "Episode":
 		payload.Metadata.LibrarySectionType = "show"
+	case "artist", "album", "music", "Audio":
+		payload.Metadata.LibrarySectionType = "music"
+		audioWebhook = true
+	case "audiobook":
+		audioWebhook = true
 	}
 
-	if payload.Metadata.LibrarySectionType != "movie" && payload.Metadata.LibrarySectionType != "show" {
+	switch payload.Metadata.LibrarySectionType {
+	case "movie", "show", "music", "audiobook":
+	default:
 		return
 	}
 
@@ -3848,8 +3860,10 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Pass 2: Fuzzy matches only if no exact match found
-		if exactMatch == "" {
+		// Pass 2: Fuzzy matches only if no exact match found. Never for audio: the
+		// identity pass above is the precise match, and a name guess on a music payload
+		// could confirm a different track of the same album.
+		if exactMatch == "" && !audioWebhook {
 			var bestMatch string
 			var bestState *PlaybackState
 			bestLevel := 0 // higher = better match
@@ -3953,8 +3967,9 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 
 		stopMatchFromFuzzy := false
 
-		// Pass 2: Fuzzy matches only if no exact match
-		if stopMatch == "" {
+		// Pass 2: Fuzzy matches only if no exact match, and never for audio (see the
+		// play path): a name guess must not stop the wrong track.
+		if stopMatch == "" && !audioWebhook {
 			bestLevel := 0
 			playbackRegistry.Range(func(key, value interface{}) bool {
 				path := key.(string)
@@ -4028,13 +4043,29 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			})
 			imdbUnique = n == 1
 		}
+		// An audio identity match is exact: the matched state's registered id is one
+		// of the ids the webhook carried. It is trusted like a basename even though
+		// sibling tracks share the id, because the identity pass picked the session
+		// that is actually playing.
+		matchByIdentity := false
+		if stopMatch != "" && stopState != nil && len(stopMbidIDs) > 0 {
+			id, ns := stopState.GetExternalIdentity()
+			if id != "" && (ns == "" || strings.EqualFold(ns, "musicbrainz")) {
+				for _, want := range stopMbidIDs {
+					if strings.EqualFold(id, want) {
+						matchByIdentity = true
+						break
+					}
+				}
+			}
+		}
 
 		// A fuzzy (pass 2) match is a name-similarity guess; an IMDB-only match is only
 		// trusted when unique. If such a match still has a live handle it is likely a
 		// sibling episode being read, so a late or spurious stop must not kill it.
 		// Basename and unique-IMDB matches are honored even with the handle open:
 		// ignoring them would leave the pump alive until the 2h idle timeout (V262).
-		if stopMatch != "" && stopState != nil && !matchByBasename && !imdbUnique && anyLiveHandleFor(stopMatch) {
+		if stopMatch != "" && stopState != nil && !matchByBasename && !matchByIdentity && !imdbUnique && anyLiveHandleFor(stopMatch) {
 			logger.Printf("[PLEX] STOP ignored for %s: fuzzy or ambiguous match with handle still open", filepath.Base(stopMatch))
 		} else if stopMatch != "" && stopState != nil {
 			stopState.mu.Lock()
