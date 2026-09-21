@@ -305,78 +305,52 @@ func resolveTargetFile(url string, targetSize int64, physicalPath string) (strin
 	if nativeBridge == nil {
 		return "", 0, fmt.Errorf("nativeBridge is nil")
 	}
-	if strings.Contains(url, "link=") {
-		start := strings.Index(url, "link=") + 5
-		end := strings.Index(url[start:], "&")
-		if end == -1 {
-			end = len(url) - start
-		}
-		hashStr := url[start : start+end]
-		hash := metainfo.NewHashFromHex(hashStr)
-
-		t := web.BTS.GetTorrent(hash)
-
-		if t != nil {
-
-			files := t.Files()
-			sort.Slice(files, func(i, j int) bool {
-				return tsutils.CompareStrings(files[i].Path(), files[j].Path())
-			})
-
-			var sizeMatchIndex int
-			var matchesBySize int
-
-			// Normalize names for matching: strip hash suffixes and separators.
-			cleanPhys := strings.ToLower(filepath.Base(physicalPath))
-			if len(hashStr) >= 8 {
-				// Strip full hash
-				cleanPhys = strings.ReplaceAll(cleanPhys, "_"+strings.ToLower(hashStr), "")
-				cleanPhys = strings.ReplaceAll(cleanPhys, "."+strings.ToLower(hashStr), "")
-				// Strip short hash (first 8 chars) - common in Tiramisu naming
-				shortHash := strings.ToLower(hashStr[:8])
-				cleanPhys = strings.ReplaceAll(cleanPhys, "_"+shortHash, "")
-				cleanPhys = strings.ReplaceAll(cleanPhys, "."+shortHash, "")
-			}
-			cleanPhys = strings.ReplaceAll(cleanPhys, "_", ".")
-			cleanPhys = strings.ReplaceAll(cleanPhys, " ", ".")
-
-			for i, f := range files {
-				if f.Length() == targetSize {
-					matchesBySize++
-					sizeMatchIndex = i + 1
-
-					cleanTorr := strings.ToLower(f.Path())
-					cleanTorr = strings.ReplaceAll(cleanTorr, "_", ".")
-
-					// Check for suffix match or base name match after normalization
-					if strings.HasSuffix(cleanPhys, cleanTorr) || strings.HasSuffix(cleanTorr, cleanPhys) || cleanTorr == cleanPhys {
-						return hashStr, i + 1, nil
-					}
-				}
-			}
-
-			// Single size match: trust it even when name normalization fails (e.g. Plex renames).
-			if matchesBySize == 1 {
-				return hashStr, sizeMatchIndex, nil
-			}
-		}
-
-		// Fallback: extract index from URL if torrent not in RAM or name match failed.
-		// Wake() will perform full discovery later.
-		urlFileIdx := 0
-		if strings.Contains(url, "index=") {
-			iStart := strings.Index(url, "index=") + 6
-			iEnd := strings.Index(url[iStart:], "&")
-			if iEnd == -1 {
-				iEnd = len(url) - iStart
-			}
-			if idx, err := strconv.Atoi(url[iStart : iStart+iEnd]); err == nil {
-				urlFileIdx = idx
-			}
-		}
-		return hashStr, urlFileIdx, nil
+	if !strings.Contains(url, "link=") {
+		return "", 0, fmt.Errorf("file not found in torrent")
 	}
-	return "", 0, fmt.Errorf("file not found in torrent")
+
+	hashStr := urlQueryValue(url, "link=")
+	urlIndex := 0
+	if raw := urlQueryValue(url, "index="); raw != "" {
+		if idx, err := strconv.Atoi(raw); err == nil {
+			urlIndex = idx
+		}
+	}
+
+	// The engine's list is shared state, so it is copied before sorting. IDs are
+	// assigned from the sorted order, the same way GoStorm assigns them.
+	var files []library.TorrentFile
+	if t := web.BTS.GetTorrent(metainfo.NewHashFromHex(hashStr)); t != nil {
+		resident := append([]*torrent.File(nil), t.Files()...)
+		sort.Slice(resident, func(i, j int) bool {
+			return tsutils.CompareStrings(resident[i].Path(), resident[j].Path())
+		})
+		files = make([]library.TorrentFile, 0, len(resident))
+		for i, f := range resident {
+			files = append(files, library.TorrentFile{Index: i + 1, Path: f.Path(), Length: f.Length()})
+		}
+	}
+
+	section, _ := library.SectionForPath(physicalSourcePath, physicalPath)
+	target, err := library.ResolveOpenTarget(section, hashStr, urlIndex, targetSize, physicalPath, files)
+	if err != nil {
+		return "", 0, err
+	}
+	return target.Hash, target.FileIndex, nil
+}
+
+// urlQueryValue reads a bare query value without parsing the whole URL, which
+// this FUSE path does on every Open.
+func urlQueryValue(url, key string) string {
+	start := strings.Index(url, key)
+	if start < 0 {
+		return ""
+	}
+	start += len(key)
+	if end := strings.Index(url[start:], "&"); end >= 0 {
+		return url[start : start+end]
+	}
+	return url[start:]
 }
 
 // Fast deterministic inode from FNV-1a hash to avoid syscalls in Readdir.
@@ -917,6 +891,7 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 type VirtualMkvNode struct {
 	fs.Inode
 	vMeta *vfs.Metadata
+	wake  func(string, int) error // per-node activation dependency; wired at Open after RED
 }
 
 // Compile-time interface checks
