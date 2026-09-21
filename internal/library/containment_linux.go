@@ -24,34 +24,72 @@ func beneathErr(err error, rel string) error {
 	return err
 }
 
-// openParent walks rel's directories from the root fd, optionally creating them,
-// and returns a descriptor for the parent plus the final component.
+// openDirAt resolves a directory path against the section root. Without create it is
+// a single openat2, so a rename after resolution moves the descriptor with its own
+// directory but cannot redirect the walk. With create, a missing chain is built one
+// component at a time and every step re-resolves the accumulated path from the root -
+// never from the previous component's descriptor, which a rename could carry outside
+// the section. The remaining window is resolution-to-syscall.
+func (w *SectionWriter) openDirAt(rel string, create bool) (int, error) {
+	open := func(path string) (int, error) {
+		return unix.Openat2(int(w.root.Fd()), path, &unix.OpenHow{
+			Flags: unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC, Resolve: resolveBeneath,
+		})
+	}
+	fd, err := open(rel)
+	if err == nil {
+		return fd, nil
+	}
+	if !create || !errors.Is(err, unix.ENOENT) {
+		return -1, beneathErr(err, rel)
+	}
+	parts := strings.Split(rel, "/")
+	for i, part := range parts {
+		acc := strings.Join(parts[:i+1], "/")
+		fd, err := open(acc)
+		if err == nil {
+			unix.Close(fd)
+			continue
+		}
+		if !errors.Is(err, unix.ENOENT) {
+			return -1, beneathErr(err, acc)
+		}
+		parentRel := strings.Join(parts[:i], "/")
+		if parentRel == "" {
+			parentRel = "."
+		}
+		parent, err := open(parentRel)
+		if err != nil {
+			return -1, beneathErr(err, parentRel)
+		}
+		err = unix.Mkdirat(parent, part, 0o755)
+		unix.Close(parent)
+		if err != nil && !errors.Is(err, unix.EEXIST) {
+			return -1, beneathErr(err, acc)
+		}
+	}
+	fd, err = open(rel)
+	if err != nil {
+		return -1, beneathErr(err, rel)
+	}
+	return fd, nil
+}
+
+// openParent returns the parent directory descriptor and the final component for rel.
+// The parent is resolved through openDirAt, so the path stays anchored to the section
+// root instead of becoming a new root descriptor at every component.
 func (w *SectionWriter) openParent(rel string, create bool) (int, string, error) {
 	parts := strings.Split(rel, "/")
 	leaf := parts[len(parts)-1]
-	cur, err := unix.Openat2(int(w.root.Fd()), ".", &unix.OpenHow{
-		Flags: unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC, Resolve: resolveBeneath,
-	})
+	dir := strings.Join(parts[:len(parts)-1], "/")
+	if dir == "" {
+		dir = "."
+	}
+	fd, err := w.openDirAt(dir, create)
 	if err != nil {
-		return -1, "", beneathErr(err, rel)
+		return -1, "", err
 	}
-	for _, part := range parts[:len(parts)-1] {
-		if create {
-			if err := unix.Mkdirat(cur, part, 0o755); err != nil && !errors.Is(err, unix.EEXIST) {
-				unix.Close(cur)
-				return -1, "", beneathErr(err, rel)
-			}
-		}
-		next, err := unix.Openat2(cur, part, &unix.OpenHow{
-			Flags: unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC, Resolve: resolveBeneath,
-		})
-		unix.Close(cur)
-		if err != nil {
-			return -1, "", beneathErr(err, rel)
-		}
-		cur = next
-	}
-	return cur, leaf, nil
+	return fd, leaf, nil
 }
 
 // WriteStaged creates rel beneath the root exclusively: an existing file is a

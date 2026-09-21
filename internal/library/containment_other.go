@@ -22,16 +22,18 @@ import (
 // and `go test` work on a developer machine, which the project workflow
 // depends on.
 
-// resolveUnder walks rel one component at a time from the section root,
-// refusing any symlink on the way, and returns the absolute path. With
-// createDirs it creates the intermediate directories, like the openat2 walk
-// does with Mkdirat.
+// resolveUnder mirrors the Linux openDirAt/openParent pair: every component is
+// re-joined from the section root (never chained from the previously resolved
+// component), missing intermediates are created one at a time, and a symlink
+// anywhere on the way is refused. The check-to-use race between the Lstat and the
+// operation stays open - only openat2's RESOLVE_BENEATH closes it - which is why
+// this file never ships to production.
 func (w *SectionWriter) resolveUnder(rel string, createDirs bool) (string, error) {
 	parts := strings.Split(rel, "/")
-	cur := w.rootPath
-	for i, part := range parts {
+	for i := range parts {
+		acc := strings.Join(parts[:i+1], "/")
+		next := filepath.Join(w.rootPath, filepath.FromSlash(acc))
 		last := i == len(parts)-1
-		next := filepath.Join(cur, part)
 		info, err := os.Lstat(next)
 		switch {
 		case err == nil:
@@ -52,9 +54,8 @@ func (w *SectionWriter) resolveUnder(rel string, createDirs bool) (string, error
 		default:
 			return "", err
 		}
-		cur = next
 	}
-	return cur, nil
+	return filepath.Join(w.rootPath, filepath.FromSlash(rel)), nil
 }
 
 // WriteStaged creates rel beneath the root exclusively: an existing file is a

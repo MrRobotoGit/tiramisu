@@ -809,3 +809,38 @@ func newInwardSymlinkFixture(t *testing.T) (root, inside string, writer *Section
 	closeSectionWriterAtCleanup(t, writer)
 	return root, inside, writer
 }
+
+// H5: the path is re-resolved from the section root on every operation, so an
+// ancestor that has been moved out of the section is not followed: the old path no
+// longer resolves and the moved tree stays untouched. The mid-walk window (a rename
+// landing between two resolution steps) is closed by construction on Linux, since
+// each step resolves the accumulated path from the root instead of chaining the
+// previous component's descriptor.
+func TestSectionWriterDoesNotFollowAMovedAncestor_H5(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	writer := mustOpenSectionWriter(t, root)
+	closeSectionWriterAtCleanup(t, writer)
+
+	relPath := "Artist/Album/Track_01234567.flac"
+	if err := writer.WriteStaged(relPath, []byte("staged bytes")); err != nil {
+		t.Fatalf("WriteStaged(%q): %v", relPath, err)
+	}
+	if err := os.Rename(filepath.Join(root, "Artist"), filepath.Join(outside, "Artist")); err != nil {
+		t.Fatalf("move the ancestor out of the section: %v", err)
+	}
+
+	if err := writer.RemoveStaged(relPath); err != nil {
+		t.Fatalf("RemoveStaged(%q) after the move: %v", relPath, err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "Artist", "Album", "Track_01234567.flac")); err != nil {
+		t.Fatalf("file under the moved ancestor was touched: %v", err)
+	}
+
+	if err := writer.PruneEmptyDirs(relPath); err != nil {
+		t.Fatalf("PruneEmptyDirs(%q) after the move: %v", relPath, err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "Artist", "Album")); err != nil {
+		t.Fatalf("directory under the moved ancestor was pruned: %v", err)
+	}
+}
