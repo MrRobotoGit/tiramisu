@@ -212,7 +212,28 @@ func (w *SectionWriter) Publish(stagedRel, finalRel string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Rename(staged, final)
+	if err := os.Rename(staged, final); err != nil {
+		return err
+	}
+	// Durability: both ends of the rename changed a directory entry. EINVAL/EOPNOTSUPP
+	// are tolerated because some developer filesystems cannot fsync a directory.
+	if err := fsyncDir(filepath.Dir(final)); err != nil {
+		return err
+	}
+	return fsyncDir(filepath.Dir(staged))
+}
+
+// fsyncDir flushes a directory's entries, tolerating filesystems that cannot.
+func fsyncDir(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
+		return err
+	}
+	return nil
 }
 
 // RemoveStaged deletes rel beneath the root, removing the name itself: like unlink(2)

@@ -191,6 +191,15 @@ func (w *SectionWriter) Publish(stagedRel, finalRel string) error {
 		}
 		return beneathErr(err, finalRel)
 	}
+	// Durability: without a directory fsync a power loss can leave a committed row whose
+	// directory entry never reached the disk. Both ends of the rename need it: the
+	// source lost a name and the destination gained one.
+	if err := unix.Fsync(finalDir); err != nil {
+		return beneathErr(err, finalRel)
+	}
+	if err := unix.Fsync(stagedDir); err != nil {
+		return beneathErr(err, stagedRel)
+	}
 	return nil
 }
 
