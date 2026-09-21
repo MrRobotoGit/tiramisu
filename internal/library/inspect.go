@@ -40,20 +40,9 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 	}
 	// Identity resolution mirrors validate(): a magnet's own info hash wins, so
 	// cleanup later removes the torrent the engine was actually asked to add.
-	hash := strings.ToLower(strings.TrimSpace(req.Hash))
-	magnet := strings.TrimSpace(req.Magnet)
-	if magnet != "" {
-		if fromMagnet := HashFromMagnet(magnet); fromMagnet != "" {
-			hash = fromMagnet
-		} else if hash == "" {
-			return nil, errf(http.StatusBadRequest, "magnet carries no info hash")
-		}
-	}
-	if hash == "" {
-		return nil, errf(http.StatusBadRequest, "hash or magnet is required")
-	}
-	if !reInfoHash.MatchString(hash) {
-		return nil, errf(http.StatusBadRequest, "malformed info hash %q", hash)
+	hash, magnet, err := resolveAudioIdentity(req.Hash, req.Magnet)
+	if err != nil {
+		return nil, err
 	}
 	if magnet == "" {
 		magnet = BuildMagnet(hash, title, DefaultTrackers())

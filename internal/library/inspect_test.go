@@ -123,6 +123,29 @@ func (s *inspectRegistrySpy) snapshot() []string {
 	return append([]string(nil), s.calls...)
 }
 
+// B2: Inspect must refuse the same hash/magnet disagreement Add refuses, and must
+// not touch the engine: the reply would describe a torrent the caller never named.
+func TestInspect_RejectsHashMagnetMismatch_B2(t *testing.T) {
+	engine := successfulInspectEngine(inspectHexHash, nil)
+	manager := newInspectManager(engine, nil)
+
+	_, err := manager.Inspect(context.Background(), InspectRequest{
+		Hash:   inspectHexHash,
+		Magnet: BuildMagnet(inspectBase32Hash, "Other Release", DefaultTrackers()),
+		Title:  "An Album",
+	})
+	var apiErr *Error
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
+		t.Fatalf("Inspect() error = %v, want 400", err)
+	}
+	if !strings.Contains(apiErr.Message, "hash_magnet_mismatch") {
+		t.Errorf("message = %q, want hash_magnet_mismatch", apiErr.Message)
+	}
+	if calls := engine.snapshot(); len(calls) != 0 {
+		t.Errorf("engine calls = %+v, want none", calls)
+	}
+}
+
 func TestInspect_IdentityAndValidation(t *testing.T) {
 	t.Run("I1_valid_40_hex_hash_builds_the_magnet", func(t *testing.T) {
 		engine := successfulInspectEngine(inspectHexHash, nil)

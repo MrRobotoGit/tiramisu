@@ -2,6 +2,8 @@ package library
 
 import (
 	"context"
+	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -340,6 +342,56 @@ func (f *atomicFixture) invalidations() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.invalidated...)
+}
+
+func TestAddAudio_RejectsHashMagnetMismatch_B2(t *testing.T) {
+	source := FileStat{ID: 1, Path: "Release/01.flac", Length: 4 << 20}
+	requestPath := "Artist/Album/01_01234567.flac"
+
+	t.Run("B2a_a_disagreeing_magnet_is_a_400_with_no_engine_call", func(t *testing.T) {
+		f := newAtomicFixture(t, []FileStat{source})
+		_, err := f.manager.AddAudio(context.Background(), AddRequest{
+			Type:   "music",
+			Hash:   atomicAddHash,
+			Magnet: BuildMagnet(atomicAddBase32Hash, "Other Release", DefaultTrackers()),
+			Title:  "An Album",
+			Files:  []AudioFileRequest{{SourcePath: source.Path, Path: requestPath}},
+		})
+		var apiErr *Error
+		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
+			t.Fatalf("AddAudio() error = %v, want 400", err)
+		}
+		if !strings.Contains(apiErr.Message, "hash_magnet_mismatch") {
+			t.Errorf("message = %q, want hash_magnet_mismatch", apiErr.Message)
+		}
+		for _, method := range []string{"AddTorrent", "GetTorrentInfo", "ListTorrents", "RemoveTorrent"} {
+			if calls := f.engine.callsFor(method); len(calls) != 0 {
+				t.Errorf("%s calls = %+v, want none", method, calls)
+			}
+		}
+	})
+
+	t.Run("B2b_the_same_hash_in_base32_is_not_a_mismatch", func(t *testing.T) {
+		raw, err := hex.DecodeString(atomicAddHash)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameBase32 := strings.ToLower(base32.StdEncoding.EncodeToString(raw))
+		f := newAtomicFixture(t, []FileStat{source})
+		_, err = f.manager.AddAudio(context.Background(), AddRequest{
+			Type:   "music",
+			Hash:   atomicAddHash,
+			Magnet: BuildMagnet(sameBase32, "An Album", DefaultTrackers()),
+			Title:  "An Album",
+			Files:  []AudioFileRequest{{SourcePath: source.Path, Path: requestPath}},
+		})
+		if err != nil {
+			t.Fatalf("AddAudio() error = %v, want nil for equivalent spellings", err)
+		}
+		if calls := f.engine.callsFor("AddTorrent"); len(calls) != 1 {
+			t.Fatalf("AddTorrent calls = %+v, want 1", calls)
+		}
+	})
 }
 
 func TestAddAudio_OneFilePublishesAtomically_E1_E3_E8_E18_E19_E20(t *testing.T) {
