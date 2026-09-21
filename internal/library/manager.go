@@ -73,6 +73,13 @@ type Config struct {
 	// namespace the VFS dispatches on, in one update so a Readdir cannot see half an
 	// album. Without it the projections are invisible until reconciliation.
 	PublishAudioPath func([]AudioProjection)
+	// AudioRemoval is the removal half of the projection registry: claiming a row,
+	// forgetting it and counting references. *metadb.DB satisfies it; it is separate
+	// from AudioProjections so read-only seams stay minimal.
+	AudioRemoval AudioRemovalRegistry
+	// UnpublishAudioPath, when set, drops a removed projection from the namespace the
+	// VFS dispatches on, before its stub is unlinked.
+	UnpublishAudioPath func(AudioProjection)
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what
@@ -162,6 +169,9 @@ type AddResponse struct {
 }
 
 type RemoveRequest struct {
+	// Type routes audio removal ("music", "audiobook"); video requests predate it
+	// and may omit it.
+	Type string `json:"type"`
 	Path string `json:"path"`
 	Hash string `json:"hash"`
 	// Blacklist keeps the release out: without it the sync engines are free to add the

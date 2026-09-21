@@ -4784,7 +4784,13 @@ func main() {
 			// Without this a projection stays invisible to Readdir and Lookup
 			// until the next startup reconciliation.
 			PublishAudioPath: publishAudioProjectionsLive,
-			InvalidatePath:   invalidateSyncRemovedPath,
+			// Removal reaches the same object through the narrower interface it
+			// actually calls.
+			AudioRemoval: audioRemovalRegistry(),
+			// Without this a removed projection keeps resolving until its stub is
+			// gone and the next reconciliation runs.
+			UnpublishAudioPath: unpublishAudioProjectionLive,
+			InvalidatePath:     invalidateSyncRemovedPath,
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.
 			Gaps: func() ([]library.Gap, error) {
@@ -5379,6 +5385,24 @@ func audioProjectionRegistry() library.AudioProjectionRegistry {
 		return nil
 	}
 	return stateDB
+}
+
+// audioRemovalRegistry mirrors audioProjectionRegistry for the removal half of the
+// registry, so a boot whose DB failed to open cannot half-enable the endpoint.
+func audioRemovalRegistry() library.AudioRemovalRegistry {
+	if stateDB == nil {
+		return nil
+	}
+	return stateDB
+}
+
+// unpublishAudioProjectionLive drops a removed projection from the live VFS and clears
+// the caches that still answer for it, before its stub is unlinked.
+func unpublishAudioProjectionLive(p library.AudioProjection) {
+	if globalAudioNamespace != nil {
+		globalAudioNamespace.Remove(p.Path())
+	}
+	invalidateSyncRemovedPath(filepath.Join(physicalSourcePath, string(p.Section), filepath.FromSlash(p.VirtualPath)))
 }
 
 var errStateDBUnavailable = errors.New("state DB is enabled but was not opened")

@@ -80,9 +80,36 @@ func (h *Handler) Remove(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var req RemoveRequest
-	if err := decode(r, &req); err != nil {
+	body, err := readBody(r)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req RemoveRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Audio requests reject unknown fields; the legacy video decoder stays lenient,
+	// because its callers predate this endpoint and may carry vendor fields.
+	if section, canonical := SectionForType(req.Type); canonical && IsAudioSection(section) {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		var strict RemoveRequest
+		if err := dec.Decode(&strict); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req = strict
+	}
+	// Audio first, falling through on the routing sentinel so every video request
+	// reaches the legacy path unchanged.
+	if audio, err := h.mgr.RemoveAudio(r.Context(), req); !errors.Is(err, ErrRequestNotAudio) {
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, audio)
 		return
 	}
 	resp, err := h.mgr.Remove(r.Context(), req)

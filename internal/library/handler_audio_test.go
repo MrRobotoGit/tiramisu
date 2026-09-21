@@ -91,13 +91,15 @@ type handlerAudioRegistryCall struct {
 type handlerAudioRegistryFake struct {
 	mu sync.Mutex
 
-	rows     map[string]metadb.AudioProjection
-	staged   map[string][]metadb.AudioProjection
-	pageRows []metadb.AudioProjection
-	calls    []handlerAudioRegistryCall
+	rows        map[string]metadb.AudioProjection
+	staged      map[string][]metadb.AudioProjection
+	pageRows    []metadb.AudioProjection
+	calls       []handlerAudioRegistryCall
+	unpublished []AudioProjection
 }
 
 var _ AudioProjectionRegistry = (*handlerAudioRegistryFake)(nil)
+var _ AudioRemovalRegistry = (*handlerAudioRegistryFake)(nil)
 var _ AudioRegistry = (*handlerAudioRegistryFake)(nil)
 var _ audioProjectionPager = (*handlerAudioRegistryFake)(nil)
 
@@ -187,6 +189,62 @@ func (f *handlerAudioRegistryFake) AudioHashReferenced(string) (bool, error) {
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, handlerAudioRegistryCall{method: "AudioHashReferenced"})
 	return false, nil
+}
+
+func (f *handlerAudioRegistryFake) MarkAudioProjectionRemoving(section, virtualPath string, updatedAtNS int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, handlerAudioRegistryCall{method: "MarkAudioProjectionRemoving", section: section})
+	key := handlerAudioProjectionKey(section, virtualPath)
+	row, ok := f.rows[key]
+	if !ok || row.State != metadb.AudioCommitted {
+		return false, nil
+	}
+	row.State = metadb.AudioRemoving
+	row.UpdatedAtNS = updatedAtNS
+	f.rows[key] = row
+	return true, nil
+}
+
+func (f *handlerAudioRegistryFake) DeleteAudioProjection(section, virtualPath string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, handlerAudioRegistryCall{method: "DeleteAudioProjection", section: section})
+	delete(f.rows, handlerAudioProjectionKey(section, virtualPath))
+	return nil
+}
+
+func (f *handlerAudioRegistryFake) AudioProjectionsByHash(hash string) ([]metadb.AudioProjection, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, handlerAudioRegistryCall{method: "AudioProjectionsByHash"})
+	var rows []metadb.AudioProjection
+	for _, row := range f.rows {
+		if row.Hash == hash {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
+}
+
+// recordUnpublished captures what the manager hands to the live namespace seam.
+func (f *handlerAudioRegistryFake) recordUnpublished(p AudioProjection) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unpublished = append(f.unpublished, p)
+}
+
+func (f *handlerAudioRegistryFake) unpublishedSnapshot() []AudioProjection {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]AudioProjection(nil), f.unpublished...)
+}
+
+func (f *handlerAudioRegistryFake) projection(section, virtualPath string) (metadb.AudioProjection, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.rows[handlerAudioProjectionKey(section, virtualPath)]
+	return row, ok
 }
 
 func (f *handlerAudioRegistryFake) AudioProjectionPage(section, prefix, cursor string, limit int) ([]metadb.AudioProjection, error) {
@@ -301,7 +359,11 @@ func newHandlerAudioFixture(t *testing.T, files []FileStat, initial ...metadb.Au
 		AudioRegistry:    registry,
 		AudioRoot:        root,
 		AudioProjections: registry,
-		Logger:           log.New(io.Discard, "", 0),
+		AudioRemoval:     registry,
+		UnpublishAudioPath: func(p AudioProjection) {
+			registry.recordUnpublished(p)
+		},
+		Logger: log.New(io.Discard, "", 0),
 	})
 	return &handlerAudioFixture{
 		root: root, movies: movies, tv: tv, engine: engine, registry: registry, handler: NewHandler(manager),
