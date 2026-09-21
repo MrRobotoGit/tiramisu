@@ -15,6 +15,19 @@ import (
 // The imdb field WriteStub carries is absent rather than empty: audio has no IMDb
 // ID, and the engine must not invent a field a caller cannot fill.
 func WriteAudioStub(path, streamURL string, size int64, magnet, externalID, externalIDNS string) error {
+	data, err := AudioStubBytes(streamURL, size, magnet, externalID, externalIDNS)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// AudioStubBytes renders a stub without touching the filesystem, so a contained
+// writer can place it through a pinned directory descriptor instead.
+func AudioStubBytes(streamURL string, size int64, magnet, externalID, externalIDNS string) ([]byte, error) {
 	stub := map[string]interface{}{
 		"url":    streamURL,
 		"size":   size,
@@ -26,14 +39,7 @@ func WriteAudioStub(path, streamURL string, size int64, magnet, externalID, exte
 		stub["external_id"] = externalID
 		stub["external_id_ns"] = externalIDNS
 	}
-	data, err := json.Marshal(stub)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
+	return json.Marshal(stub)
 }
 
 // EnsureSectionRoots creates the audio section roots under sourcePath when they are

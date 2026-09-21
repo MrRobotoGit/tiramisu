@@ -215,6 +215,15 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		})
 	}
 
+	// Anchored to the section root, so a path that passed string validation still
+	// cannot be redirected by a symlink planted beneath it (spec §14.3).
+	writer, err := OpenSectionWriter(sectionRoot)
+	if err != nil {
+		abandon()
+		return nil, errf(http.StatusServiceUnavailable, "cannot open section %q: %v", intent.Section, err)
+	}
+	defer writer.Close()
+
 	if len(rows) > 0 {
 		// The registry is consulted before the filesystem is touched, so a
 		// conflicting batch writes nothing at all.
@@ -225,14 +234,22 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	}
 
 	staged := make([]string, 0, len(rows))
+	published := make([]string, 0, len(rows))
 	unwind := func() {
-		for _, path := range staged {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove staged audio stub %s: %v", path, err)
+		// Final names first: after a rename the staged name is gone, and a
+		// half-published batch must leave neither behind.
+		for _, rel := range published {
+			if err := writer.RemoveStaged(rel); err != nil {
+				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove published audio stub %s: %v", rel, err)
 			}
-			// rmdir upwards: it only removes empty directories, so a directory a
-			// concurrent request is still using is left alone.
-			pruneEmptyDirs(filepath.Dir(path), sectionRoot)
+		}
+		for _, rel := range staged {
+			if err := writer.RemoveStaged(rel); err != nil {
+				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove staged audio stub %s: %v", rel, err)
+			}
+		}
+		for _, row := range rows {
+			pruneEmptyDirs(filepath.Dir(filepath.Join(sectionRoot, filepath.FromSlash(row.VirtualPath))), sectionRoot)
 		}
 		if len(rows) > 0 {
 			if _, err := m.cfg.AudioProjections.RollbackAudioProjections(txnID); err != nil {
@@ -243,13 +260,29 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	}
 
 	for _, row := range rows {
-		final := filepath.Join(sectionRoot, filepath.FromSlash(row.VirtualPath))
-		stagedPath := filepath.Join(filepath.Dir(final), row.StagingName)
-		if err := WriteAudioStub(stagedPath, m.streamURL(row.Hash, row.FileIndex), row.Size, row.Magnet, row.ExternalID, row.ExternalIDNamespace); err != nil {
+		data, err := AudioStubBytes(m.streamURL(row.Hash, row.FileIndex), row.Size, row.Magnet, row.ExternalID, row.ExternalIDNamespace)
+		if err != nil {
 			unwind()
-			return nil, errf(http.StatusInternalServerError, "cannot stage audio stub for %s: %v", row.VirtualPath, err)
+			return nil, errf(http.StatusInternalServerError, "cannot render audio stub for %s: %v", row.VirtualPath, err)
 		}
-		staged = append(staged, stagedPath)
+		rel := stagingRelPath(row)
+		if err := writer.WriteStaged(rel, data); err != nil {
+			unwind()
+			return nil, audioErr(err)
+		}
+		staged = append(staged, rel)
+	}
+
+	// Spec §7.2 publishes before committing: the registry transaction is atomic
+	// and the renames are not, so the commit is the last thing that can fail.
+	// A final name is inert until its row is committed, because audio dispatch
+	// classifies against the committed namespace.
+	for i, row := range rows {
+		if err := writer.Publish(staged[i], row.VirtualPath); err != nil {
+			unwind()
+			return nil, audioErr(err)
+		}
+		published = append(published, row.VirtualPath)
 	}
 
 	if len(rows) > 0 {
@@ -258,21 +291,14 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 			unwind()
 			return nil, audioErr(err)
 		}
-		// Publishing a final name for a row that was not committed would put a
-		// file on disk that no registry row owns.
 		if committed != len(rows) {
 			unwind()
 			return nil, errf(http.StatusInternalServerError, "committed %d of %d audio projections", committed, len(rows))
 		}
 	}
 
-	// Several renames are not one filesystem transaction; the registry commit is
-	// the boundary a scanner's view is built from.
-	for i, row := range rows {
+	for _, row := range rows {
 		final := filepath.Join(sectionRoot, filepath.FromSlash(row.VirtualPath))
-		if err := os.Rename(staged[i], final); err != nil {
-			return nil, errf(http.StatusInternalServerError, "cannot publish audio stub %s: %v", row.VirtualPath, err)
-		}
 		// Published before the cache is dropped: a Readdir racing between the two
 		// would otherwise refill a cache from a namespace without this path.
 		if m.cfg.PublishAudioPath != nil {
@@ -325,4 +351,13 @@ func pruneEmptyDirs(dir, root string) {
 		}
 		dir = filepath.Dir(dir)
 	}
+}
+
+// stagingRelPath puts the hidden staging name beside its destination so the
+// publish is a rename within one directory.
+func stagingRelPath(row metadb.AudioProjection) string {
+	if i := strings.LastIndex(row.VirtualPath, "/"); i >= 0 {
+		return row.VirtualPath[:i+1] + row.StagingName
+	}
+	return row.StagingName
 }

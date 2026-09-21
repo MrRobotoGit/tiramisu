@@ -261,6 +261,16 @@ func (f *atomicRegistryFake) committedRows() []metadb.AudioProjection {
 	return rows
 }
 
+func (f *atomicRegistryFake) stagedRows() []metadb.AudioProjection {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var rows []metadb.AudioProjection
+	for _, batch := range f.staged {
+		rows = append(rows, batch...)
+	}
+	return cloneAtomicRows(rows)
+}
+
 func atomicProjectionKey(section, virtualPath string) string {
 	return section + "\x00" + virtualPath
 }
@@ -341,24 +351,32 @@ func TestAddAudio_OneFilePublishesAtomically_E1_E3_E8_E18_E19_E20(t *testing.T) 
 	var commitObservationErr error
 	f.registry.onCommit = func(_ string, rows []metadb.AudioProjection) {
 		finalPath := filepath.Join(f.musicRoot, filepath.FromSlash(requestPath))
-		if _, err := os.Stat(finalPath); !errors.Is(err, os.ErrNotExist) {
-			commitObservationErr = fmt.Errorf("E8 final path existed before registry commit: stat error = %v", err)
+		info, err := os.Stat(finalPath)
+		if err != nil || !info.Mode().IsRegular() {
+			commitObservationErr = fmt.Errorf("E8 final path was not a regular file before registry commit: info = %v, error = %v", info, err)
 			return
 		}
 		files, err := atomicRegularFiles(f.musicRoot)
 		if err != nil {
-			commitObservationErr = fmt.Errorf("E8 inspect staging tree: %w", err)
+			commitObservationErr = fmt.Errorf("E8 inspect pre-commit tree: %w", err)
 			return
 		}
-		if len(files) != len(rows) {
-			commitObservationErr = fmt.Errorf("E8 regular files before commit = %v, want %d hidden staged files", files, len(rows))
+		if !reflect.DeepEqual(files, []string{finalPath}) {
+			commitObservationErr = fmt.Errorf("E8 regular files before commit = %v, want only final path %q", files, finalPath)
 			return
 		}
-		for _, path := range files {
-			if !strings.HasPrefix(filepath.Base(path), ".") {
-				commitObservationErr = fmt.Errorf("E8 pre-commit file %q is not dot-leading", path)
-				return
-			}
+		staging, err := atomicDotLeadingPaths(f.musicRoot)
+		if err != nil {
+			commitObservationErr = fmt.Errorf("E8 inspect staging leftovers: %w", err)
+			return
+		}
+		if len(staging) != 0 {
+			commitObservationErr = fmt.Errorf("E8 staging leftovers before commit = %v, want none", staging)
+			return
+		}
+		if len(rows) != 1 || rows[0].Section != string(SectionMusic) || rows[0].VirtualPath != requestPath ||
+			rows[0].Hash != atomicAddHash || rows[0].FileIndex != source.ID || rows[0].SourcePath != source.Path {
+			commitObservationErr = fmt.Errorf("E8 rows at commit = %+v, want exactly the created projection", rows)
 		}
 	}
 
@@ -416,7 +434,7 @@ func TestAddAudio_OneFilePublishesAtomically_E1_E3_E8_E18_E19_E20(t *testing.T) 
 		}
 	})
 
-	t.Run("E8_commit_observed_only_dot_leading_staged_names", func(t *testing.T) {
+	t.Run("E8_commit_observes_all_created_finals_no_staging_and_exact_created_rows", func(t *testing.T) {
 		if commitObservationErr != nil {
 			t.Fatal(commitObservationErr)
 		}
@@ -448,6 +466,43 @@ func TestAddAudio_ResponseOrderAndTwelveFileBatch_E2_E4_E18(t *testing.T) {
 			Path:       atomicVirtualPath(i + 1),
 		})
 	}
+	var batchCommitObservationErr error
+	f.registry.onCommit = func(_ string, rows []metadb.AudioProjection) {
+		want := make(map[string]FileStat, len(requests))
+		for i, request := range requests {
+			want[request.Path] = files[order[i]]
+		}
+		if len(rows) != len(want) {
+			batchCommitObservationErr = fmt.Errorf("E8 rows at commit = %d, want all %d created projections", len(rows), len(want))
+			return
+		}
+		for _, row := range rows {
+			source, ok := want[row.VirtualPath]
+			if !ok || row.Section != string(SectionMusic) || row.Hash != atomicAddHash ||
+				row.SourcePath != source.Path || row.FileIndex != source.ID || row.Size != source.Length {
+				batchCommitObservationErr = fmt.Errorf("E8 unexpected row at commit: %+v", row)
+				return
+			}
+			delete(want, row.VirtualPath)
+			finalPath := filepath.Join(f.musicRoot, filepath.FromSlash(row.VirtualPath))
+			if info, err := os.Stat(finalPath); err != nil || !info.Mode().IsRegular() {
+				batchCommitObservationErr = fmt.Errorf("E8 final %q before commit = (%v, %v), want regular file", finalPath, info, err)
+				return
+			}
+		}
+		if len(want) != 0 {
+			batchCommitObservationErr = fmt.Errorf("E8 created projections absent from commit rows: %+v", want)
+			return
+		}
+		staging, err := atomicDotLeadingPaths(f.musicRoot)
+		if err != nil {
+			batchCommitObservationErr = fmt.Errorf("E8 inspect batch staging leftovers: %w", err)
+			return
+		}
+		if len(staging) != 0 {
+			batchCommitObservationErr = fmt.Errorf("E8 batch staging leftovers before commit = %v, want none", staging)
+		}
+	}
 
 	response, err := f.manager.AddAudio(context.Background(), AddRequest{
 		Type:  "music",
@@ -457,6 +512,9 @@ func TestAddAudio_ResponseOrderAndTwelveFileBatch_E2_E4_E18(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("AddAudio() error = %v, want nil", err)
+	}
+	if batchCommitObservationErr != nil {
+		t.Fatal(batchCommitObservationErr)
 	}
 	if response == nil {
 		t.Fatal("AddAudio() response = nil, want non-nil")
@@ -493,6 +551,12 @@ func TestAddAudio_ResponseOrderAndTwelveFileBatch_E2_E4_E18(t *testing.T) {
 			if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
 				t.Errorf("published %q: info = %v, error = %v; want regular file", path, info, err)
 			}
+		}
+	})
+
+	t.Run("E8_commit_observes_every_batch_final_no_staging_and_exact_created_rows", func(t *testing.T) {
+		if batchCommitObservationErr != nil {
+			t.Fatal(batchCommitObservationErr)
 		}
 	})
 
@@ -686,6 +750,123 @@ func TestAddAudio_FailedRequestPreservesPresentProjection_E7_E9(t *testing.T) {
 
 	t.Run("E9_failed_mixed_request_leaves_no_staged_files", func(t *testing.T) {
 		assertNoAtomicStagingFiles(t, f.musicRoot)
+	})
+}
+
+func TestAddAudio_NoReplacePublish_E21(t *testing.T) {
+	t.Run("E21_unregistered_occupied_final_is_not_replaced_or_committed", func(t *testing.T) {
+		file := FileStat{ID: 1, Path: "Release/Occupied.flac", Length: 12345}
+		request := AudioFileRequest{SourcePath: file.Path, Path: "Artist/Album/Occupied_01234567.flac"}
+		f := newAtomicFixture(t, []FileStat{file})
+		finalPath := filepath.Join(f.musicRoot, filepath.FromSlash(request.Path))
+		if err := os.MkdirAll(filepath.Dir(finalPath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		original := []byte("unregistered file owned by someone else\n")
+		if err := os.WriteFile(finalPath, original, 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		response, err := f.manager.AddAudio(context.Background(), AddRequest{
+			Type: "music", Hash: atomicAddHash, Title: "No Replace", Files: []AudioFileRequest{request},
+		})
+		assertAtomicFailure(t, response, err)
+
+		after, readErr := os.ReadFile(finalPath)
+		if readErr != nil {
+			t.Fatalf("read occupied final after failed add: %v", readErr)
+		}
+		if !reflect.DeepEqual(after, original) {
+			t.Errorf("occupied final content = %q, want original bytes %q", after, original)
+		}
+		if commits := f.registry.callsFor("commit"); len(commits) != 0 {
+			t.Errorf("commit calls = %#v, want none when final name is occupied", commits)
+		}
+		stages := f.registry.callsFor("stage")
+		rollbacks := f.registry.callsFor("rollback")
+		if len(stages) > 0 && (len(rollbacks) != 1 || rollbacks[0].txnID != stages[0].txnID) {
+			t.Errorf("rollback calls = %#v after stages %#v, want any staged transaction rolled back", rollbacks, stages)
+		}
+		if rows := f.registry.stagedRows(); len(rows) != 0 {
+			t.Errorf("staged rows after failure = %+v, want none", rows)
+		}
+		if rows := f.registry.committedRows(); len(rows) != 0 {
+			t.Errorf("committed rows = %+v, want none", rows)
+		}
+		assertNoAtomicStagingFiles(t, f.musicRoot)
+	})
+}
+
+func TestAddAudio_RenameFailureRollsBackCreatedAndPreservesPresent_E22_E23(t *testing.T) {
+	files := atomicAlbumFiles(3)
+	presentRequest := AudioFileRequest{SourcePath: files[0].Path, Path: "Existing/01_01234567.flac"}
+	present := atomicCommittedProjection(presentRequest, files[0])
+	f := newAtomicFixture(t, files, present)
+	f.engine.torrents = []TorrentStats{{Hash: atomicAddHash}}
+
+	presentPath := filepath.Join(f.musicRoot, filepath.FromSlash(presentRequest.Path))
+	if err := WriteAudioStub(presentPath, "http://old.invalid/existing", files[0].Length, "magnet:?existing", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	presentBefore, err := os.ReadFile(presentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	goodRequest := AudioFileRequest{SourcePath: files[1].Path, Path: "Publish/02_01234567.flac"}
+	failingRequest := AudioFileRequest{SourcePath: files[2].Path, Path: "Publish/03_01234567.flac"}
+	failingFinal := filepath.Join(f.musicRoot, filepath.FromSlash(failingRequest.Path))
+	if err := os.MkdirAll(filepath.Dir(failingFinal), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(failingFinal, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(failingFinal, 0755) }()
+
+	response, addErr := f.manager.AddAudio(context.Background(), AddRequest{
+		Type:  "music",
+		Hash:  atomicAddHash,
+		Title: "Rename Rollback",
+		Files: []AudioFileRequest{presentRequest, goodRequest, failingRequest},
+	})
+	assertAtomicFailure(t, response, addErr)
+
+	t.Run("E22_second_rename_failure_removes_renamed_finals_and_staging_then_rolls_back_rows", func(t *testing.T) {
+		stages := f.registry.callsFor("stage")
+		if len(stages) != 1 || len(stages[0].rows) != 2 {
+			t.Fatalf("stage calls = %#v, want one two-row created batch", stages)
+		}
+		if commits := f.registry.callsFor("commit"); len(commits) != 0 {
+			t.Errorf("commit calls = %#v, want none after pre-commit rename failure", commits)
+		}
+		rollbacks := f.registry.callsFor("rollback")
+		if len(rollbacks) != 1 || rollbacks[0].txnID != stages[0].txnID {
+			t.Errorf("rollback calls = %#v, want staged transaction %q rolled back once", rollbacks, stages[0].txnID)
+		}
+
+		goodFinal := filepath.Join(f.musicRoot, filepath.FromSlash(goodRequest.Path))
+		if _, statErr := os.Stat(goodFinal); !errors.Is(statErr, os.ErrNotExist) {
+			t.Errorf("first renamed final %q survived rollback: stat error = %v", goodFinal, statErr)
+		}
+		if info, statErr := os.Stat(failingFinal); statErr != nil || !info.IsDir() {
+			t.Errorf("rename-failure fixture = (%v, %v), want original directory preserved", info, statErr)
+		}
+		assertNoAtomicStagingFiles(t, f.musicRoot)
+	})
+
+	t.Run("E23_rename_rollback_preserves_already_present_file_and_registry_row", func(t *testing.T) {
+		presentAfter, readErr := os.ReadFile(presentPath)
+		if readErr != nil {
+			t.Fatalf("read already-present file after rollback: %v", readErr)
+		}
+		if !reflect.DeepEqual(presentAfter, presentBefore) {
+			t.Errorf("already-present content changed: got %q, want %q", presentAfter, presentBefore)
+		}
+		rows := f.registry.committedRows()
+		if len(rows) != 1 || rows[0].VirtualPath != presentRequest.Path || rows[0].Hash != atomicAddHash || rows[0].State != metadb.AudioCommitted {
+			t.Errorf("committed rows after rename rollback = %+v, want only original present row", rows)
+		}
 	})
 }
 
@@ -948,6 +1129,20 @@ func assertAtomicStatus(t *testing.T, response *AudioAddResponse, err error, wan
 	}
 }
 
+func assertAtomicFailure(t *testing.T, response *AudioAddResponse, err error) {
+	t.Helper()
+	if response != nil {
+		t.Errorf("AddAudio() response = %#v on failure, want nil", response)
+	}
+	if err == nil {
+		t.Fatal("AddAudio() error = nil, want failure")
+	}
+	var classified *Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("AddAudio() error type = %T (%v), want *library.Error", err, err)
+	}
+}
+
 func assertAtomicPublishedRows(t *testing.T, f *atomicFixture, response *AudioAddResponse) {
 	t.Helper()
 	rows := f.registry.committedRows()
@@ -1018,18 +1213,27 @@ func assertNoAtomicRegularFiles(t *testing.T, root string) {
 
 func assertNoAtomicStagingFiles(t *testing.T, root string) {
 	t.Helper()
+	paths, err := atomicDotLeadingPaths(root)
+	if err != nil {
+		t.Fatalf("walk %q: %v", root, err)
+	}
+	for _, path := range paths {
+		t.Errorf("staging leftover after rollback: %q", path)
+	}
+}
+
+func atomicDotLeadingPaths(root string) ([]string, error) {
+	var paths []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if path != root && strings.HasPrefix(filepath.Base(path), ".") {
-			t.Errorf("staging leftover after rollback: %q", path)
+			paths = append(paths, path)
 		}
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("walk %q: %v", root, err)
-	}
+	return paths, err
 }
 
 func atomicRegularFiles(root string) ([]string, error) {
