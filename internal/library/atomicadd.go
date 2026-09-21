@@ -276,10 +276,8 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		staged = append(staged, rel)
 	}
 
-	// Spec §7.2 publishes before committing: the registry transaction is atomic
-	// and the renames are not, so the commit is the last thing that can fail.
-	// A final name is inert until its row is committed, because audio dispatch
-	// classifies against the committed namespace.
+	// Spec §7.2: renames first, commit last, so the one atomic step cannot be
+	// preceded by a failure. An uncommitted final name is inert to dispatch.
 	for i, row := range rows {
 		if err := writer.Publish(staged[i], row.VirtualPath); err != nil {
 			unwind()
@@ -322,9 +320,8 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	files := make([]AudioAddedFile, 0, len(plans))
 	for i, plan := range plans {
 		id, ns := intent.Files[i].ExternalID, intent.Files[i].ExternalIDNamespace
-		// The stored row is the truth for a projection that already exists: there
-		// is no update path, so a replay carrying a different identity is
-		// reported rather than applied or silently dropped.
+		// The stored row wins for an existing projection: there is no update path,
+		// so a replay with a different identity is reported, not applied.
 		if plan.Status == AudioProjectionPresent && plan.Existing != nil {
 			if plan.Existing.ExternalID != id || plan.Existing.ExternalIDNamespace != ns {
 				m.cfg.Logger.Printf("[LibraryAPI] WARNING: %s keeps stored identity %q/%q, request supplied %q/%q", plan.VirtualPath, plan.Existing.ExternalID, plan.Existing.ExternalIDNamespace, id, ns)

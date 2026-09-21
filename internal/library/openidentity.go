@@ -23,10 +23,8 @@ type TorrentFile struct {
 	Length int64
 }
 
-// ResolveOpenTarget picks the torrent file an Open serves.
-//
-// Audio takes the index the registry resolved and never guesses: the virtual
-// name is caller-chosen, so a size or name heuristic can land on another track.
+// ResolveOpenTarget picks the torrent file an Open serves. Audio takes the
+// registry's index: its name is caller-chosen, so a heuristic can pick another.
 func ResolveOpenTarget(section Section, hash string, urlIndex int, size int64, virtualPath string, files []TorrentFile) (OpenTarget, error) {
 	if IsAudioSection(section) {
 		if urlIndex <= 0 {

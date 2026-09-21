@@ -20,9 +20,8 @@ var (
 // that passed string validation still cannot be redirected by one planted later.
 const resolveBeneath = unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS
 
-// SectionWriter anchors every mutation to a pre-opened section root. String
-// containment alone is insufficient (spec §14.3): the parent components have to
-// be re-resolved through the kernel on each operation.
+// SectionWriter anchors every mutation to a pre-opened section root: spec §14.3
+// requires the parents be re-resolved by the kernel on each operation.
 type SectionWriter struct {
 	root *os.File
 }
@@ -201,9 +200,8 @@ func (w *SectionWriter) RemoveStaged(rel string) error {
 	return nil
 }
 
-// PruneEmptyDirs removes now-empty directories from relPath's parent upward,
-// stopping at the section root. rmdir cannot remove a non-empty directory, so
-// nothing another request is using is lost.
+// PruneEmptyDirs removes now-empty directories from relPath's parent up to the
+// root. rmdir cannot remove a non-empty one, so nothing in use is lost.
 func (w *SectionWriter) PruneEmptyDirs(relPath string) error {
 	if err := w.usable(); err != nil {
 		return err
