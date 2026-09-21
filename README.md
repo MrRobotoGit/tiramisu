@@ -50,6 +50,19 @@ automatically: a 1080p entry becomes 4K HDR without anyone asking. TV series
 follow the same path, fullpack-first, in a Plex-compatible folder layout. Add a
 title to your Plex cloud watchlist and it shows up within the hour.
 
+**Your music and audiobooks ride the same filesystem.** `music/` and
+`audiobooks/` sit next to `movies/` and `tv/` under the same mount, served by the
+same FUSE layer and filed through the same Library API. An album is added by
+exact path with a caller-supplied MusicBrainz or ASIN identity
+(`external_id` + `external_id_ns`), which is stored in the SQLite projection
+registry and written into the virtual file, so a release keeps a real identity
+instead of a filename guess. Audio projections are immutable and read-only to
+their clients: files answer `0444`, directories `0555`, and the mutations a
+scanner never needs (write open, truncate, rename, mkdir, chmod) are refused
+with `EROFS`, while a direct unlink gets `EPERM`. Playback is served live from
+the swarm exactly like video, so Plex and Plexamp index and play a lossless
+album that occupies no disk. FLAC for music; M4B, M4A and MP3 for audiobooks.
+
 **Playback quality is the reason for the rest.** These pieces exist to turn an
 unpredictable swarm into something a media player can trust:
 
@@ -77,7 +90,8 @@ install the `iptables REDIRECT` rules, all without a restart. The **peer
 blocklist** is optional and off by default; when enabled it is downloaded at
 startup, refreshed every 24 hours, and injected into the engine before any
 connection is made. A **Library API** (`/api/library/add`, `/remove`, `/list`)
-lets any HTTP client file or remove a title without touching the filesystem, and
+lets any HTTP client file or remove a title, movies, series, music and
+audiobooks alike, without touching the filesystem, and
 `hermes/SKILL.md` is the ready-made skill that teaches an AI agent to use it.
 All of it, engine included, ships as a single `tiramisu` binary.
 
