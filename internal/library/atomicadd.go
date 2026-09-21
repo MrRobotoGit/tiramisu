@@ -330,6 +330,7 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 				FileIndex:           row.FileIndex,
 				Size:                row.Size,
 				MtimeNS:             row.MtimeNS,
+				UpdatedAtNS:         row.UpdatedAtNS,
 				ExternalID:          row.ExternalID,
 				ExternalIDNamespace: row.ExternalIDNamespace,
 			})

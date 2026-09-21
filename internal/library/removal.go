@@ -108,6 +108,7 @@ func (m *Manager) RemoveAudio(ctx context.Context, req RemoveRequest) (*AudioRem
 			FileIndex:           row.FileIndex,
 			Size:                row.Size,
 			MtimeNS:             row.MtimeNS,
+			UpdatedAtNS:         row.UpdatedAtNS,
 			ExternalID:          row.ExternalID,
 			ExternalIDNamespace: row.ExternalIDNamespace,
 		})

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -551,6 +552,10 @@ type AudioProjection struct {
 	FileIndex   int
 	Size        int64
 	MtimeNS     int64
+	// UpdatedAtNS is the registry's last commit time for this projection. Directory
+	// mtimes are derived from the newest one below them, so a directory changes when
+	// its committed child set does and at no other time.
+	UpdatedAtNS int64
 	// Caller-supplied identity, carried so the VFS can put it on the playback
 	// state a webhook later matches against. Empty when the caller supplied none.
 	ExternalID          string
@@ -678,4 +683,35 @@ func CommittedProjectionFor(sourcePath, fullPath string, owned AudioOwnership) (
 		return AudioProjection{}, false
 	}
 	return l.Lookup(class.Section, rel)
+}
+
+// DirMtime returns the newest commit time among the committed projections below
+// dirRel in section: the directory's deterministic modification time. Hydration, reads,
+// restarts and rolled-back staging cannot move it; a committed add or replace does. ok
+// is false when no committed projection lives below the directory, and the caller then
+// keeps the filesystem's own value.
+func (n *AudioNamespace) DirMtime(section Section, dirRel string) (time.Time, bool) {
+	prefix := ""
+	if dirRel != "" && dirRel != "." {
+		prefix = dirRel + "/"
+	}
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	var newest int64
+	found := false
+	for path, p := range n.entries {
+		if path.Section != section || p.UpdatedAtNS == 0 {
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(path.VirtualPath, prefix) {
+			continue
+		}
+		if !found || p.UpdatedAtNS > newest {
+			newest, found = p.UpdatedAtNS, true
+		}
+	}
+	if !found {
+		return time.Time{}, false
+	}
+	return time.Unix(0, newest), true
 }

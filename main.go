@@ -1011,12 +1011,37 @@ func (d *VirtualDirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 	out.Mode = syscall.S_IFDIR | 0755
 	// Projected audio directories are read-only to their clients (spec 4); the API
 	// owns every mutation, so 0555 is the honest answer.
-	if isAudioSectionPath(d.physicalPath) {
+	if section, rel, ok := audioSectionRel(d.physicalPath); ok {
 		out.Mode = syscall.S_IFDIR | 0555
+		// Spec 7: an audio directory's mtime moves when its committed child set does,
+		// and at no other time. Deriving it from the registry rows also keeps a
+		// rolled-back staging file from leaving a spurious timestamp behind.
+		if mtime, found := globalAudioNamespace.DirMtime(section, rel); found {
+			ts := sanitizeTime(mtime)
+			out.Mtime, out.Atime, out.Ctime = ts, ts, ts
+		}
 	}
 	out.Size = 4096
 
 	return 0
+}
+
+// audioSectionRel splits a physical path into its audio section and the section-relative
+// directory path. ok is false outside music/ and audiobooks/.
+func audioSectionRel(fullPath string) (library.Section, string, bool) {
+	rel, err := filepath.Rel(physicalSourcePath, fullPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	section := library.Section(parts[0])
+	if !library.IsAudioSection(section) {
+		return "", "", false
+	}
+	if len(parts) == 1 {
+		return section, "", true
+	}
+	return section, strings.Join(parts[1:], "/"), true
 }
 
 // forceCloseVirtualFile terminates the active pump and closes all open handles for a
