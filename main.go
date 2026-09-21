@@ -317,21 +317,26 @@ func resolveTargetFile(url string, targetSize int64, physicalPath string) (strin
 		}
 	}
 
+	section, _ := library.SectionForPath(physicalSourcePath, physicalPath)
+
 	// The engine's list is shared state, so it is copied before sorting. IDs are
-	// assigned from the sorted order, the same way GoStorm assigns them.
+	// assigned from the sorted order, the same way GoStorm assigns them. Audio never
+	// reads this list - its identity comes from the registry - so a music scan does
+	// not pay for a copy and sort of the whole resident file list on every Open.
 	var files []library.TorrentFile
-	if t := web.BTS.GetTorrent(metainfo.NewHashFromHex(hashStr)); t != nil {
-		resident := append([]*torrent.File(nil), t.Files()...)
-		sort.Slice(resident, func(i, j int) bool {
-			return tsutils.CompareStrings(resident[i].Path(), resident[j].Path())
-		})
-		files = make([]library.TorrentFile, 0, len(resident))
-		for i, f := range resident {
-			files = append(files, library.TorrentFile{Index: i + 1, Path: f.Path(), Length: f.Length()})
+	if !library.IsAudioSection(section) {
+		if t := web.BTS.GetTorrent(metainfo.NewHashFromHex(hashStr)); t != nil {
+			resident := append([]*torrent.File(nil), t.Files()...)
+			sort.Slice(resident, func(i, j int) bool {
+				return tsutils.CompareStrings(resident[i].Path(), resident[j].Path())
+			})
+			files = make([]library.TorrentFile, 0, len(resident))
+			for i, f := range resident {
+				files = append(files, library.TorrentFile{Index: i + 1, Path: f.Path(), Length: f.Length()})
+			}
 		}
 	}
 
-	section, _ := library.SectionForPath(physicalSourcePath, physicalPath)
 	target, err := library.ResolveOpenTarget(section, hashStr, urlIndex, targetSize, physicalPath, files)
 	if err != nil {
 		return "", 0, err
@@ -582,6 +587,9 @@ func (r *VirtualMkvRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	if entries, found := globalDirCache.Get(r.sourcePath); found {
 		return &nfsDirStream{entries: entries}, 0
 	}
+	// Snapshot the generation before the walk: a concurrent invalidate must not be
+	// overwritten by this listing landing after it.
+	generation := globalDirCache.Generation(r.sourcePath)
 
 	entries, err := os.ReadDir(r.sourcePath)
 	if err != nil {
@@ -609,7 +617,7 @@ func (r *VirtualMkvRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		})
 	}
 
-	globalDirCache.Put(r.sourcePath, result)
+	globalDirCache.PutIfGeneration(r.sourcePath, result, generation)
 
 	return &nfsDirStream{entries: result}, 0
 }
@@ -674,6 +682,9 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 	if entries, found := globalDirCache.Get(d.physicalPath); found {
 		return &nfsDirStream{entries: entries}, 0
 	}
+	// Snapshot the generation before the walk: a concurrent invalidate must not be
+	// overwritten by this listing landing after it.
+	generation := globalDirCache.Generation(d.physicalPath)
 
 	entries, err := os.ReadDir(d.physicalPath)
 	if err != nil {
@@ -703,7 +714,7 @@ func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Err
 		}
 	}
 
-	globalDirCache.Put(d.physicalPath, result)
+	globalDirCache.PutIfGeneration(d.physicalPath, result, generation)
 
 	return &nfsDirStream{entries: result}, 0
 }
@@ -836,8 +847,26 @@ func invalidateSyncRemovedPath(path string) {
 	if metaCache != nil {
 		metaCache.Delete(path)
 	}
-	globalDirCache.Delete(filepath.Dir(path))
-	// Covers removed directories too (empty season/show dir cleanup).
+	// The file's own directory and every ancestor up to the source root: adding the
+	// first track of an album changes the listing of each directory on the way up, and
+	// a Readdir of any of them inside the TTL would otherwise miss it. Deleting the
+	// path itself covers removed directories too (empty season/show cleanup).
+	if physicalSourcePath == "" {
+		globalDirCache.Delete(filepath.Dir(path))
+	} else {
+		dir := filepath.Dir(path)
+		for strings.HasPrefix(dir, physicalSourcePath) {
+			globalDirCache.Delete(dir)
+			if dir == physicalSourcePath {
+				break
+			}
+			next := filepath.Dir(dir)
+			if next == dir {
+				break
+			}
+			dir = next
+		}
+	}
 	globalDirCache.Delete(path)
 }
 
