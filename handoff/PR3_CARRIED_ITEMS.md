@@ -6,6 +6,29 @@ re-derive any of it.
 
 ---
 
+## Status at the close of the PR 2 hardening branch (2026-09-21)
+
+| # | Item | Status | Where |
+|---|------|--------|-------|
+| 1 | Staged transaction crash recovery | **done** | `2111423`, rollback-only, wired in `startup.go` |
+| 2 | `resolveTargetFile` hot-path cost | **done** | `e0beb0c`, the audio branch skips the engine file-list copy |
+| 3 | External identity on replay | **open — decision required** | unchanged: the stored row wins and the disagreement is logged |
+| 4 | `Remove` does not unpublish | **done** | `8da6d99`, mark → unpublish → unlink → prune → forget, exact path only |
+| 5 | `WriteAudioStub` unreachable | **done** | `db7dfd7`, deleted; `AudioStubBytes` + `SectionWriter` is the only writer |
+| 6 | Directory fsync after rename | **done** | `2dcc000`, both directories, `EINVAL`/`ENOTSUP` tolerated on the fallback |
+
+Also closed in the same round: a directory listing can no longer land after its
+invalidation (`e0beb0c`, `DirCache` generation), and the live-namespace
+consistency fix from the round-3 audit (`dc37c2b`).
+
+Residual introduced by removal: a crash between the `removing` mark and the row
+delete leaves a `removing` row whose stub is already gone. A retry of the same
+path completes it, but startup does not yet sweep `removing` rows, so a crashed
+removal stays invisible until then. Not reachable through the API without a
+crash.
+
+---
+
 ## 1. BLOCKING — crash recovery for a staged transaction (spec §7.4)
 
 ### What is wrong
