@@ -250,6 +250,16 @@ func (b *StartupCacheBuilder) reconcileAudio() {
 		globalAudioNamespace.MarkUnavailable()
 		return
 	}
+
+	// Transactions that crashed between the final rename and the registry commit are
+	// rolled back before anything reads committed rows or publishes the namespace.
+	if recovered, err := library.RecoverStagedAudioTransactions(stateDB, b.sourcePath, b.logger); err != nil {
+		b.logger.Printf("Audio recovery failed: %v", err)
+		b.incrementErrors()
+	} else if recovered > 0 {
+		b.logger.Printf("Audio recovery: rolled back %d staged transaction(s)", recovered)
+	}
+
 	result, err := vfs.ReconcileAudio(stateDB, globalInodeMap, b.sourcePath)
 	if err != nil {
 		b.logger.Printf("Audio reconciliation failed: %v", err)
