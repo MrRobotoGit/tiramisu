@@ -704,9 +704,7 @@ func TestAddAudio_PartlyPresentAlbum_E5_E19(t *testing.T) {
 	before := make(map[string]identity)
 	for i := 0; i < 3; i++ {
 		path := filepath.Join(f.musicRoot, filepath.FromSlash(requests[i].Path))
-		if err := WriteAudioStub(path, "http://old.invalid/stream", files[i].Length, "magnet:?old", "", ""); err != nil {
-			t.Fatalf("create existing stub %q: %v", path, err)
-		}
+		writeExistingStub(t, path, "http://old.invalid/stream", files[i].Length, "magnet:?old")
 		content, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -822,9 +820,7 @@ func TestAddAudio_FailedRequestPreservesPresentProjection_E7_E9(t *testing.T) {
 	f := newAtomicFixture(t, files, present)
 	f.engine.torrents = []TorrentStats{{Hash: atomicAddHash}}
 	presentPath := filepath.Join(f.musicRoot, filepath.FromSlash(presentRequest.Path))
-	if err := WriteAudioStub(presentPath, "http://old.invalid/existing", files[0].Length, "magnet:?existing", "", ""); err != nil {
-		t.Fatal(err)
-	}
+	writeExistingStub(t, presentPath, "http://old.invalid/existing", files[0].Length, "magnet:?existing")
 	before, err := os.ReadFile(presentPath)
 	if err != nil {
 		t.Fatal(err)
@@ -924,9 +920,7 @@ func TestAddAudio_RenameFailureRollsBackCreatedAndPreservesPresent_E22_E23(t *te
 	f.engine.torrents = []TorrentStats{{Hash: atomicAddHash}}
 
 	presentPath := filepath.Join(f.musicRoot, filepath.FromSlash(presentRequest.Path))
-	if err := WriteAudioStub(presentPath, "http://old.invalid/existing", files[0].Length, "magnet:?existing", "", ""); err != nil {
-		t.Fatal(err)
-	}
+	writeExistingStub(t, presentPath, "http://old.invalid/existing", files[0].Length, "magnet:?existing")
 	presentBefore, err := os.ReadFile(presentPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1367,4 +1361,21 @@ func atomicRegularFiles(root string) ([]string, error) {
 		return nil
 	})
 	return files, err
+}
+
+// writeExistingStub plants a stub the way an earlier successful add would have left
+// it: rendered through the production renderer, written directly because these tests
+// only need the file to exist.
+func writeExistingStub(t *testing.T, path, streamURL string, size int64, magnet string) {
+	t.Helper()
+	data, err := AudioStubBytes(streamURL, size, magnet, "", "")
+	if err != nil {
+		t.Fatalf("AudioStubBytes: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create stub directory: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write existing stub: %v", err)
+	}
 }

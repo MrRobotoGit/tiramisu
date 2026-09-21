@@ -11,20 +11,34 @@ import (
 	"tiramisu/internal/vfs"
 )
 
-func TestWriteAudioStub(t *testing.T) {
+func TestAudioStubBytes(t *testing.T) {
 	const (
 		streamURL = "https://example.invalid/stream?link=audio-hash&index=7"
 		size      = int64(4 * 1024 * 1024)
 		magnet    = "magnet:?xt=urn:btih:audio-hash"
 	)
 
-	t.Run("B1_B2_B3_B6 creates the tree and writes audio metadata", func(t *testing.T) {
+	t.Run("B1_B2_B3_B6 renders audio metadata and the writer creates the tree", func(t *testing.T) {
 		root := t.TempDir()
-		path := filepath.Join(root, string(SectionMusic), "Artist", "Album", "01 - Track_a1b2c3d4.flac")
-
-		if err := WriteAudioStub(path, streamURL, size, magnet, "", ""); err != nil {
-			t.Fatalf("WriteAudioStub: %v", err)
+		sectionRoot := filepath.Join(root, string(SectionMusic))
+		if err := os.Mkdir(sectionRoot, 0o755); err != nil {
+			t.Fatalf("create section root: %v", err)
 		}
+		writer, err := OpenSectionWriter(sectionRoot)
+		if err != nil {
+			t.Fatalf("OpenSectionWriter: %v", err)
+		}
+		defer writer.Close()
+
+		rel := "Artist/Album/01 - Track_a1b2c3d4.flac"
+		data, err := AudioStubBytes(streamURL, size, magnet, "", "")
+		if err != nil {
+			t.Fatalf("AudioStubBytes: %v", err)
+		}
+		if _, err := writer.WriteStagedIdentity(rel, data); err != nil {
+			t.Fatalf("WriteStagedIdentity: %v", err)
+		}
+		path := filepath.Join(sectionRoot, filepath.FromSlash(rel))
 
 		meta, err := vfs.ReadMetadataFromFileWithLimits(path, vfs.AudioSizeLimits)
 		if err != nil {
@@ -37,12 +51,12 @@ func TestWriteAudioStub(t *testing.T) {
 			t.Errorf("B3 metadata IMDb ID = %q, want empty", meta.ImdbID)
 		}
 
-		data, err := os.ReadFile(path)
+		written, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read written stub: %v", err)
 		}
 		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(data, &fields); err != nil {
+		if err := json.Unmarshal(written, &fields); err != nil {
 			t.Fatalf("B2 stub is not valid JSON: %v", err)
 		}
 		if _, ok := fields["imdb"]; ok {
@@ -64,8 +78,8 @@ func TestWriteAudioStub(t *testing.T) {
 			path string
 			mode os.FileMode
 		}{
-			{"B6 artist directory", filepath.Join(root, string(SectionMusic), "Artist"), 0o755},
-			{"B6 album directory", filepath.Join(root, string(SectionMusic), "Artist", "Album"), 0o755},
+			{"B6 artist directory", filepath.Join(sectionRoot, "Artist"), 0o755},
+			{"B6 album directory", filepath.Join(sectionRoot, "Artist", "Album"), 0o755},
 			{"B6 stub file", path, 0o644},
 		} {
 			info, err := os.Stat(check.path)
@@ -77,51 +91,9 @@ func TestWriteAudioStub(t *testing.T) {
 			}
 		}
 	})
-
-	t.Run("B4 overwrites the complete previous stub", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), string(SectionAudiobooks), "Author", "Book", "Part 01.m4b")
-		if err := WriteAudioStub(path, streamURL+"&long-unused-suffix=must-disappear", size, magnet+"-long-unused-suffix", "", ""); err != nil {
-			t.Fatalf("write longer stub: %v", err)
-		}
-		if err := WriteAudioStub(path, "https://e.invalid/s", 1, "m", "", ""); err != nil {
-			t.Fatalf("overwrite with shorter stub: %v", err)
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read overwritten stub: %v", err)
-		}
-		var got struct {
-			URL    string `json:"url"`
-			Size   int64  `json:"size"`
-			Magnet string `json:"magnet"`
-		}
-		if err := json.Unmarshal(data, &got); err != nil {
-			t.Fatalf("B4 overwritten stub is not a single valid JSON value: %v", err)
-		}
-		want := struct {
-			URL    string `json:"url"`
-			Size   int64  `json:"size"`
-			Magnet string `json:"magnet"`
-		}{"https://e.invalid/s", 1, "m"}
-		if got != want {
-			t.Errorf("B4 overwritten metadata = %#v, want %#v", got, want)
-		}
-	})
-
-	t.Run("B5 unusable parent returns an error", func(t *testing.T) {
-		parent := filepath.Join(t.TempDir(), "regular-file")
-		if err := os.WriteFile(parent, []byte("not a directory"), 0o600); err != nil {
-			t.Fatalf("create regular-file parent: %v", err)
-		}
-		path := filepath.Join(parent, "Album", "Track.flac")
-		if err := WriteAudioStub(path, streamURL, size, magnet, "", ""); err == nil {
-			t.Fatal("B5 WriteAudioStub error = nil for a parent that is a regular file")
-		}
-	})
 }
 
-func TestWriteAudioStubExternalIdentity(t *testing.T) {
+func TestAudioStubBytesExternalIdentity(t *testing.T) {
 	const (
 		streamURL  = "https://example.invalid/audio"
 		size       = int64(8192)
@@ -131,12 +103,27 @@ func TestWriteAudioStubExternalIdentity(t *testing.T) {
 	)
 
 	t.Run("X9 identity and namespace round trip through the VFS reader", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), string(SectionMusic), "Artist", "Track.flac")
-		if err := WriteAudioStub(path, streamURL, size, magnet, externalID, externalNS); err != nil {
-			t.Fatalf("WriteAudioStub: %v", err)
+		root := t.TempDir()
+		sectionRoot := filepath.Join(root, string(SectionMusic))
+		if err := os.Mkdir(sectionRoot, 0o755); err != nil {
+			t.Fatalf("create section root: %v", err)
+		}
+		writer, err := OpenSectionWriter(sectionRoot)
+		if err != nil {
+			t.Fatalf("OpenSectionWriter: %v", err)
+		}
+		defer writer.Close()
+
+		rel := "Artist/Track.flac"
+		data, err := AudioStubBytes(streamURL, size, magnet, externalID, externalNS)
+		if err != nil {
+			t.Fatalf("AudioStubBytes: %v", err)
+		}
+		if _, err := writer.WriteStagedIdentity(rel, data); err != nil {
+			t.Fatalf("WriteStagedIdentity: %v", err)
 		}
 
-		meta, err := vfs.ReadMetadataFromFileWithLimits(path, vfs.AudioSizeLimits)
+		meta, err := vfs.ReadMetadataFromFileWithLimits(filepath.Join(sectionRoot, filepath.FromSlash(rel)), vfs.AudioSizeLimits)
 		if err != nil {
 			t.Fatalf("X9 read audio metadata: %v", err)
 		}
@@ -146,13 +133,9 @@ func TestWriteAudioStubExternalIdentity(t *testing.T) {
 	})
 
 	t.Run("X10 absent identity omits both JSON keys", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), string(SectionAudiobooks), "Author", "Book.m4b")
-		if err := WriteAudioStub(path, streamURL, size, magnet, "", ""); err != nil {
-			t.Fatalf("WriteAudioStub: %v", err)
-		}
-		data, err := os.ReadFile(path)
+		data, err := AudioStubBytes(streamURL, size, magnet, "", "")
 		if err != nil {
-			t.Fatalf("read stub: %v", err)
+			t.Fatalf("AudioStubBytes: %v", err)
 		}
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(data, &fields); err != nil {

@@ -8,25 +8,10 @@ import (
 	"path/filepath"
 )
 
-// WriteAudioStub writes an audio virtual stub, creating the tree on the way like
-// WriteStub does for video. The caller owns the virtual path, so the directories
-// under a section root only ever come into existence here.
-//
-// The imdb field WriteStub carries is absent rather than empty: audio has no IMDb
-// ID, and the engine must not invent a field a caller cannot fill.
-func WriteAudioStub(path, streamURL string, size int64, magnet, externalID, externalIDNS string) error {
-	data, err := AudioStubBytes(streamURL, size, magnet, externalID, externalIDNS)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
-}
-
-// AudioStubBytes renders a stub without touching the filesystem, so a contained
-// writer can place it through a pinned directory descriptor instead.
+// AudioStubBytes renders a stub without touching the filesystem, so the contained
+// writer can place it through a pinned directory descriptor instead. It replaced the
+// earlier WriteAudioStub, whose own MkdirAll/WriteFile bypassed the containment the
+// writer now guarantees.
 func AudioStubBytes(streamURL string, size int64, magnet, externalID, externalIDNS string) ([]byte, error) {
 	stub := map[string]interface{}{
 		"url":    streamURL,
