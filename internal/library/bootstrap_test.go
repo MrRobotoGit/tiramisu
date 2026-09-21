@@ -22,7 +22,7 @@ func TestWriteAudioStub(t *testing.T) {
 		root := t.TempDir()
 		path := filepath.Join(root, string(SectionMusic), "Artist", "Album", "01 - Track_a1b2c3d4.flac")
 
-		if err := WriteAudioStub(path, streamURL, size, magnet); err != nil {
+		if err := WriteAudioStub(path, streamURL, size, magnet, "", ""); err != nil {
 			t.Fatalf("WriteAudioStub: %v", err)
 		}
 
@@ -80,10 +80,10 @@ func TestWriteAudioStub(t *testing.T) {
 
 	t.Run("B4 overwrites the complete previous stub", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), string(SectionAudiobooks), "Author", "Book", "Part 01.m4b")
-		if err := WriteAudioStub(path, streamURL+"&long-unused-suffix=must-disappear", size, magnet+"-long-unused-suffix"); err != nil {
+		if err := WriteAudioStub(path, streamURL+"&long-unused-suffix=must-disappear", size, magnet+"-long-unused-suffix", "", ""); err != nil {
 			t.Fatalf("write longer stub: %v", err)
 		}
-		if err := WriteAudioStub(path, "https://e.invalid/s", 1, "m"); err != nil {
+		if err := WriteAudioStub(path, "https://e.invalid/s", 1, "m", "", ""); err != nil {
 			t.Fatalf("overwrite with shorter stub: %v", err)
 		}
 
@@ -115,10 +115,77 @@ func TestWriteAudioStub(t *testing.T) {
 			t.Fatalf("create regular-file parent: %v", err)
 		}
 		path := filepath.Join(parent, "Album", "Track.flac")
-		if err := WriteAudioStub(path, streamURL, size, magnet); err == nil {
+		if err := WriteAudioStub(path, streamURL, size, magnet, "", ""); err == nil {
 			t.Fatal("B5 WriteAudioStub error = nil for a parent that is a regular file")
 		}
 	})
+}
+
+func TestWriteAudioStubExternalIdentity(t *testing.T) {
+	const (
+		streamURL  = "https://example.invalid/audio"
+		size       = int64(8192)
+		magnet     = "magnet:?xt=urn:btih:external-id"
+		externalID = "  Release/AbC:DéF?x=Y  "
+		externalNS = "provider.example/Unknown-V1"
+	)
+
+	t.Run("X9 identity and namespace round trip through the VFS reader", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), string(SectionMusic), "Artist", "Track.flac")
+		if err := WriteAudioStub(path, streamURL, size, magnet, externalID, externalNS); err != nil {
+			t.Fatalf("WriteAudioStub: %v", err)
+		}
+
+		meta, err := vfs.ReadMetadataFromFileWithLimits(path, vfs.AudioSizeLimits)
+		if err != nil {
+			t.Fatalf("X9 read audio metadata: %v", err)
+		}
+		if meta.ExternalID != externalID || meta.ExternalIDNamespace != externalNS {
+			t.Errorf("X9 external identity = %q/%q, want exact %q/%q", meta.ExternalIDNamespace, meta.ExternalID, externalNS, externalID)
+		}
+	})
+
+	t.Run("X10 absent identity omits both JSON keys", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), string(SectionAudiobooks), "Author", "Book.m4b")
+		if err := WriteAudioStub(path, streamURL, size, magnet, "", ""); err != nil {
+			t.Fatalf("WriteAudioStub: %v", err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read stub: %v", err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(data, &fields); err != nil {
+			t.Fatalf("decode stub: %v", err)
+		}
+		for _, key := range []string{"external_id", "external_id_ns"} {
+			if _, ok := fields[key]; ok {
+				t.Errorf("X10 stub fields = %v, %q must be absent when no identity is supplied", fieldNames(fields), key)
+			}
+		}
+	})
+}
+
+func TestWriteStubVideoExternalIdentityCompatibility(t *testing.T) {
+	const (
+		streamURL = "https://example.invalid/video"
+		magnet    = "magnet:?xt=urn:btih:video"
+		imdbID    = "tt1234567"
+	)
+	path := filepath.Join(t.TempDir(), "movies", "Movie.mkv")
+	if err := WriteStub(path, streamURL, vfs.MinFileSize, magnet, imdbID); err != nil {
+		t.Fatalf("WriteStub: %v", err)
+	}
+	meta, err := vfs.ReadMetadataFromFile(path)
+	if err != nil {
+		t.Fatalf("X12 read video metadata: %v", err)
+	}
+	if meta.URL != streamURL || meta.Size != vfs.MinFileSize || meta.Path != path || meta.ImdbID != imdbID {
+		t.Errorf("X12 video metadata = %#v, want established URL, size, path, and IMDb ID", meta)
+	}
+	if meta.ExternalID != "" || meta.ExternalIDNamespace != "" {
+		t.Errorf("X12 video external identity = %q/%q, want both empty", meta.ExternalIDNamespace, meta.ExternalID)
+	}
 }
 
 func TestEnsureSectionRoots(t *testing.T) {

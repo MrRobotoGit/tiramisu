@@ -31,11 +31,16 @@ type AudioProjection struct {
 	MtimeNS         int64
 	Title           string
 	Magnet          string
-	State           AudioProjectionState
-	TxnID           string
-	StagingName     string
-	CreatedAtNS     int64
-	UpdatedAtNS     int64
+	// Caller-supplied external identity and its namespace ("musicbrainz",
+	// "asin", ...). Stored and returned verbatim, never interpreted: the engine
+	// holds the identity, the controller resolves it. Both empty when absent.
+	ExternalID          string
+	ExternalIDNamespace string
+	State               AudioProjectionState
+	TxnID               string
+	StagingName         string
+	CreatedAtNS         int64
+	UpdatedAtNS         int64
 }
 
 // The two conflicts are distinct because they become different API answers: a
@@ -43,12 +48,16 @@ type AudioProjection struct {
 var (
 	ErrAudioPathConflict   = errors.New("audio projection path conflict")
 	ErrAudioSourceConflict = errors.New("audio projection source conflict")
+	// ErrAudioIdentityIncomplete rejects half an external identity. A namespace
+	// alone identifies nothing, and an id without one cannot be resolved.
+	ErrAudioIdentityIncomplete = errors.New("audio projection external identity incomplete")
 )
 
 // audioProjectionColumns is the read order every scan below relies on.
 const audioProjectionColumns = `id, section, virtual_path, portable_path_key, hash, file_index,
 	source_path, size, mtime_ns, title, COALESCE(magnet, ''), state,
-	COALESCE(txn_id, ''), COALESCE(staging_name, ''), created_at_ns, updated_at_ns`
+	COALESCE(txn_id, ''), COALESCE(staging_name, ''), created_at_ns, updated_at_ns,
+	COALESCE(external_id, ''), COALESCE(external_id_ns, '')`
 
 // execAudioSchema creates the registry. UNIQUE(hash, file_index) carries no
 // section on purpose: one torrent file backs at most one projection anywhere.
@@ -82,6 +91,19 @@ CREATE INDEX IF NOT EXISTS idx_audio_projections_txn ON audio_projections(txn_id
 		return err
 	}
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (9, 'add audio_projections table')`)
+
+	// Schema 10, additive. A caller-supplied identity needs its namespace beside
+	// it: audio has no single identity space the way video has IMDb, so the id
+	// alone cannot be resolved. Both are engine-opaque.
+	if err := d.addColumn("audio_projections", "external_id",
+		`ALTER TABLE audio_projections ADD COLUMN external_id TEXT DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := d.addColumn("audio_projections", "external_id_ns",
+		`ALTER TABLE audio_projections ADD COLUMN external_id_ns TEXT DEFAULT ''`); err != nil {
+		return err
+	}
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (10, 'add audio_projections external identity')`)
 	return nil
 }
 
@@ -92,6 +114,16 @@ CREATE INDEX IF NOT EXISTS idx_audio_projections_txn ON audio_projections(txn_id
 func (d *DB) StageAudioProjections(txnID string, ps []AudioProjection) error {
 	if len(ps) == 0 {
 		return nil
+	}
+	// Checked before the transaction opens: half an identity is a caller error,
+	// not a conflict, and rejecting it after an insert would leave the batch
+	// half written for a fault the caller could have been told about up front.
+	for _, p := range ps {
+		if (p.ExternalID == "") != (p.ExternalIDNamespace == "") {
+			return fmt.Errorf("%w: %s/%s has id %q and namespace %q",
+				ErrAudioIdentityIncomplete, p.Section, p.VirtualPath,
+				p.ExternalID, p.ExternalIDNamespace)
+		}
 	}
 	tx, err := d.db.Begin()
 	if err != nil {
@@ -104,11 +136,11 @@ func (d *DB) StageAudioProjections(txnID string, ps []AudioProjection) error {
 			`INSERT INTO audio_projections
 			 (section, virtual_path, portable_path_key, hash, file_index, source_path,
 			  size, mtime_ns, title, magnet, state, txn_id, staging_name,
-			  created_at_ns, updated_at_ns)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  created_at_ns, updated_at_ns, external_id, external_id_ns)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			p.Section, p.VirtualPath, p.PortablePathKey, p.Hash, p.FileIndex, p.SourcePath,
 			p.Size, p.MtimeNS, p.Title, p.Magnet, string(AudioStaged), txnID, p.StagingName,
-			p.CreatedAtNS, p.UpdatedAtNS,
+			p.CreatedAtNS, p.UpdatedAtNS, p.ExternalID, p.ExternalIDNamespace,
 		)
 		if err != nil {
 			return classifyAudioConflict(tx, p, err)
@@ -171,7 +203,8 @@ func scanAudioProjection(row interface{ Scan(...any) error }) (*AudioProjection,
 	var p AudioProjection
 	err := row.Scan(&p.ID, &p.Section, &p.VirtualPath, &p.PortablePathKey, &p.Hash,
 		&p.FileIndex, &p.SourcePath, &p.Size, &p.MtimeNS, &p.Title, &p.Magnet,
-		&p.State, &p.TxnID, &p.StagingName, &p.CreatedAtNS, &p.UpdatedAtNS)
+		&p.State, &p.TxnID, &p.StagingName, &p.CreatedAtNS, &p.UpdatedAtNS,
+		&p.ExternalID, &p.ExternalIDNamespace)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +245,14 @@ func (d *DB) GetAudioProjection(section, virtualPath string) (*AudioProjection, 
 	return d.audioProjectionRow(
 		`SELECT `+audioProjectionColumns+` FROM audio_projections
 		 WHERE section = ? AND virtual_path = ?`, section, virtualPath)
+}
+
+// AudioProjectionByPortableKey returns the row owning a section's portable key.
+// That key has its own UNIQUE constraint, so virtual_path missing is not enough.
+func (d *DB) AudioProjectionByPortableKey(section, portableKey string) (*AudioProjection, bool, error) {
+	return d.audioProjectionRow(
+		`SELECT `+audioProjectionColumns+` FROM audio_projections
+		 WHERE section = ? AND portable_path_key = ?`, section, portableKey)
 }
 
 // AudioProjectionBySource returns the row owning a torrent file identity.

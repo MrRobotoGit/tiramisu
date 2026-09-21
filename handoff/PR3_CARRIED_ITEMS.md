@@ -1,0 +1,155 @@
+# Carried into PR 3 from PR 2
+
+Written 2026-09-21 at the close of PR 2. Each item states what is wrong, why it
+was not fixed in PR 2, and what "done" looks like, so PR 3 does not have to
+re-derive any of it.
+
+---
+
+## 1. BLOCKING — crash recovery for a staged transaction (spec §7.4)
+
+### What is wrong
+
+Startup reconciliation publishes only `committed` rows
+(`startup.go`, `globalAudioNamespace.Publish(committed)`). It has **no handling
+for `staged` transactions at all**. Spec §7.4 requires it:
+
+> Startup MUST reconcile durable mutation state before advertising audio paths.
+>
+> For a `staged` transaction:
+> - if **all** expected final stubs exist and validate against all staged rows,
+>   startup MAY promote the whole transaction to `committed`;
+> - otherwise startup MUST roll back the transaction as a unit, deleting only
+>   files that can be proven to belong to that transaction, then deleting
+>   staged rows.
+
+### Why it became urgent in PR 2
+
+PR 2 reordered publication to satisfy spec §7.2 — the renames now happen
+**before** the commit, so the single atomic transaction is last. That removed
+the partial-commit window the round-1 review found, and it was the right fix.
+
+It also changed what a crash leaves behind:
+
+| | before the reorder | after |
+|---|---|---|
+| crash after staging, before renames | staged rows + hidden dot-leading files | same |
+| crash after renames, before commit | *not reachable* | **staged rows + final names on disk** |
+
+The new state is **not a correctness break for readers**: audio dispatch
+classifies against the committed namespace, so an uncommitted final stub is
+inert, which is exactly the invariant §7.2 states one line below its sequence.
+
+The harm is that the path becomes **permanently unusable**. Publication uses
+`renameat2(RENAME_NOREPLACE)`, so every retry of that virtual path now fails
+with `ErrDestinationExists` (409) against a file no registry row owns. The
+caller cannot fix it through the API, because Remove works from the registry and
+there is no row. It needs a human with filesystem access.
+
+Orphan staged rows also accumulate and hold `(section, virtual_path)` and
+`(hash, file_index)` uniqueness, so they block re-adding by a second route.
+
+### Why PR 2 did not fix it
+
+Two honest reasons, in tension:
+
+- The maintainer's own three-PR split (issue #25) puts **"restart stability"**
+  in PR 3, alongside removal and cache invalidation.
+- Spec §7.4 sits **inside section 7**, the add/atomicity section this PR owns,
+  and PR 2 is what made the failure mode reachable.
+
+The judgement at the time was to document this rather than expand PR 2's diff
+further, six remediation slices in. A later review disagreed and argued it
+belongs in PR 2, since PR 2's own reordering is what made the state reachable.
+See B1 in `PR2_REMAINING_WORK.md` — the fix is not large either way.
+
+### What done looks like
+
+Minimal spec compliance is small, because §7.4 makes promotion optional
+(`MAY`) and rollback mandatory (`MUST`):
+
+1. At startup, before publishing the namespace, load every projection in state
+   `staged`, grouped by `txn_id` (`AudioProjectionsByState` already exists).
+2. For each transaction, **roll it back as a unit**: delete the final name and
+   the staging name for each row — both are derivable, `virtual_path` and
+   `staging_name` are columns — then `RollbackAudioProjections(txnID)`.
+3. Delete **only** files provable to belong to that transaction. §7.4 is
+   explicit that a physical audio-looking file with no registry row must not be
+   claimed from filename shape alone.
+4. Do it through `SectionWriter`, not pathnames. The containment work in PR 2
+   exists precisely so recovery cannot be redirected by a symlink, and a
+   recovery path that bypasses it reopens the hole.
+5. Log every rollback: an operator needs to know a request was undone.
+
+Promotion (the `MAY` half) is a later optimisation and should not be attempted
+before rollback works, because promoting on incomplete validation is worse than
+rolling back a request the caller can simply retry.
+
+**Tests it needs:** a staged transaction whose final names all exist; one where
+some do; one where none do; one where a symlink was planted in a parent
+component between the crash and the restart; and proof that a committed
+transaction is untouched by any of it.
+
+---
+
+## 2. HIGH — hot-path cost in `resolveTargetFile`
+
+`main.go`'s `resolveTargetFile` copies and sorts the **entire** resident torrent
+file list before calling `library.ResolveOpenTarget`, which for audio discards
+it immediately and returns the registry's index.
+
+The copy exists for a real reason — the engine's slice is shared state and the
+old code sorted it in place, which PR 2 fixed — but for audio it is pure waste
+on the most latency-sensitive path in the project, the one Plex hammers during a
+library scan.
+
+**Done looks like:** resolve the section first, and build the file list only for
+video. Keep the copy for video; the in-place sort must not come back.
+
+---
+
+## 3. MEDIUM — external identity on replay has no contract
+
+`AddAudio` returns `present` for a projection that already exists. If the replay
+carries a **different** external identity than the stored row, PR 2 keeps the
+stored value and logs the disagreement, because the registry has stage, commit
+and rollback but **no update path**.
+
+It is deliberately not a 409: a different MusicBrainz id does not change the
+bytes at the path, and conflating it with the content conflict would invent
+semantics the maintainer has not ruled on.
+
+**This needs a decision, not an implementation.** Should a replay with a new
+identity update the row, conflict, or stay ignored? The first needs an update
+path in the registry.
+
+---
+
+## 4. MEDIUM — `Remove` does not unpublish from the live namespace
+
+PR 2 added live publication on add. There is no corresponding unpublish, because
+audio Remove is PR 3 work. When Remove lands it must drop the namespace entry
+(`AudioNamespace.Remove` already exists) in the same order publication uses:
+registry first, then namespace, then cache invalidation.
+
+---
+
+## 5. LOW — `WriteAudioStub` is now unreachable
+
+The add path renders the stub with `AudioStubBytes` and writes it through
+`SectionWriter`, so `WriteAudioStub` has no caller. It is recorded as
+carried-forward dead code rather than deleted, because the maintainer asked for
+it specifically in the PR 1 review. **Deleting his requested API is his call.**
+
+---
+
+## 6. LOW — directory fsync is not performed
+
+Publication renames and then commits. The rename is not followed by an fsync of
+the containing directory, so a power loss can leave a committed row whose final
+name is not durable. Spec §7.2 lists "fsync as required" in its sequence.
+
+Relevant only to power loss, not process death, and it pairs naturally with
+item 1: the same recovery pass that handles staged transactions is what would
+repair a committed row whose stub is missing (§7.4 requires exactly that, using
+`mtime_ns` rather than recovery time).

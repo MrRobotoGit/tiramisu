@@ -64,6 +64,14 @@ type Config struct {
 	// row rather than a stub under the media directories, so the filesystem scan
 	// cannot see it.
 	AudioRegistry AudioRegistry
+	// AudioRoot is the physical directory holding the audio section roots.
+	AudioRoot string
+	// AudioProjections is the registry an audio add stages, commits and rolls
+	// back through. *metadb.DB satisfies it.
+	AudioProjections AudioProjectionRegistry
+	// PublishAudioPath, when set, adds a committed projection to the namespace
+	// the VFS dispatches on. Without it it is invisible until reconciliation.
+	PublishAudioPath func(AudioProjection)
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what
@@ -91,9 +99,16 @@ func New(cfg Config) *Manager {
 type Error struct {
 	Status  int
 	Message string
+	// Err is an optional sentinel a caller can route on with errors.Is, while
+	// Status stays what a client is told.
+	Err error
 }
 
 func (e *Error) Error() string { return e.Message }
+
+// Unwrap lets one value carry both an HTTP status and a sentinel, so a caller
+// can route on errors.Is while a client still gets a status.
+func (e *Error) Unwrap() error { return e.Err }
 
 func errf(status int, format string, args ...interface{}) *Error {
 	return &Error{Status: status, Message: fmt.Sprintf(format, args...)}
@@ -122,6 +137,9 @@ type AddRequest struct {
 	// to replace the episode with any release it scores above zero.
 	QualityScore int `json:"quality_score"`
 	MetadataWait int `json:"metadata_wait"`
+	// Files carries the requested projections for an audio type: one torrent
+	// can back many of them, and the caller names each one.
+	Files []AudioFileRequest `json:"files"`
 }
 
 // AddedFile is one stub written to disk.
