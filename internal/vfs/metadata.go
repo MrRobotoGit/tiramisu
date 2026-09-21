@@ -16,6 +16,12 @@ type Metadata struct {
 	URL, Path, ImdbID string
 	Size              int64
 	Mtime             time.Time
+	// Caller-supplied audio identity, carried so a playback state can remember
+	// what the projection was registered as. Video keeps using ImdbID.
+	ExternalID, ExternalIDNamespace string
+	// Audio marks a projection under music/ or audiobooks/. Audio projections are
+	// read-only to their clients: the mode bits and the mutation refusals key off it.
+	Audio bool
 }
 
 // FileMetadata represents metadata extracted from a virtual .mkv file
@@ -25,6 +31,12 @@ type FileMetadata struct {
 	Mtime  time.Time // File modification time
 	Path   string    // Original file path
 	ImdbID string    // IMDB ID from line 4 (optional)
+
+	// Caller-supplied external identity, engine-opaque. Video carries an IMDb ID;
+	// audio has no single identity space, so the namespace travels with the id.
+	// Both empty when the caller supplied none.
+	ExternalID          string
+	ExternalIDNamespace string
 }
 
 // Validation constants
@@ -48,11 +60,19 @@ type MkvJSON struct {
 	Size   int64  `json:"size"`
 	Magnet string `json:"magnet"`
 	Imdb   string `json:"imdb"`
+	// Omitted entirely when absent: the engine must not write an identity the
+	// caller did not supply.
+	ExternalID          string `json:"external_id,omitempty"`
+	ExternalIDNamespace string `json:"external_id_ns,omitempty"`
 }
 
 // ReadMetadataFromFile reads metadata from a virtual .mkv file.
 // Supports both JSON (new) and line-based (legacy) formats.
 func ReadMetadataFromFile(path string) (*FileMetadata, error) {
+	return ReadMetadataFromFileWithLimits(path, VideoSizeLimits)
+}
+
+func readMetadataFromFile(path string, limits SizeLimits) (*FileMetadata, error) {
 	// Get file info for mtime
 	info, err := os.Stat(path)
 	if err != nil {
@@ -70,14 +90,14 @@ func ReadMetadataFromFile(path string) (*FileMetadata, error) {
 
 	// Detect JSON format
 	if strings.HasPrefix(trimmed, "{") {
-		return parseJSONFormat(trimmed, info, path)
+		return parseJSONFormat(trimmed, info, path, limits)
 	}
 
 	// Legacy line-based format
-	return parseLineFormat(content, info, path)
+	return parseLineFormat(content, info, path, limits)
 }
 
-func parseJSONFormat(content string, info os.FileInfo, path string) (*FileMetadata, error) {
+func parseJSONFormat(content string, info os.FileInfo, path string, limits SizeLimits) (*FileMetadata, error) {
 	var j MkvJSON
 	if err := json.Unmarshal([]byte(content), &j); err != nil {
 		return nil, fmt.Errorf("parse JSON: %w", err)
@@ -88,7 +108,7 @@ func parseJSONFormat(content string, info os.FileInfo, path string) (*FileMetada
 		return nil, ErrInvalidURL
 	}
 
-	if j.Size < MinFileSize || j.Size > MaxFileSize {
+	if j.Size < limits.Min || j.Size > limits.Max {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidSize, j.Size)
 	}
 
@@ -99,15 +119,17 @@ func parseJSONFormat(content string, info os.FileInfo, path string) (*FileMetada
 	}
 
 	return &FileMetadata{
-		URL:    url,
-		Size:   j.Size,
-		Mtime:  info.ModTime(),
-		Path:   path,
-		ImdbID: imdbID,
+		URL:                 url,
+		Size:                j.Size,
+		Mtime:               info.ModTime(),
+		Path:                path,
+		ImdbID:              imdbID,
+		ExternalID:          j.ExternalID,
+		ExternalIDNamespace: j.ExternalIDNamespace,
 	}, nil
 }
 
-func parseLineFormat(content string, info os.FileInfo, path string) (*FileMetadata, error) {
+func parseLineFormat(content string, info os.FileInfo, path string, limits SizeLimits) (*FileMetadata, error) {
 	lines := strings.Split(content, "\n")
 	if len(lines) < 2 {
 		return nil, ErrInvalidFormat
@@ -127,7 +149,7 @@ func parseLineFormat(content string, info os.FileInfo, path string) (*FileMetada
 	}
 
 	// Validate size range (100MB - 100GB)
-	if size < MinFileSize || size > MaxFileSize {
+	if size < limits.Min || size > limits.Max {
 		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidSize, size)
 	}
 

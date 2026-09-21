@@ -59,6 +59,27 @@ type Config struct {
 	TVSection    int
 	// RefreshDelay is how long refreshes are coalesced for; 0 means the default.
 	RefreshDelay time.Duration
+	// AudioRegistry, when set, is asked whether an audio projection still
+	// references a torrent before it is dropped. An audio projection is a registry
+	// row rather than a stub under the media directories, so the filesystem scan
+	// cannot see it.
+	AudioRegistry AudioRegistry
+	// AudioRoot is the physical directory holding the audio section roots.
+	AudioRoot string
+	// AudioProjections is the registry an audio add stages, commits and rolls
+	// back through. *metadb.DB satisfies it.
+	AudioProjections AudioProjectionRegistry
+	// PublishAudioPath, when set, adds a committed batch of projections to the
+	// namespace the VFS dispatches on, in one update so a Readdir cannot see half an
+	// album. Without it the projections are invisible until reconciliation.
+	PublishAudioPath func([]AudioProjection)
+	// AudioRemoval is the removal half of the projection registry: claiming a row,
+	// forgetting it and counting references. *metadb.DB satisfies it; it is separate
+	// from AudioProjections so read-only seams stay minimal.
+	AudioRemoval AudioRemovalRegistry
+	// UnpublishAudioPath, when set, drops a removed projection from the namespace the
+	// VFS dispatches on, before its stub is unlinked.
+	UnpublishAudioPath func(AudioProjection)
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what
@@ -86,9 +107,16 @@ func New(cfg Config) *Manager {
 type Error struct {
 	Status  int
 	Message string
+	// Err is an optional sentinel a caller can route on with errors.Is, while
+	// Status stays what a client is told.
+	Err error
 }
 
 func (e *Error) Error() string { return e.Message }
+
+// Unwrap lets one value carry both an HTTP status and a sentinel, so a caller
+// can route on errors.Is while a client still gets a status.
+func (e *Error) Unwrap() error { return e.Err }
 
 func errf(status int, format string, args ...interface{}) *Error {
 	return &Error{Status: status, Message: fmt.Sprintf(format, args...)}
@@ -117,6 +145,9 @@ type AddRequest struct {
 	// to replace the episode with any release it scores above zero.
 	QualityScore int `json:"quality_score"`
 	MetadataWait int `json:"metadata_wait"`
+	// Files carries the requested projections for an audio type: one torrent
+	// can back many of them, and the caller names each one.
+	Files []AudioFileRequest `json:"files"`
 }
 
 // AddedFile is one stub written to disk.
@@ -138,6 +169,9 @@ type AddResponse struct {
 }
 
 type RemoveRequest struct {
+	// Type routes audio removal ("music", "audiobook"); video requests predate it
+	// and may omit it.
+	Type string `json:"type"`
 	Path string `json:"path"`
 	Hash string `json:"hash"`
 	// Blacklist keeps the release out: without it the sync engines are free to add the
@@ -663,6 +697,11 @@ func (m *Manager) deleteStub(_ context.Context, path string) error {
 // would look absent here and end up registered against a torrent this call had just
 // removed; two concurrent Removes would both see the last stub gone and drop twice.
 func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) {
+	// A stub that carries no hash identifies no torrent: findByHash would match on a
+	// bare "_.mkv" suffix and the engine would be asked to remove the empty hash.
+	if hash == "" {
+		return
+	}
 	// Never wait: whoever holds this hash is adding that same release right now, so
 	// either it needs the torrent or its own cleanup will drop it.
 	unlock, ok := m.hashLocks.TryLock(hash)
@@ -678,6 +717,20 @@ func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) {
 			return
 		}
 		if len(found) > 0 {
+			return
+		}
+	}
+	// Audio lives in the projection registry, not as a stub under the media
+	// directories, so the scan above cannot see it: one torrent behind both a movie
+	// and an album would be dropped from under the album. Staged and removing rows
+	// count too - a removal still in flight may have a reader holding the file open.
+	if m.cfg.AudioRegistry != nil {
+		referenced, err := m.cfg.AudioRegistry.AudioHashReferenced(hash)
+		if err != nil {
+			m.cfg.Logger.Printf("[LibraryAPI] WARNING: keeping torrent %s, cannot check its audio projections: %v", hash, err)
+			return
+		}
+		if referenced {
 			return
 		}
 	}

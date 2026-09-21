@@ -181,6 +181,11 @@ func SetDefaultConfig() {
 func GetResponsiveMode() bool {
 	btsetsMu.RLock()
 	defer btsetsMu.RUnlock()
+	// Readable before settings are loaded; a nil deref here would crash the read
+	// path during startup rather than fall back to the default.
+	if BTsets == nil {
+		return false
+	}
 	return BTsets.ResponsiveMode
 }
 
@@ -188,6 +193,9 @@ func GetResponsiveMode() bool {
 func GetAdaptiveShield() bool {
 	btsetsMu.RLock()
 	defer btsetsMu.RUnlock()
+	if BTsets == nil {
+		return false
+	}
 	return BTsets.AdaptiveShield
 }
 

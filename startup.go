@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"tiramisu/internal/cache"
+	"tiramisu/internal/library"
 	"tiramisu/internal/vfs"
 )
 
@@ -44,6 +45,15 @@ func NewStartupCacheBuilder(sourcePath string, metaCache *cache.LRUCache, logger
 func (b *StartupCacheBuilder) Start() {
 	b.logger.Printf("Starting cache pre-population from %s", b.sourcePath)
 
+	// Synchronous, and ahead of the goroutine: an install that predates audio has
+	// no music/ or audiobooks/ on disk, and a scanner reaching the mount before
+	// they exist sees a missing directory rather than an empty one. Not fatal --
+	// a source path this cannot use will fail louder elsewhere.
+	if err := library.EnsureSectionRoots(b.sourcePath); err != nil {
+		b.logger.Printf("Audio: cannot ensure section roots under %s: %v", b.sourcePath, err)
+		b.incrementErrors()
+	}
+
 	go func() {
 		// Process movies directory
 		moviesPath := filepath.Join(b.sourcePath, "movies")
@@ -56,6 +66,10 @@ func (b *StartupCacheBuilder) Start() {
 		if _, err := os.Stat(tvPath); err == nil {
 			b.processDirectory(tvPath, true) // Recursive
 		}
+
+		// Audio is driven by the projection registry rather than by walking the
+		// section: an unknown file under music/ is not adopted just for being there.
+		b.reconcileAudio()
 
 		// Log final statistics
 		duration := time.Since(b.startTime)
@@ -216,4 +230,153 @@ func (b *StartupCacheBuilder) incrementErrors() {
 	b.mu.Lock()
 	b.errors++
 	b.mu.Unlock()
+}
+
+// reconcileAudio rebuilds the VFS state the committed audio registry implies and
+// reports what it could not account for. Registered projections are counted as
+// found so the inode GC below does not prune them, and their hashes are kept so
+// cleanup can see that a torrent is still projected.
+func (b *StartupCacheBuilder) reconcileAudio() {
+	if stateDB == nil || globalInodeMap == nil {
+		// No authority source at all, so no projection can exist and the audio tree
+		// is legitimately empty. This must be Unavailable, not Unready: readers now
+		// block on Unreconciled, and an install with a music/ directory and StateDB
+		// disabled would hang on its first listing forever.
+		//
+		// Logged because "unavailable" is otherwise indistinguishable from "empty"
+		// to an operator: audio directories simply list nothing, with no clue that
+		// the registry was never consulted.
+		b.logger.Printf("Audio: no projection registry (state DB unavailable), audio sections serve empty listings")
+		globalAudioNamespace.MarkUnavailable()
+		return
+	}
+
+	// Transactions that crashed between the final rename and the registry commit are
+	// rolled back before anything reads committed rows or publishes the namespace.
+	//
+	// Known transient window, next to the namespace publish race: this pass runs while
+	// the HTTP server may already accept requests, and the prune below can remove a
+	// directory a live add created but has not filled yet. That add then fails with a
+	// spurious 5xx and self-heals at the next boot (its rows stay staged). Tolerated
+	// until startup and live adds are serialized.
+	if recovered, err := library.RecoverStagedAudioTransactions(stateDB, b.sourcePath, b.logger); err != nil {
+		b.logger.Printf("Audio recovery failed: %v", err)
+		b.incrementErrors()
+	} else if recovered > 0 {
+		b.logger.Printf("Audio recovery: rolled back %d staged transaction(s)", recovered)
+	}
+
+	// Removals that crashed after the removal mark are finishing work, not rollback:
+	// the stub goes and the row follows, so the path and the torrent reference stop
+	// being held by a dead projection.
+	if swept, err := library.RecoverRemovingAudioProjections(stateDB, b.sourcePath, b.logger); err != nil {
+		b.logger.Printf("Audio removal recovery failed: %v", err)
+		b.incrementErrors()
+	} else if swept > 0 {
+		b.logger.Printf("Audio recovery: finished %d interrupted removal(s)", swept)
+	}
+
+	result, err := vfs.ReconcileAudio(stateDB, globalInodeMap, b.sourcePath)
+	if err != nil {
+		b.logger.Printf("Audio reconciliation failed: %v", err)
+		b.incrementErrors()
+		globalAudioNamespace.MarkFailed(err)
+		return
+	}
+
+	// Only what the pass above accepted is cached. Reconciliation already rejected
+	// the unhealthy rows; caching them here would hand Open the very stub the
+	// registry disowned.
+	unhealthy := make(map[string]bool, len(result.MissingStub)+len(result.SizeMismatch))
+	for _, key := range result.MissingStub {
+		unhealthy[key] = true
+	}
+	for _, key := range result.SizeMismatch {
+		unhealthy[key] = true
+	}
+
+	// The namespace the VFS dispatches on: only what this pass accepted. Built
+	// before it is published so a scanner never sees a half-filled library.
+	var committed []library.AudioProjection
+
+	for _, section := range []string{"music", "audiobooks"} {
+		projections, err := stateDB.CommittedAudioProjections(section)
+		if err != nil {
+			// A partial namespace published as complete is worse than none: a
+			// scanner would read the missing half as deletions. Leave it unready.
+			b.logger.Printf("Audio reconciliation: cannot list %s, audio stays unavailable: %v", section, err)
+			b.incrementErrors()
+			globalAudioNamespace.MarkFailed(err)
+			return
+		}
+		for _, p := range projections {
+			if unhealthy[p.Section+"/"+p.VirtualPath] {
+				continue
+			}
+			committed = append(committed, library.AudioProjection{
+				Section: library.Section(p.Section), VirtualPath: p.VirtualPath,
+				Hash: p.Hash, FileIndex: p.FileIndex, Size: p.Size, MtimeNS: p.MtimeNS,
+				UpdatedAtNS: p.UpdatedAtNS,
+				ExternalID:  p.ExternalID, ExternalIDNamespace: p.ExternalIDNamespace,
+			})
+			path := filepath.Join(b.sourcePath, p.Section, filepath.FromSlash(p.VirtualPath))
+			meta, err := vfs.ReadMetadataFromFileWithLimits(path, vfs.AudioSizeLimits)
+			if err != nil {
+				continue
+			}
+			cached := &vfs.Metadata{
+				URL: meta.URL, Size: meta.Size, Mtime: meta.Mtime, Path: meta.Path, ImdbID: meta.ImdbID,
+			}
+			b.metaCache.Put(path, cached, approximateMetadataSize(cached))
+			b.mu.Lock()
+			b.foundFiles[path] = true
+			b.mu.Unlock()
+		}
+	}
+
+	// Publishing marks the namespace ready. Until this point audio enumeration
+	// fails rather than returning an empty directory, which a scanner would read
+	// as the user having deleted their library (spec 9).
+	//
+	// Merged, not replaced: a live add committed between this pass's registry read
+	// and this publish is absent from committed, and replacing would drop it from
+	// the mount although its row and its stub are both on disk.
+	globalAudioNamespace.PublishMerged(committed)
+	invalidateAudioDirCaches(committed)
+
+	b.logger.Printf("Audio reconciliation: %d projection(s) registered, %d missing stub(s), %d size mismatch(es), %d torrent(s) referenced",
+		result.Registered, len(result.MissingStub), len(result.SizeMismatch), len(result.ReferencedHashes))
+	for _, p := range result.MissingStub {
+		b.logger.Printf("Audio reconciliation: committed projection has no stub: %s", p)
+	}
+	for _, p := range result.SizeMismatch {
+		b.logger.Printf("Audio reconciliation: stub disagrees with the registry: %s", p)
+	}
+}
+
+// invalidateAudioDirCaches drops the cached listings for every directory holding a
+// committed projection, plus the section roots. Without this, an empty listing
+// cached while the namespace was unready would survive publication for the whole
+// dircache TTL and a scan in that window would still see nothing.
+func invalidateAudioDirCaches(committed []library.AudioProjection) {
+	if globalDirCache == nil {
+		return
+	}
+	dirs := map[string]bool{}
+	for _, section := range []string{"music", "audiobooks"} {
+		dirs[filepath.Join(physicalSourcePath, section)] = true
+	}
+	for _, p := range committed {
+		dir := filepath.Dir(filepath.Join(physicalSourcePath, string(p.Section), filepath.FromSlash(p.VirtualPath)))
+		for dir != physicalSourcePath && dir != "." && dir != string(filepath.Separator) {
+			if dirs[dir] {
+				break
+			}
+			dirs[dir] = true
+			dir = filepath.Dir(dir)
+		}
+	}
+	for dir := range dirs {
+		globalDirCache.Delete(dir)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"tiramisu/internal/gostorm/native"
+	"tiramisu/internal/library"
 	"tiramisu/internal/vfs"
 )
 
@@ -65,13 +66,13 @@ func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (bool, error) {
 	tr.addToBlacklist(fullHash, title)
 
 	// 3. Attempt to remove from GoStorm
-	err := tr.removeTorrent(fullHash)
+	removed, err := tr.removeTorrent(fullHash)
 	if err != nil {
 		tr.logger.Printf("AutoRemove: removal from GoStorm failed for %s: %v", fullHash[:8], err)
 		return false, nil // Return false but no error, as blacklist worked
 	}
 
-	return true, nil
+	return removed, nil
 }
 
 // extractHashFromFile reads the virtual mkv to get the hash.
@@ -208,12 +209,26 @@ func (tr *TorrentRemover) findFullHashBySuffix(suffix string) (string, string, e
 }
 
 // removeTorrent calls GoStorm API to remove a torrent
-func (tr *TorrentRemover) removeTorrent(hash string) error {
+func (tr *TorrentRemover) removeTorrent(hash string) (bool, error) {
+	// Unlinking a video stub must not take a torrent an audio projection is still
+	// projected from: audio lives in the registry, not as a file under the video
+	// directories, so nothing above this point can see it. Fails closed.
+	registry := audioOwnershipRegistry()
+	allowed, err := library.MayDropTorrent(registry, hash)
+	if err != nil {
+		tr.logger.Printf("AutoRemove: keeping torrent %s, cannot check its audio projections: %v", hash[:8], err)
+		return false, nil
+	}
+	if !allowed {
+		tr.logger.Printf("AutoRemove: keeping torrent %s, an audio projection still references it", hash[:8])
+		return false, nil
+	}
+
 	// Use Native Bridge to remove torrent
 	tr.nativeBridge.RemoveTorrent(hash)
 
 	if globalSyncCacheManager != nil {
 		globalSyncCacheManager.ClearNegativeCache(hash)
 	}
-	return nil
+	return true, nil
 }

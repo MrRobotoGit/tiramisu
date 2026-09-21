@@ -1,20 +1,21 @@
 ---
 name: tiramisu-manual-content-add
-description: "Use when adding a specific movie/TV release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.2.2
+description: "Use when adding a specific movie, TV, music or audiobook release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
+version: 4.3.0
 author: MrRobotoGit
 license: GPL-3.0-only
 metadata:
   hermes:
-    tags: [tiramisu, torrent, manual-add, mkv, library, plex, jellyfin, prowlarr]
+    tags: [tiramisu, torrent, manual-add, mkv, flac, audiobook, library, plex, jellyfin, plexamp, prowlarr]
     related_skills: [tiramisu-development]
 ---
 
 # Tiramisu Manual Content Addition
 
-How to add a specific movie or TV series to a Tiramisu library when the automated
-indexer sync missed it, replicating the same quality-scoring and virtual-file logic
-the sync engine uses. Deployment, operation and debugging live in
+How to add a specific movie, TV series, album or audiobook to a Tiramisu library
+when the automated indexer sync missed it, replicating the same quality-scoring and
+virtual-file logic the sync engine uses. Most of this skill is about video, because
+that is where the scoring lives; audio has its own contract and its own section. Deployment, operation and debugging live in
 `tiramisu-development`; this skill only covers getting one release into the library.
 
 Everything happens over HTTP against the control port: the server writes the
@@ -58,7 +59,9 @@ on the real filesystem, exposed by the FUSE layer with the declared full size.
    media server to rescan
 4. The FUSE layer presents each stub as a full-size virtual file
 
-Step 3 is one HTTP call. Knowing what it does server-side is still worth it: it
+Step 3 is one HTTP call for video. **Audio inverts step 2 and 3**: you name every
+file yourself and the engine only validates, so it is `inspect` then `add` — see
+[Audio: music and audiobooks](#audio-music-and-audiobooks). Knowing what it does server-side is still worth it: it
 is what lets you tell a bad pick from a broken deployment.
 
 ## What to report
@@ -214,6 +217,171 @@ tv/
   **movies use the LAST 8, episodes the FIRST 8.** That is what the server writes
   today, not a rule every stub on disk obeys: legacy entries can carry the other
   half. Match on the `hash` field of the entry, never on the filename fragment
+
+## Audio: music and audiobooks
+
+Two more libraries, `music` and `audiobooks`, siblings of `movies` and `tv` rather
+than children of a shared `audio/` parent. They take the same endpoints, but the
+contract is not the video one with a different word in `type`, and the differences
+are the part worth reading.
+
+**You name the files, the engine does not.** For a movie you pass metadata and the
+server derives the filename. For audio there is no metadata source to derive from:
+you supply the virtual path of every projection, and the engine only validates it.
+Nothing derives an album layout for you.
+
+**One torrent backs many projections.** An album is one torrent and N tracks, so an
+add carries a `files` array and either all of it lands or none of it does.
+
+**It is two calls, not one.** You cannot name a file you have not seen, so
+`inspect` first to get the source paths, then `add` mapping each one to the
+virtual path you want.
+
+### Step 1: inspect
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"hash":"<40 hex>","title":"20Ten","metadata_wait":60}' \
+  "{CTRL}/api/library/inspect"
+```
+
+```json
+{"hash":"9b3103673dfce0841cb41afa3a9f944f9ac7684d",
+ "files":[{"source_path":"Prince - 20Ten (2010) FLAC/01. Compassion.flac",
+           "file_index":1,"size":28461945}]}
+```
+
+`title` is required even here: a cold torrent has to be added to the engine to be
+read, and it needs a name. Metadata that never arrives is an error, not an empty
+list — "not ready" and "no files" are different answers, and the engine keeps them
+apart.
+
+### Step 2: add
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"type":"music","hash":"9b3103673dfce0841cb41afa3a9f944f9ac7684d","title":"20Ten",
+       "files":[
+         {"source_path":"Prince - 20Ten (2010) FLAC/01. Compassion.flac",
+          "path":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac",
+          "external_id":"f4a1...","external_id_ns":"musicbrainz"}
+       ]}' \
+  "{CTRL}/api/library/add"
+```
+
+The `_9ac7684d` on the path is the last 8 of the hash on the line above. It is
+not optional and the engine will not add it for you.
+
+| Field | Meaning |
+|-------|---------|
+| `type` | `music` or `audiobook`. **No aliases**: `musics`, `Music`, `audiobooks` are all `400`. Unlike the video types, a typo here is refused rather than silently falling back |
+| `hash` / `magnet` | as for video, but a `hash` that disagrees with the magnet's own BTIH is `400 hash_magnet_mismatch` and nothing is added |
+| `title` | the torrent's display name in the engine. It is not the folder name: that comes from the paths you pass |
+| `files[].source_path` | a `source_path` from `inspect`, verbatim |
+| `files[].path` | the virtual path inside the section. The directories are yours to choose and are created as needed, but the **filename must end in `_<hash8>` before the extension** — see below. A path without it is a `400` |
+| `files[].external_id` / `external_id_ns` | optional, both or neither. Opaque to the engine, stored and returned verbatim. `musicbrainz` for music, `asin` for audiobooks — this is the audio counterpart of the IMDB id, and what the webhook matcher pairs a Plexamp event against |
+
+**The extension is enforced per section** and is not a suggestion: `music` accepts
+only `.flac`, `audiobooks` accepts `.m4b`, `.m4a` and `.mp3`. The extension of
+`path` must also agree with the one of `source_path`, so a `.flac` source cannot
+be filed as `.mp3`.
+
+```json
+{"hash":"9b31...","title":"20Ten","type":"music","already_present":false,
+ "files":[{"path":"/mnt/torrserver/music/Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac",
+           "source_path":"Prince - 20Ten (2010) FLAC/01. Compassion.flac",
+           "file_index":1,"size":28461945,"mtime":"2026-09-21T12:09:48Z",
+           "state":"committed","external_id":"f4a1...","external_id_ns":"musicbrainz"}]}
+```
+
+`201` when it created them, `200` with `"already_present": true` when every
+requested projection was already there — a replay, and `mtime` stays what it was,
+so a present result never looks like it rewrote anything. `external_id` and
+`external_id_ns` are always in the response, empty when you sent none, so a client
+never has to branch on a missing key.
+
+**Audio requests are strict**: an unknown field is a `400`, where the video
+decoder stays lenient for callers that predate the endpoint. Bodies are capped at
+1 MiB.
+
+### Listing audio
+
+```bash
+curl -s "{CTRL}/api/library/list?type=music&limit=100"
+```
+
+**This answers an object, not an array.** The video types return a bare list;
+audio pages, because a library is thousands of tracks rather than hundreds of
+films:
+
+```json
+{"items":[{"type":"music","path":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac",
+           "hash":"9b31...","source_path":"...","file_index":1,
+           "external_id":"f4a1...","external_id_ns":"musicbrainz"}],
+ "next_cursor":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac"}
+```
+
+Pass `next_cursor` back as `cursor` until it comes back empty, and `prefix` to
+scope to one album instead of walking the section. The items are reconciliation
+data, not media metadata: enough to diff what you sent against what the engine
+holds, no more.
+
+### What the audio library looks like
+
+```
+music/
+└── <dirs you chose>/
+    └── <name you chose>_<HASH8>.flac
+audiobooks/
+└── <dirs you chose>/
+    └── <name you chose>_<HASH8>.m4b
+```
+
+The directory shape is the one you sent: nothing derives an album layout. The
+**filename is not**, because of one mandatory token.
+
+**`_<HASH8>` is required, and the engine never adds it for you.** It validates
+the name you sent and refuses it otherwise:
+
+```
+400  path "... - I-Cube Remix.flac" does not end in _<hash8>
+     for hash "4164a01e...388702de": library: invalid hash suffix
+```
+
+`HASH8` is the **last 8** lowercase hex characters of the info hash, the movie
+rule rather than the episode one, immediately before the extension:
+
+```
+hash  4164a01e677359c47d71f9e1982e58a8388702de
+path  Daft Punk - Homework (Remixes) (2022)/01 - Around The World_388702de.flac
+```
+
+Identity is still the `hash` and `external_id` of the entry, never the path: the
+suffix is a naming rule the engine enforces, not the key anything is looked up by.
+
+### Removing audio
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"type":"music","path":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac"}' \
+  "{CTRL}/api/library/remove"
+```
+
+**Exact path only, one projection at a time.** None of the video shortcuts apply:
+no `hash` form that removes every stub of a release, no prefix, no recursion. And
+`blacklist` is a `400` here, not a no-op — it is video lifecycle state and audio
+has no sync engine that would re-add a title.
+
+```json
+{"type":"music","path":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac",
+ "removed":true,"torrent_referenced":false}
+```
+
+`torrent_referenced` says whether other projections still point at that torrent.
+The torrent is never dropped by this call: while any row references it a
+fail-closed guard keeps it alive, and once none does it expires through the
+engine's own idle policy. Removing one track of an album therefore does not
+break the others, the same way removing one episode does not break a season pack.
 
 ## Episode gaps (TV)
 
