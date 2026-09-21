@@ -89,7 +89,7 @@ type startupWakeFake struct {
 	}
 }
 
-func (f *startupWakeFake) wake(magnet string, index int) error {
+func (f *startupWakeFake) wake(_ context.Context, magnet string, index int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, struct {
@@ -116,7 +116,7 @@ func startupReadTerminal(errno syscall.Errno) bool {
 	return errno == syscall.EIO || errno == syscall.ETIMEDOUT
 }
 
-func startupReadNode(path string, size int64, wake func(string, int) error) *VirtualMkvNode {
+func startupReadNode(path string, size int64, wake func(context.Context, string, int) error) *VirtualMkvNode {
 	return &VirtualMkvNode{vMeta: &vfs.Metadata{Path: path, URL: streamURL(hashA, idxA), Size: size}, wake: wake}
 }
 
@@ -299,7 +299,7 @@ func TestStartupRead_OpenCancelledWhileWakeBlockedReturnsEINTR(t *testing.T) {
 			path := e.phys("", tc.path)
 			started, release := make(chan struct{}), make(chan struct{})
 			var startOnce sync.Once
-			wake := func(string, int) error {
+			wake := func(context.Context, string, int) error {
 				startOnce.Do(func() { close(started) })
 				<-release
 				return errors.New("BT client not connected")

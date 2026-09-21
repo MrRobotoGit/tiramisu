@@ -891,7 +891,7 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 type VirtualMkvNode struct {
 	fs.Inode
 	vMeta *vfs.Metadata
-	wake  func(string, int) error // per-node activation dependency; wired at Open after RED
+	wake  func(context.Context, string, int) error // per-node activation dependency; wired at Open after RED
 }
 
 // Compile-time interface checks
@@ -947,8 +947,12 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	}
 	if wake != nil && magnetCandidate != "" {
 		if headReady {
+			// Open returns instantly here, so the activation must not inherit the
+			// request context: the kernel tears it down as soon as Open returns, and
+			// a background context lets the wake finish for the reader that is about
+			// to open the same path.
 			safeGo(func() {
-				_ = wake(magnetCandidate, urlFileIdx)
+				_ = wake(context.Background(), magnetCandidate, urlFileIdx)
 			})
 		} else {
 			if ctx.Err() != nil {
@@ -956,8 +960,11 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 			}
 			// A synchronous activation that cannot start is terminal: returning a
 			// handle here gives a scanner a file whose reads can never be served.
+			// The request context goes with it, so a cancelled Open makes the wake
+			// return (and release its semaphore token) instead of running to the
+			// metadata timeout detached.
 			activated := make(chan error, 1)
-			go func() { activated <- wake(magnetCandidate, urlFileIdx) }()
+			go func() { activated <- wake(ctx, magnetCandidate, urlFileIdx) }()
 			select {
 			case err := <-activated:
 				if err != nil {

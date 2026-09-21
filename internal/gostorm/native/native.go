@@ -31,7 +31,7 @@ type TorrentStats struct {
 type NativeClient struct {
 	// Stateless client
 	activeHashes  sync.Map      // Map[string]bool - Fast lookup for active torrents
-	wakeSemaphore chan struct{} // V239: Limit concurrent Wake calls (max 10)
+	wakeSemaphore chan struct{} // V239: Limit concurrent Wake calls (max 25)
 }
 
 // NewNativeClient creates a new native bridge client
@@ -70,16 +70,24 @@ func ActivePeers(hash string) int {
 }
 
 // Wake triggers the start of a torrent (Ghost -> Active) entirely in-memory
-// Synchronous & Deduplicated.
-func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
+// Synchronous & Deduplicated. The context bounds the call: a FUSE Open that the kernel
+// already cancelled must not keep the activation, and its semaphore token, alive for
+// the metadata timeout.
+func (c *NativeClient) Wake(ctx context.Context, magnetUrl string, fileIdx int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// V239-Semaphore: Guard against "Thread Exhaustion" during massive scans
 	select {
 	case c.wakeSemaphore <- struct{}{}:
 		defer func() { <-c.wakeSemaphore }()
 	default:
-		// Fail-Fast: If >10 Opens are pending, we drop the request to save the filesystem.
+		// Fail-Fast: If >25 Opens are pending, we drop the request to save the filesystem.
 		// Player will retry, or fail this specific file, but FUSE remains alive.
 		return fmt.Errorf("wake semaphore exhausted (system busy)")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	// 1. Parse Magnet/Link to get hash
 	spec, err := apiUtils.ParseLink(magnetUrl)
@@ -135,6 +143,10 @@ func (c *NativeClient) Wake(magnetUrl string, fileIdx int) error {
 				// counter counts occasions, not attempts.
 				log.Printf("[NativeBridge] Metadata timeout for %s", hash)
 				return fmt.Errorf("torrent metadata timeout (45s): %s", hash)
+			case <-ctx.Done():
+				// The caller is gone: stop waiting now so its semaphore token is
+				// released, rather than after the timeout.
+				return ctx.Err()
 			}
 		}
 		pieceLenKB := 0
