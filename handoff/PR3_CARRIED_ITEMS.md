@@ -21,11 +21,9 @@ Also closed in the same round: a directory listing can no longer land after its
 invalidation (`e0beb0c`, `DirCache` generation), and the live-namespace
 consistency fix from the round-3 audit (`dc37c2b`).
 
-Residual introduced by removal: a crash between the `removing` mark and the row
-delete leaves a `removing` row whose stub is already gone. A retry of the same
-path completes it, but startup does not yet sweep `removing` rows, so a crashed
-removal stays invisible until then. Not reachable through the API without a
-crash.
+Removal crash window closed in `5c3b814`: startup sweeps `removing` rows (stub
+away, prune, row delete) before reconciliation. `79e3b79` turns a stub replaced
+mid-removal into an explicit 409 instead of a silent `Removed: true`.
 
 ---
 
