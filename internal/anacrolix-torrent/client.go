@@ -1188,6 +1188,10 @@ func (t *Torrent) runHandshookConn(pc *PeerConn) error {
 	if cl.config.AggressivePeerManagement && t.warmupActive.Load() {
 		go t.churnIfUselessForWarmup(pc)
 	}
+	// Ungated by AggressivePeerManagement: sampling only reads counters for /metrics.
+	if t.peerSampleRunning.CompareAndSwap(false, true) {
+		go t.peerSampleWatchdog()
+	}
 	err := pc.mainReadLoop()
 	if err != nil {
 		return fmt.Errorf("main read loop: %w", err)
@@ -1232,6 +1236,7 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 		if now.Before(entry.until) {
 			if entry.probed {
 				t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] hash=%s dropping peer %v - still in %v cooldown after its second-chance probe also failed", t.infoHash.HexString(), pc.RemoteAddr, churnCooldownDur)
+				t.countChurnDrop(pc)
 				pc.drop()
 				t.cl.unlock()
 				return
@@ -1267,6 +1272,7 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 		t.churnCooldown = make(map[string]churnCooldownEntry)
 	}
 	t.churnCooldown[key] = churnCooldownEntry{until: time.Now().Add(churnCooldownDur), probed: giveSecondChance}
+	t.countChurnDrop(pc)
 	pc.drop()
 }
 

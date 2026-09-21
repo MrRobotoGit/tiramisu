@@ -67,6 +67,10 @@ type (
 		ewmaSeeded       bool // false until first sample - distinguishes "no data" from a real zero rate
 		ewmaLastBytes    int64
 		ewmaLastSampleAt time.Time
+		// ewmaPressureSeen is true when the most recent sample was taken while the torrent was
+		// demanding throughput (warmup or playback pressure). Only then does the rate reflect
+		// what the peer can give rather than what we happened to ask for.
+		ewmaPressureSeen bool
 
 		// Stuff controlled by the local peer.
 		needRequestUpdate    string
