@@ -25,6 +25,12 @@ type Reader struct {
 	lastAccess int64
 	isUse      bool
 	mu         sync.Mutex
+
+	// Deadline-first scheduling state (deadline.go). Guarded by mu.
+	deadlineBytes  int64
+	deadlineRate   float64
+	deadlineRateAt time.Time
+	deadlineSetAt  time.Time
 }
 
 func newReader(file *torrent.File, cache *Cache) *Reader {
@@ -72,6 +78,8 @@ func (r *Reader) Seek(offset int64, whence int) (n int64, err error) {
 	r.offset = n
 	r.lastAccess = time.Now().Unix()
 	r.mu.Unlock()
+	// The old schedule describes pieces the player will no longer reach in that order.
+	r.clearDeadlines()
 	return
 }
 
@@ -92,6 +100,7 @@ func (r *Reader) Read(p []byte) (n int, err error) {
 		r.offset += int64(n)
 		r.lastAccess = time.Now().Unix()
 		r.mu.Unlock()
+		r.sampleConsumption(n)
 	} else {
 		log.TLogln("Torrent closed and readed")
 	}
@@ -118,6 +127,7 @@ func (r *Reader) ReadContext(ctx context.Context, p []byte) (n int, err error) {
 		r.offset += int64(n)
 		r.lastAccess = time.Now().Unix()
 		r.mu.Unlock()
+		r.sampleConsumption(n)
 	} else {
 		log.TLogln("Torrent closed and readed")
 	}
@@ -159,6 +169,7 @@ func (r *Reader) Close() {
 	r.isClosed = true
 	r.mu.Unlock()
 
+	r.clearDeadlines()
 	r.readerOff()
 
 	if len(r.file.Torrent().Files()) > 0 {
@@ -220,6 +231,8 @@ func (r *Reader) getOffsetRange() (int64, int64) {
 }
 
 func (r *Reader) checkReader() {
+	r.dropStaleDeadlines()
+
 	r.mu.Lock()
 	accessTime := r.lastAccess
 	r.mu.Unlock()

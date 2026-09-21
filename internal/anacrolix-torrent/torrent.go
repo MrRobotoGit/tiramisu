@@ -140,6 +140,18 @@ type Torrent struct {
 	lastPeerEwmaSampleAt time.Time
 	lastPeerEjectCheckAt time.Time
 	peerEjectCount       atomic.Int64
+	// Per-transport breakdown of the two proactive drop paths. The *UTP counters are subsets of
+	// their totals, so tcp = total - utp.
+	peerEjectCountUTP atomic.Int64
+	peerChurnCount    atomic.Int64
+	peerChurnCountUTP atomic.Int64
+
+	// pieceDeadlines holds the playout deadline per piece as Unix milliseconds (0 = none), the
+	// input to the deadline-first piece ordering in request-strategy. Guarded by t.cl's lock.
+	pieceDeadlines map[int]int64
+
+	// peerSampleRunning guards against spawning more than one peerSampleWatchdog per torrent.
+	peerSampleRunning atomic.Bool
 
 	// The order pieces are requested if there's no stronger reason like availability or priority.
 	pieceRequestOrder []int
@@ -1085,6 +1097,129 @@ func (t *Torrent) PeerEjectCount() int64 {
 	return t.peerEjectCount.Load()
 }
 
+// countChurnDrop records a warmup-probe churn drop, split by transport.
+func (t *Torrent) countChurnDrop(pc *PeerConn) {
+	t.peerChurnCount.Add(1)
+	if pc.utp() {
+		t.peerChurnCountUTP.Add(1)
+	}
+}
+
+// PeerEjectCountUTP returns the uTP subset of PeerEjectCount, for /metrics.
+func (t *Torrent) PeerEjectCountUTP() int64 {
+	return t.peerEjectCountUTP.Load()
+}
+
+// PeerChurnCounts returns the total and uTP-only count of warmup-probe churn drops
+// (see churnIfUselessForWarmup), for /metrics.
+func (t *Torrent) PeerChurnCounts() (total, utp int64) {
+	return t.peerChurnCount.Load(), t.peerChurnCountUTP.Load()
+}
+
+// SetStreamDeadlines declares the playout schedule for a contiguous run of pieces: piece
+// firstPiece is needed at first, and each subsequent piece one pieceInterval later. Pieces
+// outside the run keep whatever deadline they had, so a caller that walks the playhead forward
+// must pass the whole window it cares about each time. Deadlines outrank piece priority when the
+// request order is built, which is what makes a late piece beat a merely-next one.
+//
+// Passing an empty run clears every deadline (see ClearStreamDeadlines).
+func (t *Torrent) SetStreamDeadlines(firstPiece, numPieces int, first time.Time, pieceInterval time.Duration) {
+	if numPieces <= 0 || pieceInterval <= 0 {
+		return
+	}
+	t.cl.lock()
+	defer t.cl.unlock()
+	if t.pieceDeadlines == nil {
+		t.pieceDeadlines = make(map[int]int64, numPieces)
+	}
+	total := t.numPieces()
+	for n := 0; n < numPieces; n++ {
+		i := firstPiece + n
+		if i < 0 || i >= total {
+			continue
+		}
+		ms := first.Add(time.Duration(n) * pieceInterval).UnixMilli()
+		if t.pieceDeadlines[i] == ms {
+			continue // no reorder needed - the btree key would be identical
+		}
+		t.pieceDeadlines[i] = ms
+		t.updatePieceRequestOrderPiece(i)
+	}
+}
+
+// ClearStreamDeadlines drops every piece deadline, returning the torrent to pure priority
+// ordering.
+func (t *Torrent) ClearStreamDeadlines() {
+	t.ClearStreamDeadlinesRange(0, t.numPieces())
+}
+
+// ClearStreamDeadlinesRange drops deadlines for pieces in [firstPiece, firstPiece+numPieces).
+// Callers that own one file of a multi-file torrent pass their own range: a season pack can have
+// a reader per episode, and clearing the whole map on one reader's seek would strip the schedule
+// from an episode still playing.
+func (t *Torrent) ClearStreamDeadlinesRange(firstPiece, numPieces int) {
+	t.cl.lock()
+	defer t.cl.unlock()
+	if len(t.pieceDeadlines) == 0 || numPieces <= 0 {
+		return
+	}
+	end := firstPiece + numPieces
+	stale := make([]int, 0, len(t.pieceDeadlines))
+	for i := range t.pieceDeadlines {
+		if i >= firstPiece && i < end {
+			stale = append(stale, i)
+		}
+	}
+	for _, i := range stale {
+		delete(t.pieceDeadlines, i)
+	}
+	if len(t.pieceDeadlines) == 0 {
+		t.pieceDeadlines = nil
+	}
+	for _, i := range stale {
+		t.updatePieceRequestOrderPiece(i)
+	}
+}
+
+// PieceDeadlineCount reports how many pieces currently carry a playout deadline, for /metrics.
+func (t *Torrent) PieceDeadlineCount() int {
+	t.cl.rLock()
+	defer t.cl.rUnlock()
+	return len(t.pieceDeadlines)
+}
+
+// PeerTransportSnapshot is a point-in-time view of the connected swarm split by transport,
+// for /metrics. Rates are the per-connection throughput EWMAs maintained by samplePeerEwma,
+// so they are only populated while the hedge watchdog is running (warmup or playback pressure).
+type PeerTransportSnapshot struct {
+	ConnsTCP, ConnsUTP int
+	RatedTCP, RatedUTP int // connections with a seeded EWMA, i.e. counted in the rates below
+	UsefulBpsTCP       float64
+	UsefulBpsUTP       float64
+}
+
+// PeerTransportStats snapshots the current connections grouped by transport.
+func (t *Torrent) PeerTransportStats() (s PeerTransportSnapshot) {
+	t.cl.rLock()
+	defer t.cl.rUnlock()
+	for c := range t.conns {
+		if c.utp() {
+			s.ConnsUTP++
+			if c.ewmaSeeded {
+				s.RatedUTP++
+				s.UsefulBpsUTP += c.ewmaRate
+			}
+			continue
+		}
+		s.ConnsTCP++
+		if c.ewmaSeeded {
+			s.RatedTCP++
+			s.UsefulBpsTCP += c.ewmaRate
+		}
+	}
+	return
+}
+
 const (
 	hedgeWatchdogInterval = 250 * time.Millisecond
 	// hedgeCircuitBreakerThreshold: reviewed 2026-07-03 against real production data (a Plex
@@ -1121,15 +1256,49 @@ func (t *Torrent) hedgeWatchdog() {
 			t.cl.unlock()
 			return
 		}
-		if !t.cl.config.AggressivePeerManagement || t.hedgeCircuitOpen.Load() {
+		if !t.cl.config.AggressivePeerManagement {
+			t.cl.unlock()
+			continue
+		}
+		// Peer sampling and ejection deliberately run even while the hedge circuit breaker is
+		// open. They used to share the breaker's gate, which meant the whole subsystem switched
+		// off exactly when a dead-weight peer costs most - and since the breaker latches for a
+		// full cooldown, ejection had never fired once in production (peer_eject_count 0 against
+		// 29 PEXChurn drops). Sampling must never stop regardless: a gap in it ages
+		// ewmaLastSampleAt, so the first sample afterwards averages across the whole blind
+		// window.
+		now := time.Now()
+		t.samplePeerEwma(now)
+		t.maybeEjectOutlierPeer(now)
+		if t.hedgeCircuitOpen.Load() {
 			t.cl.unlock()
 			continue
 		}
 		t.checkAndFireHedges()
-		// Shares this tick's gates with hedging - same reasoning for skipping when saturated.
-		now := time.Now()
-		t.samplePeerEwma(now)
-		t.maybeEjectOutlierPeer(now)
+		t.cl.unlock()
+	}
+}
+
+// peerSampleWatchdog keeps every connection's throughput EWMA fresh for the whole life of the
+// swarm, instead of only while hedgeWatchdog happens to be running (which needs warmup or
+// playback pressure). Pure observation: it feeds /metrics and nothing else.
+//
+// Ejection deliberately stays on the hedge watchdog's schedule. With a full buffer we are
+// demand-limited, so peer rates measure what we asked for rather than what a peer can give, and
+// evicting the bottom of that distribution would be close to arbitrary. The same numbers are
+// still worth reporting - they just are not a fair basis for dropping a connection.
+func (t *Torrent) peerSampleWatchdog() {
+	defer t.peerSampleRunning.Store(false)
+	for {
+		// Ticks at half the sample interval so samplePeerEwma's own pacing gate is reliably
+		// met rather than skipped by a few milliseconds of jitter into the next round.
+		time.Sleep(peerEwmaSampleInterval / 2)
+		t.cl.lock()
+		if t.closed.IsSet() || len(t.conns) == 0 {
+			t.cl.unlock()
+			return
+		}
+		t.samplePeerEwma(time.Now())
 		t.cl.unlock()
 	}
 }
@@ -1330,7 +1499,9 @@ func (t *Torrent) samplePeerEwma(now time.Time) {
 		return
 	}
 	t.lastPeerEwmaSampleAt = now
+	underPressure := t.warmupActive.Load() || t.playbackPressureActive.Load()
 	for c := range t.conns {
+		c.ewmaPressureSeen = underPressure
 		useful := c._stats.BytesReadUsefulData.Int64()
 		if c.ewmaLastSampleAt.IsZero() {
 			c.ewmaLastBytes = useful
@@ -1370,7 +1541,9 @@ func (t *Torrent) maybeEjectOutlierPeer(now time.Time) {
 	rates := make([]float64, 0, len(t.conns))
 	var worst *PeerConn
 	for c := range t.conns {
-		if !c.ewmaSeeded || now.Sub(c.completedHandshake) < peerEjectGracePeriod {
+		// ewmaPressureSeen: never judge a peer on a rate measured while the buffer was full -
+		// that number says how much we asked for, not what the peer can deliver.
+		if !c.ewmaSeeded || !c.ewmaPressureSeen || now.Sub(c.completedHandshake) < peerEjectGracePeriod {
 			continue
 		}
 		rates = append(rates, c.ewmaRate)
@@ -1400,6 +1573,9 @@ func (t *Torrent) maybeEjectOutlierPeer(now time.Time) {
 	}
 	t.churnCooldown[churnCooldownKey(worst.RemoteAddr)] = churnCooldownEntry{until: now.Add(peerEjectCooldown)}
 	t.peerEjectCount.Add(1)
+	if worst.utp() {
+		t.peerEjectCountUTP.Add(1)
+	}
 	uselessFor := "ever (no useful chunk received)"
 	if !worst.lastUsefulChunkReceived.IsZero() {
 		uselessFor = now.Sub(worst.lastUsefulChunkReceived).Round(time.Second).String()

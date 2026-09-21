@@ -20,7 +20,12 @@ type (
 )
 
 func pieceOrderLess(i, j *pieceRequestOrderItem) multiless.Computation {
-	return multiless.New().Int(
+	// Deadline outranks priority: a piece the player needs at a known instant must be fetched
+	// before one that is merely "next". Pieces with no deadline all rank equal here and fall
+	// through to the priority ordering below, so non-streaming behaviour is unchanged.
+	return multiless.New().Int64(
+		i.state.deadlineRank(), j.state.deadlineRank(),
+	).Int(
 		int(j.state.Priority), int(i.state.Priority),
 		// TODO: Should we match on complete here to prevent churn when availability changes?
 	).Bool(
