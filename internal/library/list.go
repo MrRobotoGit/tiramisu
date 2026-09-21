@@ -26,6 +26,9 @@ type AudioListItem struct {
 	Size       int64  `json:"size"`
 	MtimeNS    int64  `json:"mtime_ns"`
 	State      string `json:"state"`
+
+	ExternalID          string `json:"external_id"`
+	ExternalIDNamespace string `json:"external_id_ns"`
 }
 
 type AudioListResponse struct {
@@ -89,6 +92,9 @@ func (m *Manager) ListAudio(req AudioListRequest) (*AudioListResponse, error) {
 			Size:       row.Size,
 			MtimeNS:    row.MtimeNS,
 			State:      string(row.State),
+
+			ExternalID:          row.ExternalID,
+			ExternalIDNamespace: row.ExternalIDNamespace,
 		})
 	}
 	return &AudioListResponse{Items: items, NextCursor: next}, nil

@@ -26,6 +26,9 @@ type AudioAddedFile struct {
 	FileIndex  int                   `json:"file_index"`
 	Size       int64                 `json:"size"`
 	Status     AudioProjectionStatus `json:"status"`
+
+	ExternalID          string `json:"external_id,omitempty"`
+	ExternalIDNamespace string `json:"external_id_ns,omitempty"`
 }
 
 type AudioAddResponse struct {
@@ -194,19 +197,21 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 			continue
 		}
 		rows = append(rows, metadb.AudioProjection{
-			Section:         string(intent.Section),
-			VirtualPath:     plan.VirtualPath,
-			PortablePathKey: PortablePathKey(plan.VirtualPath),
-			Hash:            engineHash,
-			FileIndex:       plan.Source.FileIndex,
-			SourcePath:      plan.Source.SourcePath,
-			Size:            plan.Source.Size,
-			MtimeNS:         now,
-			Title:           intent.Title,
-			Magnet:          magnet,
-			StagingName:     fmt.Sprintf(".tiramisu-%s-%d", txnID, i),
-			CreatedAtNS:     now,
-			UpdatedAtNS:     now,
+			Section:             string(intent.Section),
+			VirtualPath:         plan.VirtualPath,
+			PortablePathKey:     PortablePathKey(plan.VirtualPath),
+			Hash:                engineHash,
+			FileIndex:           plan.Source.FileIndex,
+			SourcePath:          plan.Source.SourcePath,
+			Size:                plan.Source.Size,
+			MtimeNS:             now,
+			Title:               intent.Title,
+			Magnet:              magnet,
+			ExternalID:          intent.Files[i].ExternalID,
+			ExternalIDNamespace: intent.Files[i].ExternalIDNamespace,
+			StagingName:         fmt.Sprintf(".tiramisu-%s-%d", txnID, i),
+			CreatedAtNS:         now,
+			UpdatedAtNS:         now,
 		})
 	}
 
@@ -279,13 +284,25 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	}
 
 	files := make([]AudioAddedFile, 0, len(plans))
-	for _, plan := range plans {
+	for i, plan := range plans {
+		id, ns := intent.Files[i].ExternalID, intent.Files[i].ExternalIDNamespace
+		// The stored row is the truth for a projection that already exists: there
+		// is no update path, so a replay carrying a different identity is
+		// reported rather than applied or silently dropped.
+		if plan.Status == AudioProjectionPresent && plan.Existing != nil {
+			if plan.Existing.ExternalID != id || plan.Existing.ExternalIDNamespace != ns {
+				m.cfg.Logger.Printf("[LibraryAPI] WARNING: %s keeps stored identity %q/%q, request supplied %q/%q", plan.VirtualPath, plan.Existing.ExternalID, plan.Existing.ExternalIDNamespace, id, ns)
+			}
+			id, ns = plan.Existing.ExternalID, plan.Existing.ExternalIDNamespace
+		}
 		files = append(files, AudioAddedFile{
-			Path:       plan.VirtualPath,
-			SourcePath: plan.Source.SourcePath,
-			FileIndex:  plan.Source.FileIndex,
-			Size:       plan.Source.Size,
-			Status:     plan.Status,
+			Path:                plan.VirtualPath,
+			SourcePath:          plan.Source.SourcePath,
+			FileIndex:           plan.Source.FileIndex,
+			Size:                plan.Source.Size,
+			Status:              plan.Status,
+			ExternalID:          id,
+			ExternalIDNamespace: ns,
 		})
 	}
 	return &AudioAddResponse{Hash: engineHash, Title: intent.Title, Type: req.Type, Files: files}, nil

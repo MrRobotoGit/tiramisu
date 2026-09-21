@@ -16,6 +16,10 @@ const maxAudioFilesPerAdd = 512
 type AudioFileRequest struct {
 	SourcePath string `json:"source_path"`
 	Path       string `json:"path"`
+	// Opaque caller identity and its namespace ("musicbrainz", "asin"). Stored
+	// and returned verbatim; both or neither.
+	ExternalID          string `json:"external_id,omitempty"`
+	ExternalIDNamespace string `json:"external_id_ns,omitempty"`
 }
 
 // AudioAddRequest is a structurally valid audio add with its type resolved.
@@ -69,6 +73,16 @@ func ValidateAudioAddRequest(req AddRequest) (AudioAddRequest, error) {
 		if seenSource[file.SourcePath] {
 			return AudioAddRequest{}, errf(http.StatusBadRequest, "files[%d].source_path %q is requested twice", i, file.SourcePath)
 		}
+		// Half an identity identifies nothing, whichever half is missing. A value
+		// that is entirely whitespace counts as absent; padding is preserved.
+		blankID := strings.TrimSpace(file.ExternalID) == ""
+		blankNS := strings.TrimSpace(file.ExternalIDNamespace) == ""
+		if blankID != blankNS {
+			return AudioAddRequest{}, errf(http.StatusBadRequest, "files[%d] has external id %q and namespace %q: %v", i, file.ExternalID, file.ExternalIDNamespace, metadb.ErrAudioIdentityIncomplete)
+		}
+		if blankID {
+			file.ExternalID, file.ExternalIDNamespace = "", ""
+		}
 		seenPath[file.Path] = true
 		seenSource[file.SourcePath] = true
 		// Stored as supplied: only title is trimmed, never a path.
@@ -93,7 +107,8 @@ func StatusForError(err error) int {
 		errors.Is(err, ErrExtensionUnsupported),
 		errors.Is(err, ErrExtensionMismatch),
 		errors.Is(err, ErrHashSuffixInvalid),
-		errors.Is(err, ErrSourceDuplicate):
+		errors.Is(err, ErrSourceDuplicate),
+		errors.Is(err, metadb.ErrAudioIdentityIncomplete):
 		return http.StatusBadRequest
 	case errors.Is(err, ErrSourceNotFound):
 		// Well formed but unsatisfiable, as pickFile already answers.
