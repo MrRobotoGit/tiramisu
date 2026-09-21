@@ -19,6 +19,9 @@ type Metadata struct {
 	// Caller-supplied audio identity, carried so a playback state can remember
 	// what the projection was registered as. Video keeps using ImdbID.
 	ExternalID, ExternalIDNamespace string
+	// Audio marks a projection under music/ or audiobooks/. Audio projections are
+	// read-only to their clients: the mode bits and the mutation refusals key off it.
+	Audio bool
 }
 
 // FileMetadata represents metadata extracted from a virtual .mkv file

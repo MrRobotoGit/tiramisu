@@ -621,6 +621,11 @@ func fillAttrFromStat(st *syscall.Stat_t, out *fuse.Attr) {
 func fillAttrFromMetadata(m *vfs.Metadata, out *fuse.Attr) {
 	out.Size = uint64(m.Size)
 	out.Mode = syscall.S_IFREG | 0644
+	// Audio projections are read-only to their clients (spec 4): the API owns every
+	// mutation, so a conventional scanner must never see a writable stub.
+	if m.Audio {
+		out.Mode = syscall.S_IFREG | 0444
+	}
 	out.Uid, out.Gid = gc().UID, gc().GID
 	out.Nlink = 1
 	// out.Blksize = 4096                                 // Standard block size
@@ -631,6 +636,36 @@ func fillAttrFromMetadata(m *vfs.Metadata, out *fuse.Attr) {
 	out.Mtime = ts
 	out.Atime = ts
 	out.Ctime = ts
+}
+
+// isAudioSectionPath reports whether an absolute path lives under a Phase 1 audio
+// section root (music/ or audiobooks/). Prefix matching is component-wise, so a
+// sibling like "music-videos/" is not an audio section.
+func isAudioSectionPath(fullPath string) bool {
+	rel, err := filepath.Rel(physicalSourcePath, fullPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) == 0 || parts[0] == "." {
+		return false
+	}
+	return library.IsAudioSection(library.Section(parts[0]))
+}
+
+// audioWriteIntent reports whether open flags ask for anything a read-only
+// projection cannot give.
+func audioWriteIntent(flags uint32) bool {
+	return flags&(syscall.O_WRONLY|syscall.O_RDWR|syscall.O_TRUNC|syscall.O_APPEND) != 0
+}
+
+// audioMutationErrno keeps every audio mutation on the deliberate EROFS the spec
+// requires; video keeps the untouched ENOSYS it has always answered with.
+func audioMutationErrno(fullPath string) syscall.Errno {
+	if isAudioSectionPath(fullPath) {
+		return syscall.EROFS
+	}
+	return syscall.ENOSYS
 }
 
 // VirtualMkvRoot - nodo radice per file virtuali .mkv
@@ -823,6 +858,31 @@ var _ fs.NodeReaddirer = (*VirtualDirNode)(nil)
 var _ fs.NodeLookuper = (*VirtualDirNode)(nil)
 var _ fs.NodeGetattrer = (*VirtualDirNode)(nil)
 var _ fs.NodeUnlinker = (*VirtualDirNode)(nil)
+var _ fs.NodeMkdirer = (*VirtualDirNode)(nil)
+var _ fs.NodeCreater = (*VirtualDirNode)(nil)
+var _ fs.NodeRenamer = (*VirtualDirNode)(nil)
+var _ fs.NodeSetattrer = (*VirtualDirNode)(nil)
+
+// Every mutation of an audio directory answers EROFS (spec 4); video directories keep
+// the untouched ENOSYS they have always answered with.
+func (d *VirtualDirNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	return nil, audioMutationErrno(filepath.Join(d.physicalPath, name))
+}
+
+func (d *VirtualDirNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	return nil, nil, 0, audioMutationErrno(filepath.Join(d.physicalPath, name))
+}
+
+func (d *VirtualDirNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	return audioMutationErrno(filepath.Join(d.physicalPath, name))
+}
+
+func (d *VirtualDirNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	if isAudioSectionPath(d.physicalPath) {
+		return syscall.EROFS
+	}
+	return syscall.ENOSYS
+}
 
 func (d *VirtualDirNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// Inside an audio section before reconciliation has published, the committed
@@ -949,6 +1009,11 @@ func (d *VirtualDirNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 
 	// Override ONLY Mode and Size to ensure directory permissions and Samba compliance
 	out.Mode = syscall.S_IFDIR | 0755
+	// Projected audio directories are read-only to their clients (spec 4); the API
+	// owns every mutation, so 0555 is the honest answer.
+	if isAudioSectionPath(d.physicalPath) {
+		out.Mode = syscall.S_IFDIR | 0555
+	}
 	out.Size = 4096
 
 	return 0
@@ -1091,9 +1156,25 @@ func (n *VirtualMkvNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse
 	return 0
 }
 
+var _ fs.NodeSetattrer = (*VirtualMkvNode)(nil)
+
+// Setattr refuses every metadata mutation of an audio projection: chmod, chown and
+// truncate are all API-owned (spec 4). Video keeps answering ENOSYS as before.
+func (n *VirtualMkvNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	if n.vMeta.Audio {
+		return syscall.EROFS
+	}
+	return syscall.ENOSYS
+}
+
 func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	if gc().LogLevel == "DEBUG" {
 		logger.Printf("=== OPEN VIRTUAL === path=%s", n.vMeta.Path)
+	}
+	// Read-only first: an audio projection refuses a writable open before any handle
+	// exists, so no write path ever has to exist behind it (spec 4).
+	if n.vMeta.Audio && audioWriteIntent(flags) {
+		return nil, 0, syscall.EROFS
 	}
 
 	// PROACTIVE CLEANUP TRIGGER (V246): must be sync before any Read() can arrive.
@@ -3201,6 +3282,7 @@ func getOrReadMeta(path string) (*vfs.Metadata, error) {
 				ImdbID:              fileMeta.ImdbID,
 				ExternalID:          fileMeta.ExternalID,
 				ExternalIDNamespace: fileMeta.ExternalIDNamespace,
+				Audio:               isAudioSectionPath(path),
 			}
 
 			metaCache.Put(path, m, approximateMetadataSize(m))
@@ -5695,6 +5777,7 @@ func audioProjectionMeta(fullPath string, p library.AudioProjection) *vfs.Metada
 		Path:                fullPath,
 		ExternalID:          p.ExternalID,
 		ExternalIDNamespace: p.ExternalIDNamespace,
+		Audio:               true,
 	}
 }
 
