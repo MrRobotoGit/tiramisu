@@ -232,6 +232,19 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 	}
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (8, 'add episode_gaps.last_attempt')`)
 
+	// Schema 11, additive: a playback state remembers the audio projection's
+	// caller-supplied identity, so a music webhook can match the session after a
+	// restart the way an IMDb id matches a movie.
+	if err := d.addColumn("playback_states", "external_id",
+		`ALTER TABLE playback_states ADD COLUMN external_id TEXT DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := d.addColumn("playback_states", "external_id_ns",
+		`ALTER TABLE playback_states ADD COLUMN external_id_ns TEXT DEFAULT ''`); err != nil {
+		return err
+	}
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (11, 'add playback_states external identity')`)
+
 	// The audio projection registry is authoritative for audio ownership, so it is
 	// created here rather than lazily: a missing table would look like an empty
 	// library and let cleanup drop torrents that are still projected.

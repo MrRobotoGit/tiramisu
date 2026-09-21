@@ -102,12 +102,14 @@ func (m *Manager) RemoveAudio(ctx context.Context, req RemoveRequest) (*AudioRem
 	// to disappear. A reader that already resolved the path keeps its handle.
 	if m.cfg.UnpublishAudioPath != nil {
 		m.cfg.UnpublishAudioPath(AudioProjection{
-			Section:     Section(row.Section),
-			VirtualPath: row.VirtualPath,
-			Hash:        row.Hash,
-			FileIndex:   row.FileIndex,
-			Size:        row.Size,
-			MtimeNS:     row.MtimeNS,
+			Section:             Section(row.Section),
+			VirtualPath:         row.VirtualPath,
+			Hash:                row.Hash,
+			FileIndex:           row.FileIndex,
+			Size:                row.Size,
+			MtimeNS:             row.MtimeNS,
+			ExternalID:          row.ExternalID,
+			ExternalIDNamespace: row.ExternalIDNamespace,
 		})
 	}
 

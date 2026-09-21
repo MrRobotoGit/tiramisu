@@ -17,8 +17,8 @@ func TestAudioExternalIDSchemaFreshDatabase(t *testing.T) {
 	if err := db.SQL().QueryRow(`SELECT MAX(version) FROM schema_version`).Scan(&maxVersion); err != nil {
 		t.Fatalf("X1 query maximum schema version: %v", err)
 	}
-	if maxVersion != 10 {
-		t.Errorf("X1 maximum schema version = %d, want 10", maxVersion)
+	if maxVersion != 11 {
+		t.Errorf("X1 maximum schema version = %d, want 11", maxVersion)
 	}
 	var versionNineDescription, versionTenDescription string
 	if err := db.SQL().QueryRow(`SELECT description FROM schema_version WHERE version = 9`).Scan(&versionNineDescription); err != nil {
@@ -46,10 +46,14 @@ func TestAudioExternalIDMigrationFromSchemaNine(t *testing.T) {
 	want.UpdatedAtNS = committedAt
 
 	// Derive the old database from the real schema rather than duplicating its DDL:
-	// only the v10 additions are removed after seeding through the public API.
+	// only the v10 additions are removed after seeding through the public API. The
+	// v11 playback identity moves with it so the simulated version is really 9.
 	for _, statement := range []string{
 		`ALTER TABLE audio_projections DROP COLUMN external_id_ns`,
 		`ALTER TABLE audio_projections DROP COLUMN external_id`,
+		`ALTER TABLE playback_states DROP COLUMN external_id_ns`,
+		`ALTER TABLE playback_states DROP COLUMN external_id`,
+		`DELETE FROM schema_version WHERE version = 11`,
 		`DELETE FROM schema_version WHERE version = 10`,
 	} {
 		if _, err := db.SQL().Exec(statement); err != nil {

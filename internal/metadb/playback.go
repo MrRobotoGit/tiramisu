@@ -7,16 +7,18 @@ import (
 
 // PlaybackRecord represents a persisted playback state entry.
 type PlaybackRecord struct {
-	Path        string
-	Hash        string
-	ImdbID      string
-	OpenedAt    time.Time
-	ConfirmedAt time.Time
-	IsHealthy   bool
-	IsStopped   bool
-	LastReadAt  time.Time
-	ReadCount   int64
-	LastSeekOff int64
+	Path         string
+	Hash         string
+	ImdbID       string
+	ExternalID   string
+	ExternalIDNS string
+	OpenedAt     time.Time
+	ConfirmedAt  time.Time
+	IsHealthy    bool
+	IsStopped    bool
+	LastReadAt   time.Time
+	ReadCount    int64
+	LastSeekOff  int64
 }
 
 // SavePlaybackState persists a playback state record to SQLite.
@@ -33,9 +35,9 @@ func (d *DB) SavePlaybackState(rec *PlaybackRecord) error {
 	}
 	_, err := d.db.Exec(`
 		INSERT OR REPLACE INTO playback_states
-		(path, hash, imdb_id, opened_at, confirmed_at, is_healthy, is_stopped, last_read_at, read_count, last_seek_off)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rec.Path, rec.Hash, rec.ImdbID,
+		(path, hash, imdb_id, external_id, external_id_ns, opened_at, confirmed_at, is_healthy, is_stopped, last_read_at, read_count, last_seek_off)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rec.Path, rec.Hash, rec.ImdbID, rec.ExternalID, rec.ExternalIDNS,
 		openedAt, confirmedAt,
 		boolToInt(rec.IsHealthy),
 		boolToInt(rec.IsStopped),
@@ -50,7 +52,7 @@ func (d *DB) SavePlaybackState(rec *PlaybackRecord) error {
 func (d *DB) LoadPlaybackStates(maxAge time.Duration) ([]*PlaybackRecord, error) {
 	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
 	rows, err := d.db.Query(`
-		SELECT path, hash, imdb_id, opened_at, confirmed_at, is_healthy, is_stopped, last_read_at, read_count, last_seek_off
+		SELECT path, hash, imdb_id, COALESCE(external_id, ''), COALESCE(external_id_ns, ''), opened_at, confirmed_at, is_healthy, is_stopped, last_read_at, read_count, last_seek_off
 		FROM playback_states
 		WHERE COALESCE(last_read_at, confirmed_at, opened_at) > ?`, cutoff)
 	if err != nil {
@@ -63,7 +65,7 @@ func (d *DB) LoadPlaybackStates(maxAge time.Duration) ([]*PlaybackRecord, error)
 		rec := &PlaybackRecord{}
 		var openedAt, confirmedAt, lastReadAt sql.NullString
 		var isHealthy, isStopped int
-		err := rows.Scan(&rec.Path, &rec.Hash, &rec.ImdbID, &openedAt, &confirmedAt, &isHealthy, &isStopped, &lastReadAt, &rec.ReadCount, &rec.LastSeekOff)
+		err := rows.Scan(&rec.Path, &rec.Hash, &rec.ImdbID, &rec.ExternalID, &rec.ExternalIDNS, &openedAt, &confirmedAt, &isHealthy, &isStopped, &lastReadAt, &rec.ReadCount, &rec.LastSeekOff)
 		if err != nil {
 			continue
 		}
@@ -95,14 +97,14 @@ func (d *DB) DeletePlaybackState(path string) error {
 // anchoring on the next open. Returns (nil, nil) when no row exists.
 func (d *DB) LoadPlaybackStateByPath(path string) (*PlaybackRecord, error) {
 	row := d.db.QueryRow(`
-		SELECT path, hash, imdb_id, opened_at, confirmed_at, is_healthy, is_stopped, last_read_at, read_count, last_seek_off
+		SELECT path, hash, imdb_id, COALESCE(external_id, ''), COALESCE(external_id_ns, ''), opened_at, confirmed_at, is_healthy, is_stopped, last_read_at, read_count, last_seek_off
 		FROM playback_states
 		WHERE path = ?`, path)
 
 	rec := &PlaybackRecord{}
 	var openedAt, confirmedAt, lastReadAt sql.NullString
 	var isHealthy, isStopped int
-	err := row.Scan(&rec.Path, &rec.Hash, &rec.ImdbID, &openedAt, &confirmedAt, &isHealthy, &isStopped, &lastReadAt, &rec.ReadCount, &rec.LastSeekOff)
+	err := row.Scan(&rec.Path, &rec.Hash, &rec.ImdbID, &rec.ExternalID, &rec.ExternalIDNS, &openedAt, &confirmedAt, &isHealthy, &isStopped, &lastReadAt, &rec.ReadCount, &rec.LastSeekOff)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

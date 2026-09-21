@@ -551,6 +551,10 @@ type AudioProjection struct {
 	FileIndex   int
 	Size        int64
 	MtimeNS     int64
+	// Caller-supplied identity, carried so the VFS can put it on the playback
+	// state a webhook later matches against. Empty when the caller supplied none.
+	ExternalID          string
+	ExternalIDNamespace string
 }
 
 // Path returns the projection's namespace key.

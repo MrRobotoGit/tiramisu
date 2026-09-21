@@ -324,12 +324,14 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		batch := make([]AudioProjection, 0, len(rows))
 		for _, row := range rows {
 			batch = append(batch, AudioProjection{
-				Section:     intent.Section,
-				VirtualPath: row.VirtualPath,
-				Hash:        row.Hash,
-				FileIndex:   row.FileIndex,
-				Size:        row.Size,
-				MtimeNS:     row.MtimeNS,
+				Section:             intent.Section,
+				VirtualPath:         row.VirtualPath,
+				Hash:                row.Hash,
+				FileIndex:           row.FileIndex,
+				Size:                row.Size,
+				MtimeNS:             row.MtimeNS,
+				ExternalID:          row.ExternalID,
+				ExternalIDNamespace: row.ExternalIDNamespace,
 			})
 		}
 		m.cfg.PublishAudioPath(batch)

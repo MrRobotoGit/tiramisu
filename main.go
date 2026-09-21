@@ -113,14 +113,19 @@ var tailFillTargets sync.Map // path -> tailFillTarget
 
 // PlaybackState traccia lo stato di una sessione di visione reale
 type PlaybackState struct {
-	mu          sync.RWMutex
-	Path        string
-	Hash        string // InfoHash for GoStorm priority management
-	ImdbID      string // IMDB ID from MKV line 4, used for webhook matching
-	OpenedAt    time.Time
-	ConfirmedAt time.Time // Set when Plex webhook arrives
-	IsHealthy   bool      // Confirmed by Plex
-	IsStopped   bool      // Set on explicit media.stop webhook
+	mu     sync.RWMutex
+	Path   string
+	Hash   string // InfoHash for GoStorm priority management
+	ImdbID string // IMDB ID from MKV line 4, used for webhook matching
+	// ExternalID/ExternalIDNamespace carry the audio projection's registered
+	// identity ("musicbrainz", "asin", ...) so a music webhook can match the
+	// session the same way a movie webhook matches on ImdbID.
+	ExternalID          string
+	ExternalIDNamespace string
+	OpenedAt            time.Time
+	ConfirmedAt         time.Time // Set when Plex webhook arrives
+	IsHealthy           bool      // Confirmed by Plex
+	IsStopped           bool      // Set on explicit media.stop webhook
 	// V750: Inferred playback detection (self-healing when webhook is lost)
 	ReadCount   int64
 	LastSeekOff int64
@@ -161,6 +166,13 @@ func (ps *PlaybackState) GetImdbID() string {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
 	return ps.ImdbID
+}
+
+// GetExternalIdentity returns the audio projection identity and its namespace.
+func (ps *PlaybackState) GetExternalIdentity() (string, string) {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.ExternalID, ps.ExternalIDNamespace
 }
 
 // LastSignOfLife is the later of the open and the webhook confirmation.
@@ -210,6 +222,32 @@ var readBufferPool *sync.Pool
 
 // reImdbID matches "imdb://tt1234567" in the Guid array of Plex webhook payloads.
 var reImdbID = regexp.MustCompile(`"imdb://(tt\d+)"`)
+
+// reMbid matches "mbid://<uuid>" in Plex webhook payloads for music. A track
+// payload can carry several: the recording, its release group and the artist.
+var reMbid = regexp.MustCompile(`"mbid://([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"`)
+
+// webhookExternalIDs collects every MusicBrainz id in the payload, lowercased and
+// deduplicated. Matching tries the whole set because the controller chose which one
+// to register at add time and the engine cannot tell which of them the webhook means.
+func webhookExternalIDs(payloadStr string) []string {
+	matches := reMbid.FindAllStringSubmatch(payloadStr, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(matches))
+	ids := make([]string, 0, len(matches))
+	for _, m := range matches {
+		id := strings.ToLower(m[1])
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 var reEmptyNumber = regexp.MustCompile(`"(\w+)":\s*,`)
 
 var activeHandles sync.Map      // key: *MkvHandle, value: bool
@@ -1012,10 +1050,12 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 
 	if val, exists := playbackRegistry.Load(n.vMeta.Path); !exists {
 		playbackRegistry.Store(n.vMeta.Path, &PlaybackState{
-			Path:     n.vMeta.Path,
-			Hash:     hashStr,
-			ImdbID:   n.vMeta.ImdbID,
-			OpenedAt: time.Now(),
+			Path:                n.vMeta.Path,
+			Hash:                hashStr,
+			ImdbID:              n.vMeta.ImdbID,
+			ExternalID:          n.vMeta.ExternalID,
+			ExternalIDNamespace: n.vMeta.ExternalIDNamespace,
+			OpenedAt:            time.Now(),
 		})
 	} else {
 		if val != nil {
@@ -3034,11 +3074,13 @@ func getOrReadMeta(path string) (*vfs.Metadata, error) {
 			}
 
 			m = &vfs.Metadata{
-				URL:    fileMeta.URL,
-				Size:   fileMeta.Size,
-				Mtime:  fileMeta.Mtime,
-				Path:   fileMeta.Path,
-				ImdbID: fileMeta.ImdbID,
+				URL:                 fileMeta.URL,
+				Size:                fileMeta.Size,
+				Mtime:               fileMeta.Mtime,
+				Path:                fileMeta.Path,
+				ImdbID:              fileMeta.ImdbID,
+				ExternalID:          fileMeta.ExternalID,
+				ExternalIDNamespace: fileMeta.ExternalIDNamespace,
 			}
 
 			metaCache.Put(path, m, approximateMetadataSize(m))
@@ -3536,8 +3578,9 @@ type exactMatchEntry struct {
 
 // exactMatchKeys carries the webhook-side keys used by pass-1 matching.
 type exactMatchKeys struct {
-	imdbID    string
-	basenames []string
+	imdbID      string
+	externalIDs []string
+	basenames   []string
 }
 
 // findExactMatch selects the pass-1 match among the registry entries.
@@ -3568,6 +3611,37 @@ func findExactMatch(keys exactMatchKeys, entries []exactMatchEntry) (string, *Pl
 			if imdb := e.state.GetImdbID(); imdb != "" && imdb == keys.imdbID {
 				return e.path, e.state
 			}
+		}
+	}
+	// Audio identity: an album's musicbrainz id is shared by every track, so when
+	// more than one state carries it the most recent sign of life is the session the
+	// webhook is about — first-match would as often stop the wrong track.
+	if len(keys.externalIDs) > 0 {
+		want := make(map[string]bool, len(keys.externalIDs))
+		for _, id := range keys.externalIDs {
+			want[strings.ToLower(id)] = true
+		}
+		var bestPath string
+		var bestState *PlaybackState
+		var bestAt time.Time
+		for _, e := range entries {
+			if e.state == nil {
+				continue
+			}
+			id, ns := e.state.GetExternalIdentity()
+			if id == "" || !want[strings.ToLower(id)] {
+				continue
+			}
+			if ns != "" && !strings.EqualFold(ns, "musicbrainz") {
+				continue
+			}
+			sign := e.state.LastSignOfLife()
+			if bestState == nil || sign.After(bestAt) {
+				bestPath, bestState, bestAt = e.path, e.state, sign
+			}
+		}
+		if bestState != nil {
+			return bestPath, bestState
 		}
 	}
 	return "", nil
@@ -3726,6 +3800,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		if m := reImdbID.FindStringSubmatch(payloadStr); len(m) > 1 {
 			webhookImdbID = m[1]
 		}
+		webhookMbidIDs := webhookExternalIDs(payloadStr)
 
 		// Pass 1: Exact matches only (filename, IMDB ID).
 		var basenames []string
@@ -3737,7 +3812,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		exactMatch, exactState := findExactMatch(
-			exactMatchKeys{imdbID: webhookImdbID, basenames: basenames},
+			exactMatchKeys{imdbID: webhookImdbID, externalIDs: webhookMbidIDs, basenames: basenames},
 			snapshotPlaybackEntries(),
 		)
 
@@ -3859,6 +3934,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		if m := reImdbID.FindStringSubmatch(payloadStr); len(m) > 1 {
 			stopImdbID = m[1]
 		}
+		stopMbidIDs := webhookExternalIDs(payloadStr)
 
 		var basenames []string
 		for _, m := range payload.Metadata.Media {
@@ -3871,7 +3947,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 
 		// Pass 1: Exact matches (filename, IMDB ID) — never the shared hash suffix.
 		stopMatch, stopState := findExactMatch(
-			exactMatchKeys{imdbID: stopImdbID, basenames: basenames},
+			exactMatchKeys{imdbID: stopImdbID, externalIDs: stopMbidIDs, basenames: basenames},
 			snapshotPlaybackEntries(),
 		)
 
@@ -4013,16 +4089,18 @@ func savePlaybackStateToDB(ps *PlaybackState) {
 	}
 	ps.mu.RLock()
 	rec := &metadb.PlaybackRecord{
-		Path:        ps.Path,
-		Hash:        ps.Hash,
-		ImdbID:      ps.ImdbID,
-		OpenedAt:    ps.OpenedAt,
-		ConfirmedAt: ps.ConfirmedAt,
-		IsHealthy:   ps.IsHealthy,
-		IsStopped:   ps.IsStopped,
-		LastReadAt:  ps.LastReadAt,
-		ReadCount:   ps.ReadCount,
-		LastSeekOff: ps.LastSeekOff,
+		Path:         ps.Path,
+		Hash:         ps.Hash,
+		ImdbID:       ps.ImdbID,
+		ExternalID:   ps.ExternalID,
+		ExternalIDNS: ps.ExternalIDNamespace,
+		OpenedAt:     ps.OpenedAt,
+		ConfirmedAt:  ps.ConfirmedAt,
+		IsHealthy:    ps.IsHealthy,
+		IsStopped:    ps.IsStopped,
+		LastReadAt:   ps.LastReadAt,
+		ReadCount:    ps.ReadCount,
+		LastSeekOff:  ps.LastSeekOff,
 	}
 	ps.mu.RUnlock()
 	if err := stateDB.SavePlaybackState(rec); err != nil {
@@ -4042,15 +4120,17 @@ func restorePlaybackStates(db *metadb.DB) {
 	for _, rec := range records {
 		if rec.IsHealthy && !rec.ConfirmedAt.IsZero() {
 			ps := &PlaybackState{
-				Path:        rec.Path,
-				Hash:        rec.Hash,
-				ImdbID:      rec.ImdbID,
-				OpenedAt:    rec.OpenedAt,
-				ConfirmedAt: rec.ConfirmedAt,
-				IsHealthy:   true,
-				ReadCount:   rec.ReadCount,
-				LastSeekOff: rec.LastSeekOff,
-				LastReadAt:  rec.LastReadAt,
+				Path:                rec.Path,
+				Hash:                rec.Hash,
+				ImdbID:              rec.ImdbID,
+				ExternalID:          rec.ExternalID,
+				ExternalIDNamespace: rec.ExternalIDNS,
+				OpenedAt:            rec.OpenedAt,
+				ConfirmedAt:         rec.ConfirmedAt,
+				IsHealthy:           true,
+				ReadCount:           rec.ReadCount,
+				LastSeekOff:         rec.LastSeekOff,
+				LastReadAt:          rec.LastReadAt,
 			}
 			playbackRegistry.Store(rec.Path, ps)
 			// Restore GoStorm priority
@@ -5460,10 +5540,12 @@ func audioWaitServable(ctx context.Context, dir string) syscall.Errno {
 // unreadable.
 func audioProjectionMeta(fullPath string, p library.AudioProjection) *vfs.Metadata {
 	return &vfs.Metadata{
-		URL:   fmt.Sprintf("%s/stream?link=%s&index=%d&play", strings.TrimRight(gc().GoStormBaseURL, "/"), p.Hash, p.FileIndex),
-		Size:  p.Size,
-		Mtime: time.Unix(0, p.MtimeNS),
-		Path:  fullPath,
+		URL:                 fmt.Sprintf("%s/stream?link=%s&index=%d&play", strings.TrimRight(gc().GoStormBaseURL, "/"), p.Hash, p.FileIndex),
+		Size:                p.Size,
+		Mtime:               time.Unix(0, p.MtimeNS),
+		Path:                fullPath,
+		ExternalID:          p.ExternalID,
+		ExternalIDNamespace: p.ExternalIDNamespace,
 	}
 }
 

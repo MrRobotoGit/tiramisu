@@ -16,6 +16,9 @@ type Metadata struct {
 	URL, Path, ImdbID string
 	Size              int64
 	Mtime             time.Time
+	// Caller-supplied audio identity, carried so a playback state can remember
+	// what the projection was registered as. Video keeps using ImdbID.
+	ExternalID, ExternalIDNamespace string
 }
 
 // FileMetadata represents metadata extracted from a virtual .mkv file
