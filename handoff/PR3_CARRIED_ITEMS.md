@@ -17,6 +17,33 @@ re-derive any of it.
 | 5 | `WriteAudioStub` unreachable | **done** | `db7dfd7`, deleted; `AudioStubBytes` + `SectionWriter` is the only writer |
 | 6 | Directory fsync after rename | **done** | `2dcc000`, both directories, `EINVAL`/`ENOTSUP` tolerated on the fallback |
 
+### PR 3 roadmap status (2026-09-21, branch `feature/audio-projection`)
+
+Mapped against `specs/TIRAMISU_PHASE1_ROADMAP_FINAL.md` §1-14. Commits are on
+`feature/audio-projection`; the audits quoted in this folder (lotti 4-8) were
+requested per point.
+
+| Roadmap item | Status | Evidence |
+|---|---|---|
+| §1 exact-path Remove | done | `8da6d99` + `removal_test.go` |
+| §2 remove state machine | done | `8da6d99`, startup sweep `5c3b814` + `recovery_test.go` |
+| §3 open-handle lifetime | done | handle never retargeted; `h4_namespace_test.go`, `livepublish_test.go` |
+| §4 read-only semantics | done | `b96abf1`, `0444`/`0555`, EROFS/EPERM + `main_readonly_test.go` |
+| §5 cache/dentry invalidation | done | `e0beb0c` (DirCache generation + ancestors), `dc37c2b` (live namespace) |
+| §6 stable file metadata | done | inode map + registry `MtimeNS`, no `time.Now()` fallback |
+| §7 stable directory semantics | done | `60a5623`, `DirMtime` from `UpdatedAtNS` + `dirmtime_test.go`, `main_dirmtime_test.go` |
+| §8 restart readiness | done | `af86710`, `audio_namespace_state`/`_entries` in `/metrics` + `main_readiness_test.go` |
+| §9 complete successful readdir | done | committed namespace published as one batch (`284aac2`), DirCache generation test |
+| §10 EOF/short-read | done | `startup_read_failure_test.go` (EOF, stalled deadline, absent stream) |
+| §11 scanner-safe blocking reads | done | same read path, single injected deadline; `793f89a` bounds the wake by the FUSE context |
+| §12 concurrency/fairness measurement | **pending** | Pi 4 reference workload: 4K + 32-part audiobook + full scan |
+| §13 downstream compatibility matrix | **partial** | Plex/Plexamp webhook identity verified live on pi-test (`2aaf8ad`/`9b83a3b`/`8ef6db3`); Navidrome/Jellyfin/Audiobookshelf scans pending |
+| §14 adversarial security suite | done | `pathvalidation_test.go` (P15-P27), `containment_test.go` (H5-H7, symlinks), `audio_test.go` (portable-key collisions), recovery/removal crash tests |
+
+Audiobooks share every code path with music (section-aware helpers); no separate
+audiobook implementation exists to complete, and the functional audiobook
+workload is intentionally parked per the maintainer's instruction.
+
 Also closed in the same round: a directory listing can no longer land after its
 invalidation (`e0beb0c`, `DirCache` generation), and the live-namespace
 consistency fix from the round-3 audit (`dc37c2b`).
