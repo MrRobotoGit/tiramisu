@@ -120,7 +120,9 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	engineHash := strings.ToLower(strings.TrimSpace(addedHash))
 	if !reInfoHash.MatchString(engineHash) {
 		if !preexisting {
-			m.dropTorrent(ctx, hash)
+			// Drop under the canonical spelling: the engine keys torrents by the hex
+			// hash it assigned, and the request's own spelling may be base32.
+			m.dropTorrent(ctx, canonicalHashKey(hash))
 		}
 		return nil, errf(http.StatusBadGateway, "gostorm returned a malformed info hash %q", addedHash)
 	}

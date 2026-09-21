@@ -438,6 +438,29 @@ func TestAddAudio_CleanupFailureLeavesRowsStaged_H6(t *testing.T) {
 	assertFileContent(t, filepath.Join(f.musicRoot, filepath.FromSlash(requestPath)), []byte("not this request's file"))
 }
 
+// B2 follow-up: when GoStorm reports junk instead of the hash it added, the cleanup
+// must drop the torrent under the spelling the engine knows (canonical hex), not the
+// request's: a base32 magnet would otherwise leak the hydrated torrent.
+func TestAddAudio_MalformedEngineHashDropsCanonicalSpelling_B2(t *testing.T) {
+	source := FileStat{ID: 1, Path: "Release/01.flac", Length: 4 << 20}
+	f := newAtomicFixture(t, []FileStat{source})
+	f.engine.addHash = "not-a-hash"
+
+	response, err := f.manager.AddAudio(context.Background(), AddRequest{
+		Type:   "music",
+		Magnet: BuildMagnet(atomicAddBase32Hash, "An Album", DefaultTrackers()),
+		Title:  "An Album",
+		Files:  []AudioFileRequest{{SourcePath: source.Path, Path: "Artist/Album/01_01234567.flac"}},
+	})
+	assertAtomicStatus(t, response, err, http.StatusBadGateway)
+
+	wantKey := canonicalHashKey(atomicAddBase32Hash)
+	removes := f.engine.callsFor("RemoveTorrent")
+	if len(removes) != 1 || removes[0].hash != wantKey {
+		t.Fatalf("RemoveTorrent calls = %+v, want exactly one with %q", removes, wantKey)
+	}
+}
+
 func TestAddAudio_OneFilePublishesAtomically_E1_E3_E8_E18_E19_E20(t *testing.T) {
 	source := FileStat{ID: 7, Path: "Release/Disc 1/01 - Track.flac", Length: 34_567_890}
 	requestPath := "Artist/Album/01 - Track_01234567.flac"

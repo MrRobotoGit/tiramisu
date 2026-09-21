@@ -253,6 +253,12 @@ func (b *StartupCacheBuilder) reconcileAudio() {
 
 	// Transactions that crashed between the final rename and the registry commit are
 	// rolled back before anything reads committed rows or publishes the namespace.
+	//
+	// Known transient window, next to the namespace publish race: this pass runs while
+	// the HTTP server may already accept requests, and the prune below can remove a
+	// directory a live add created but has not filled yet. That add then fails with a
+	// spurious 5xx and self-heals at the next boot (its rows stay staged). Tolerated
+	// until startup and live adds are serialized.
 	if recovered, err := library.RecoverStagedAudioTransactions(stateDB, b.sourcePath, b.logger); err != nil {
 		b.logger.Printf("Audio recovery failed: %v", err)
 		b.incrementErrors()
