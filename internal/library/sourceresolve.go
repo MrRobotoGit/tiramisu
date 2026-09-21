@@ -44,9 +44,8 @@ func matchEntry(files []FileStat, sourcePath string) (*FileStat, error) {
 	return match, nil
 }
 
-// checkEntry rejects an entry whose index cannot address exactly one file. The
-// stream lookup scans by index and stops at the first hit, so a shared index
-// would serve a different file than the caller named.
+// checkEntry rejects an index that cannot address exactly one file: the stream
+// lookup stops at the first hit, so a shared index would serve the wrong file.
 func checkEntry(files []FileStat, match *FileStat, sourcePath string) error {
 	// GoStorm indexes are 1-based; a non-positive one is a malformed answer.
 	if match.ID <= 0 {
@@ -67,9 +66,8 @@ func checkEntry(files []FileStat, match *FileStat, sourcePath string) error {
 	return nil
 }
 
-// ResolveSource binds one caller-supplied source_path to the torrent file that
-// carries it. Matching is exact and case-sensitive, and a miss is an error: the
-// engine never substitutes a different file for the one the caller named.
+// ResolveSource binds one source_path to its torrent file. Matching is exact and
+// case-sensitive; a miss is an error, never a substitution.
 func ResolveSource(files []FileStat, sourcePath string) (ResolvedSource, error) {
 	match, err := matchEntry(files, sourcePath)
 	if err != nil {
@@ -134,11 +132,8 @@ func ResolveSources(files []FileStat, sourcePaths []string) ([]ResolvedSource, e
 	return resolved, nil
 }
 
-// VerifyResolvedSource re-checks a persisted triple against the current file
-// list, reporting a changed index or size rather than silently adopting it.
-//
-// Precondition: files must belong to the same infohash the triple was resolved
-// under. The triple pins identity within a torrent, not content across torrents.
+// VerifyResolvedSource re-checks a persisted triple, reporting a changed index or
+// size rather than adopting it. files must belong to the same infohash.
 func VerifyResolvedSource(files []FileStat, prior ResolvedSource) error {
 	current, err := ResolveSource(files, prior.SourcePath)
 	if err != nil {

@@ -33,16 +33,14 @@ type AudioListResponse struct {
 	NextCursor string          `json:"next_cursor"`
 }
 
-// audioProjectionPager is the paging half of the registry. It is reached by
-// assertion rather than added to AudioProjectionRegistry, the way manager.go
-// already reaches ClearMetadataFailure.
+// audioProjectionPager is the paging half of the registry, reached by assertion
+// as manager.go already does for ClearMetadataFailure.
 type audioProjectionPager interface {
 	AudioProjectionPage(section, pathPrefix, afterPath string, limit int) ([]metadb.AudioProjection, error)
 }
 
-// ListAudio returns one page of a section's committed projections. It asks for
-// one row beyond the page so it can report a cursor without counting the
-// library.
+// ListAudio returns one page of committed projections, asking for one row beyond
+// the page so it can report a cursor without counting the library.
 func (m *Manager) ListAudio(req AudioListRequest) (*AudioListResponse, error) {
 	section, canonical := SectionForType(req.Type)
 	if !canonical || !IsAudioSection(section) {

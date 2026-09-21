@@ -32,21 +32,16 @@ type AudioProjectionPlan struct {
 	Existing    *metadb.AudioProjection
 }
 
-// ClassifyAudioProjection decides whether a requested projection already exists,
-// would be created, or conflicts. It writes nothing.
-//
-// The destination is checked before the release: when both are taken, the path
-// is what the caller asked for and what it has to change.
+// ClassifyAudioProjection decides whether a projection is present, would be
+// created, or conflicts. The destination is checked before the release.
 func ClassifyAudioProjection(lookup AudioProjectionLookup, section Section, hash, virtualPath string, source ResolvedSource) (AudioProjectionPlan, error) {
 	existing, found, err := lookup.GetAudioProjection(string(section), virtualPath)
 	if err != nil {
 		return AudioProjectionPlan{}, fmt.Errorf("reading projection %s/%s: %w", section, virtualPath, err)
 	}
 	if found {
-		// Only a committed row is published: a staged one is mid-transaction and a
-		// removing one is being unpublished, so neither answers "already present".
-		// Every field of the identity has to match too, not just the hash, because
-		// a re-sorted torrent keeps the hash and moves the index and source path.
+		// Only a committed row counts as present, and every identity field must match: a
+		// re-sorted torrent keeps the hash but moves the index and source path.
 		if existing.State == metadb.AudioCommitted &&
 			existing.Hash == hash &&
 			existing.FileIndex == source.FileIndex &&
@@ -93,9 +88,8 @@ func PlanAudioProjections(lookup AudioProjectionLookup, section Section, hash st
 	claimedBy := make(map[int]string, len(requests))
 	keyClaimedBy := make(map[string]string, len(requests))
 	for i := range requests {
-		// The destination is classified first so a taken path outranks an
-		// in-request duplicate, matching the single-projection precedence rather
-		// than depending on where the duplicate sits in the request.
+		// The destination is classified first so a taken path outranks an in-request
+		// duplicate, wherever the duplicate sits.
 		plan, err := ClassifyAudioProjection(lookup, section, hash, requests[i].Path, sources[i])
 		if err != nil {
 			return nil, err

@@ -47,13 +47,8 @@ type ValidatedPath struct {
 	Section         Section
 }
 
-// ValidateProjectionPath checks a caller-supplied audio destination path against
-// the spec §14.1 syntax rules, the section's admitted extensions, and the
-// trailing _hash8 token. The caller owns audio naming, so a missing or wrong
-// suffix is an error and never repaired.
-//
-// Failures are reported syntax first, then extension, then suffix. String
-// validation only: §14.3 symlink and TOCTOU containment is the staging writer's.
+// ValidateProjectionPath checks a caller path against the spec 14.1 syntax rules,
+// the section's extensions and the _hash8 token, in that order. Syntax only.
 func ValidateProjectionPath(section Section, virtualPath, sourcePath, hash string) (ValidatedPath, error) {
 	if err := validatePathSyntax(virtualPath); err != nil {
 		return ValidatedPath{}, err

@@ -11,9 +11,8 @@ import (
 // maxAudioFilesPerAdd is the spec §14.4 cap on files per Add.
 const maxAudioFilesPerAdd = 512
 
-// AudioFileRequest is one requested projection: the torrent file, and where the
-// caller wants it to appear. Both are preserved verbatim — the caller owns audio
-// naming.
+// AudioFileRequest is one requested projection. Both fields are preserved
+// verbatim: the caller owns audio naming.
 type AudioFileRequest struct {
 	SourcePath string `json:"source_path"`
 	Path       string `json:"path"`
@@ -26,13 +25,8 @@ type AudioAddRequest struct {
 	Files   []AudioFileRequest
 }
 
-// ValidateAudioAddRequest checks what can be checked without the torrent. It
-// does not validate virtual paths: the mandatory _hash8 suffix needs the hash
-// GoStorm reports, which a base32 magnet only reveals after the add.
-//
-// A video type is rejected with its section still populated, so the caller can
-// route the request to the existing add path instead of failing it; an unknown
-// type resolves to no section at all.
+// ValidateAudioAddRequest checks what needs no torrent. Virtual paths are not
+// validated here: the _hash8 suffix needs the hash the engine reports.
 func ValidateAudioAddRequest(req AddRequest) (AudioAddRequest, error) {
 	// SectionForType is the canonical table and does not trim or case-fold, which
 	// is exactly roadmap §1's "no aliases" rule for audio.

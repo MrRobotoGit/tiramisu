@@ -8,12 +8,8 @@ const (
 	MaxAudioProjectionPageLimit     = 1000
 )
 
-// AudioProjectionPage returns one page of a section's committed projections,
-// ordered by virtual_path. afterPath resumes strictly after that path.
-//
-// The prefix is compared with substr rather than LIKE: SQLite's LIKE is
-// case-insensitive for ASCII and treats _ and % as wildcards, and every audio
-// path carries a _hash8 token.
+// AudioProjectionPage returns one page of committed projections ordered by
+// virtual_path. substr not LIKE: LIKE is case-insensitive and _ is a wildcard.
 func (d *DB) AudioProjectionPage(section, pathPrefix, afterPath string, limit int) ([]AudioProjection, error) {
 	// A typed-nil *DB satisfies a non-nil interface, so fail closed rather than
 	// dereferencing it.

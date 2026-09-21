@@ -28,12 +28,8 @@ type InspectResponse struct {
 	Files []InspectFile `json:"files"`
 }
 
-// Inspect reports a torrent's files so a caller can map source paths to virtual
-// paths. GoStorm assigns file indexes from its own sort, so a caller holding the
-// metainfo cannot reproduce them and has to ask.
-//
-// Metadata that never arrives is an error, not an empty list: "not ready yet"
-// and "this torrent has no files" are different answers to a controller.
+// Inspect reports a torrent's files. Metadata that never arrives is an error, not
+// an empty list: "not ready" and "no files" are different answers.
 func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, errf(http.StatusRequestTimeout, "request cancelled: %v", err)
@@ -63,9 +59,8 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 		magnet = BuildMagnet(hash, title, DefaultTrackers())
 	}
 
-	// Held across the ownership check, the add and the cleanup, so a concurrent
-	// Add or Inspect of the same torrent cannot slip between them. Keyed on the
-	// canonical spelling: base32 and hex are one torrent.
+	// Held across ownership, add and cleanup, keyed on the canonical spelling so a
+	// base32 magnet and its hex form are one torrent.
 	lockKey := canonicalHashKey(hash)
 	defer m.lockHash(lockKey)()
 

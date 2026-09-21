@@ -64,9 +64,8 @@ func audioErr(err error) *Error {
 	return &Error{Status: StatusForError(err), Message: err.Error(), Err: err}
 }
 
-// AddAudio publishes N projections of one torrent through the registry batch,
-// which is the publication boundary: nothing reaches a final name until the
-// registry has committed, so a partial request is never committed library state.
+// AddAudio publishes N projections through the registry batch: nothing reaches a
+// final name until the registry has committed.
 func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, errf(http.StatusRequestTimeout, "request cancelled: %v", err)
@@ -112,9 +111,8 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		magnet = BuildMagnet(hash, intent.Title, DefaultTrackers())
 	}
 
-	// Locked on the canonical spelling: a base32 magnet and its hex form are one
-	// torrent, and locking them separately leaves a window a concurrent Remove
-	// or Add can act in.
+	// Locked on the canonical spelling so a base32 magnet and its hex form are one
+	// torrent rather than two lock keys with a window between them.
 	lockKey := canonicalHashKey(hash)
 	defer m.lockHash(lockKey)()
 

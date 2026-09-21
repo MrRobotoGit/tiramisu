@@ -247,10 +247,8 @@ func (d *DB) GetAudioProjection(section, virtualPath string) (*AudioProjection, 
 		 WHERE section = ? AND virtual_path = ?`, section, virtualPath)
 }
 
-// AudioProjectionByPortableKey returns the row owning a section's portable
-// collision key. The key has its own UNIQUE constraint, so two spellings that
-// differ only by case or normal form cannot both exist even when virtual_path
-// misses.
+// AudioProjectionByPortableKey returns the row owning a section's portable key.
+// That key has its own UNIQUE constraint, so virtual_path missing is not enough.
 func (d *DB) AudioProjectionByPortableKey(section, portableKey string) (*AudioProjection, bool, error) {
 	return d.audioProjectionRow(
 		`SELECT `+audioProjectionColumns+` FROM audio_projections
