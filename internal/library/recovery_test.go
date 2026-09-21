@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"tiramisu/internal/metadb"
@@ -16,6 +17,8 @@ type recoverySourceFake struct {
 	rowsErr   error
 	rollbacks []string
 	rollErr   error
+	deleted   []string
+	deleteErr error
 }
 
 func (f *recoverySourceFake) AudioProjectionsByState(metadb.AudioProjectionState) ([]metadb.AudioProjection, error) {
@@ -25,6 +28,14 @@ func (f *recoverySourceFake) AudioProjectionsByState(metadb.AudioProjectionState
 func (f *recoverySourceFake) RollbackAudioProjections(txnID string) (int, error) {
 	f.rollbacks = append(f.rollbacks, txnID)
 	return 1, f.rollErr
+}
+
+func (f *recoverySourceFake) DeleteAudioProjection(section, virtualPath string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.deleted = append(f.deleted, section+"/"+virtualPath)
+	return nil
 }
 
 func newRecoveryFixture(t *testing.T) (root string, logger *log.Logger) {
@@ -134,4 +145,72 @@ func TestRecoverStagedAudioTransactions_B1(t *testing.T) {
 			t.Errorf("good final lstat error = %v, want os.ErrNotExist", statErr)
 		}
 	})
+}
+
+// A removal that crashed between the removing mark and the row delete leaves a stub and
+// a row nothing else can finish: the namespace already dropped the path, so the boot
+// sweep is the only actor that can complete it.
+func TestRecoverRemovingAudioProjections_sweeps_interrupted_removals(t *testing.T) {
+	root, logger := newRecoveryFixture(t)
+	dir := filepath.Join(root, string(SectionAudiobooks), "Author", "Book")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(dir, "Part 01_01234567.m4b")
+	if err := os.WriteFile(stub, []byte("stub"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := &recoverySourceFake{rows: []metadb.AudioProjection{{
+		Section:     string(SectionAudiobooks),
+		VirtualPath: "Author/Book/Part 01_01234567.m4b",
+		Hash:        "hash",
+		State:       metadb.AudioRemoving,
+	}}}
+
+	swept, err := RecoverRemovingAudioProjections(src, root, logger)
+	if err != nil {
+		t.Fatalf("RecoverRemovingAudioProjections() error = %v", err)
+	}
+	if swept != 1 {
+		t.Fatalf("swept = %d, want 1", swept)
+	}
+	if _, err := os.Lstat(stub); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stub lstat error = %v, want os.ErrNotExist", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, string(SectionAudiobooks), "Author")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("empty author chain survived: lstat error = %v, want os.ErrNotExist", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, string(SectionAudiobooks))); err != nil {
+		t.Errorf("section root must survive the sweep: %v", err)
+	}
+	want := []string{string(SectionAudiobooks) + "/Author/Book/Part 01_01234567.m4b"}
+	if !reflect.DeepEqual(src.deleted, want) {
+		t.Errorf("deleted = %v, want %v", src.deleted, want)
+	}
+}
+
+// A failed sweep keeps the row so the next boot retries it, exactly like B1b.
+func TestRecoverRemovingAudioProjections_keeps_the_row_on_failure(t *testing.T) {
+	root, logger := newRecoveryFixture(t)
+	// A file where the row's parent directory belongs: removal cannot resolve.
+	if err := os.WriteFile(filepath.Join(root, string(SectionMusic), "Artist"), []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := &recoverySourceFake{rows: []metadb.AudioProjection{{
+		Section:     string(SectionMusic),
+		VirtualPath: "Artist/Album/01 - Track_01234567.flac",
+		Hash:        "hash",
+		State:       metadb.AudioRemoving,
+	}}}
+
+	swept, err := RecoverRemovingAudioProjections(src, root, logger)
+	if err == nil {
+		t.Fatal("RecoverRemovingAudioProjections() error = nil, want the filesystem failure")
+	}
+	if swept != 0 {
+		t.Errorf("swept = %d, want 0", swept)
+	}
+	if len(src.deleted) != 0 {
+		t.Errorf("deleted = %v, want none while the stub could not be removed", src.deleted)
+	}
 }

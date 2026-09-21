@@ -266,6 +266,16 @@ func (b *StartupCacheBuilder) reconcileAudio() {
 		b.logger.Printf("Audio recovery: rolled back %d staged transaction(s)", recovered)
 	}
 
+	// Removals that crashed after the removal mark are finishing work, not rollback:
+	// the stub goes and the row follows, so the path and the torrent reference stop
+	// being held by a dead projection.
+	if swept, err := library.RecoverRemovingAudioProjections(stateDB, b.sourcePath, b.logger); err != nil {
+		b.logger.Printf("Audio removal recovery failed: %v", err)
+		b.incrementErrors()
+	} else if swept > 0 {
+		b.logger.Printf("Audio recovery: finished %d interrupted removal(s)", swept)
+	}
+
 	result, err := vfs.ReconcileAudio(stateDB, globalInodeMap, b.sourcePath)
 	if err != nil {
 		b.logger.Printf("Audio reconciliation failed: %v", err)
