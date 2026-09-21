@@ -505,6 +505,197 @@ func TestSectionWriterRejectsInwardSymlinks(t *testing.T) {
 	})
 }
 
+func TestSectionWriterPruneEmptyDirs(t *testing.T) {
+	t.Run("C17a_removes_empty_parents_and_never_the_section_root", func(t *testing.T) {
+		root := t.TempDir()
+		rootBefore, err := os.Stat(root)
+		if err != nil {
+			t.Fatalf("stat section root before prune: %v", err)
+		}
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		relPath := "A/B/track.flac"
+		if err := writer.WriteStaged(relPath, []byte("temporary")); err != nil {
+			t.Fatalf("WriteStaged(%q): %v", relPath, err)
+		}
+		if err := writer.RemoveStaged(relPath); err != nil {
+			t.Fatalf("RemoveStaged(%q): %v", relPath, err)
+		}
+
+		if err := writer.PruneEmptyDirs(relPath); err != nil {
+			t.Fatalf("PruneEmptyDirs(%q): %v", relPath, err)
+		}
+		for _, path := range []string{filepath.Join(root, "A", "B"), filepath.Join(root, "A")} {
+			if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("pruned directory %q lstat error = %v, want os.ErrNotExist", path, err)
+			}
+		}
+		rootAfter, err := os.Stat(root)
+		if err != nil {
+			t.Fatalf("section root was removed: %v", err)
+		}
+		if !os.SameFile(rootBefore, rootAfter) {
+			t.Error("section root changed during pruning")
+		}
+		assertDirectoryEmptyByWalk(t, root)
+	})
+
+	t.Run("C17b_nonempty_directory_stops_pruning", func(t *testing.T) {
+		root := t.TempDir()
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		removedRel := "A/B/track.flac"
+		keptRel := "A/B/keep.flac"
+		keptContent := []byte("still in use")
+		if err := writer.WriteStaged(removedRel, []byte("temporary")); err != nil {
+			t.Fatalf("write removable file: %v", err)
+		}
+		if err := writer.WriteStaged(keptRel, keptContent); err != nil {
+			t.Fatalf("write retained file: %v", err)
+		}
+		if err := writer.RemoveStaged(removedRel); err != nil {
+			t.Fatalf("remove staged file: %v", err)
+		}
+		before := snapshotDirectory(t, root)
+
+		if err := writer.PruneEmptyDirs(removedRel); err != nil {
+			t.Fatalf("PruneEmptyDirs(%q): %v", removedRel, err)
+		}
+		assertFileContent(t, filepath.Join(root, filepath.FromSlash(keptRel)), keptContent)
+		assertDirectorySnapshot(t, root, before)
+	})
+
+	t.Run("C17c_removes_empty_preexisting_ancestor_only_on_the_pruned_path", func(t *testing.T) {
+		root := t.TempDir()
+		preexistingAncestor := filepath.Join(root, "A")
+		unrelated := filepath.Join(root, "Unrelated")
+		if err := os.Mkdir(preexistingAncestor, 0o700); err != nil {
+			t.Fatalf("create pre-existing ancestor: %v", err)
+		}
+		if err := os.Mkdir(unrelated, 0o700); err != nil {
+			t.Fatalf("create unrelated empty directory: %v", err)
+		}
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		relPath := "A/B/track.flac"
+		if err := writer.WriteStaged(relPath, []byte("temporary")); err != nil {
+			t.Fatalf("WriteStaged(%q): %v", relPath, err)
+		}
+		if err := writer.RemoveStaged(relPath); err != nil {
+			t.Fatalf("RemoveStaged(%q): %v", relPath, err)
+		}
+
+		if err := writer.PruneEmptyDirs(relPath); err != nil {
+			t.Fatalf("PruneEmptyDirs(%q): %v", relPath, err)
+		}
+		if _, err := os.Lstat(preexistingAncestor); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("pre-existing ancestor lstat error = %v, want os.ErrNotExist", err)
+		}
+		info, err := os.Stat(unrelated)
+		if err != nil {
+			t.Fatalf("unrelated directory was removed: %v", err)
+		}
+		if !info.IsDir() {
+			t.Errorf("unrelated path mode = %v, want directory", info.Mode())
+		}
+		assertDirectoryEmptyByWalk(t, unrelated)
+	})
+
+	t.Run("C17d_outward_symlink_refuses_prune_and_preserves_outside", func(t *testing.T) {
+		root := t.TempDir()
+		outside := t.TempDir()
+		if err := os.Mkdir(filepath.Join(outside, "B"), 0o755); err != nil {
+			t.Fatalf("create outside empty directory: %v", err)
+		}
+		if err := os.Symlink(outside, filepath.Join(root, "A")); err != nil {
+			t.Fatalf("create outward symlink: %v", err)
+		}
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		rootBefore := snapshotDirectory(t, root)
+		outsideBefore := snapshotDirectory(t, outside)
+
+		err := writer.PruneEmptyDirs("A/B/track.flac")
+		if err == nil {
+			t.Fatal("PruneEmptyDirs through an outward symlink error = nil, want rejection")
+		}
+		assertDirectorySnapshot(t, root, rootBefore)
+		assertDirectorySnapshot(t, outside, outsideBefore)
+	})
+
+	t.Run("C17e_inward_symlink_refuses_prune", func(t *testing.T) {
+		root, inside, writer := newInwardSymlinkFixture(t)
+		if err := os.Mkdir(filepath.Join(inside, "B"), 0o755); err != nil {
+			t.Fatalf("create inward empty directory: %v", err)
+		}
+		before := snapshotDirectory(t, root)
+
+		err := writer.PruneEmptyDirs("Artist/B/track.flac")
+		if err == nil {
+			t.Fatal("PruneEmptyDirs through an inward symlink error = nil, want rejection")
+		}
+		assertDirectorySnapshot(t, root, before)
+	})
+
+	t.Run("C17f_already_gone_directories_are_a_noop", func(t *testing.T) {
+		root := t.TempDir()
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+
+		if err := writer.PruneEmptyDirs("A/B/track.flac"); err != nil {
+			t.Errorf("PruneEmptyDirs for absent directories = %v, want nil", err)
+		}
+		assertDirectoryEmptyByWalk(t, root)
+	})
+
+	invalidPaths := []struct {
+		name    string
+		relPath string
+	}{
+		{"traversal", "A/../B/track.flac"},
+		{"absolute", "/A/B/track.flac"},
+		{"empty", ""},
+	}
+	for _, tt := range invalidPaths {
+		t.Run("C17g_refuses_"+tt.name+"_path", func(t *testing.T) {
+			root := t.TempDir()
+			writer := mustOpenSectionWriter(t, root)
+			closeSectionWriterAtCleanup(t, writer)
+			before := snapshotDirectory(t, root)
+
+			if err := writer.PruneEmptyDirs(tt.relPath); err == nil {
+				t.Fatalf("PruneEmptyDirs(%q) error = nil, want rejection", tt.relPath)
+			}
+			assertDirectorySnapshot(t, root, before)
+		})
+	}
+
+	t.Run("C17h_after_Close_returns_error_without_mutating_a_recycled_root", func(t *testing.T) {
+		originalRoot := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(originalRoot, "A", "B"), 0o755); err != nil {
+			t.Fatalf("create original empty directories: %v", err)
+		}
+		closedWriter := mustOpenSectionWriter(t, originalRoot)
+		if err := closedWriter.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		recycledRoot := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(recycledRoot, "A", "B"), 0o755); err != nil {
+			t.Fatalf("create recycled-root empty directories: %v", err)
+		}
+		replacement := mustOpenSectionWriter(t, recycledRoot)
+		closeSectionWriterAtCleanup(t, replacement)
+		originalBefore := snapshotDirectory(t, originalRoot)
+		recycledBefore := snapshotDirectory(t, recycledRoot)
+
+		if err := closedWriter.PruneEmptyDirs("A/B/track.flac"); err == nil {
+			t.Fatal("PruneEmptyDirs after Close error = nil, want error")
+		}
+		assertDirectorySnapshot(t, originalRoot, originalBefore)
+		assertDirectorySnapshot(t, recycledRoot, recycledBefore)
+	})
+}
+
 func mustOpenSectionWriter(t *testing.T, root string) *SectionWriter {
 	t.Helper()
 	writer, err := OpenSectionWriter(root)

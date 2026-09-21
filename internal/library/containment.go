@@ -200,3 +200,37 @@ func (w *SectionWriter) RemoveStaged(rel string) error {
 	}
 	return nil
 }
+
+// PruneEmptyDirs removes now-empty directories from relPath's parent upward,
+// stopping at the section root. rmdir cannot remove a non-empty directory, so
+// nothing another request is using is lost.
+func (w *SectionWriter) PruneEmptyDirs(relPath string) error {
+	if err := w.usable(); err != nil {
+		return err
+	}
+	if err := checkRel(relPath); err != nil {
+		return err
+	}
+	parts := strings.Split(relPath, "/")
+	for i := len(parts) - 1; i > 0; i-- {
+		dir := strings.Join(parts[:i], "/")
+		parent, leaf, err := w.openParent(dir, false)
+		if err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				continue
+			}
+			return err
+		}
+		err = unix.Unlinkat(parent, leaf, unix.AT_REMOVEDIR)
+		unix.Close(parent)
+		if err != nil {
+			// ENOTEMPTY stops the walk: an ancestor of a directory still in use
+			// cannot be empty either.
+			if errors.Is(err, unix.ENOTEMPTY) || errors.Is(err, unix.EEXIST) || errors.Is(err, unix.ENOENT) {
+				return nil
+			}
+			return beneathErr(err, dir)
+		}
+	}
+	return nil
+}

@@ -20,9 +20,9 @@ const livePubHash = "fedcba9876543210fedcba9876543210fedcba98"
 // livePubEvent is one observable side effect of AddAudio, recorded in the order
 // it happened.
 type livePubEvent struct {
-	kind string // "publish" or "invalidate"
-	path AudioPath
-	file string // the physical path, for invalidate
+	kind string          // "publish" or "invalidate"
+	row  AudioProjection // the projection handed to the publisher
+	file string          // the physical path, for invalidate
 }
 
 type livePubEngine struct{ info *TorrentStats }
@@ -151,6 +151,13 @@ func (r *livePubRegistry) AudioHashReferenced(hash string) (bool, error) {
 	return false, nil
 }
 
+func (r *livePubRegistry) committedRow(section Section, path string) (metadb.AudioProjection, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	row, ok := r.rows[livePubKey(string(section), path)]
+	return row, ok
+}
+
 func (r *livePubRegistry) commitCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -170,7 +177,7 @@ type livePubFixture struct {
 type livePubOptions struct {
 	noPublisher  bool
 	noInvalidate bool
-	onPublish    func(AudioPath) // runs inside the publisher, before it records
+	onPublish    func(AudioProjection) // runs inside the publisher, before it records
 }
 
 func newLivePubFixture(t *testing.T, files []FileStat, opts livePubOptions, initial ...metadb.AudioProjection) *livePubFixture {
@@ -194,11 +201,11 @@ func newLivePubFixture(t *testing.T, files []FileStat, opts livePubOptions, init
 		Logger:           log.New(io.Discard, "", 0),
 	}
 	if !opts.noPublisher {
-		cfg.PublishAudioPath = func(p AudioPath) {
+		cfg.PublishAudioPath = func(p AudioProjection) {
 			if opts.onPublish != nil {
 				opts.onPublish(p)
 			}
-			f.record(livePubEvent{kind: "publish", path: p})
+			f.record(livePubEvent{kind: "publish", row: p})
 		}
 	}
 	if !opts.noInvalidate {
@@ -222,11 +229,21 @@ func (f *livePubFixture) all() []livePubEvent {
 	return append([]livePubEvent(nil), f.events...)
 }
 
+// published returns the section and path of each publication; publishedRows
+// returns the whole projection handed over.
 func (f *livePubFixture) published() []AudioPath {
 	var out []AudioPath
+	for _, row := range f.publishedRows() {
+		out = append(out, row.Path())
+	}
+	return out
+}
+
+func (f *livePubFixture) publishedRows() []AudioProjection {
+	var out []AudioProjection
 	for _, e := range f.all() {
 		if e.kind == "publish" {
-			out = append(out, e.path)
+			out = append(out, e.row)
 		}
 	}
 	return out
@@ -410,7 +427,7 @@ func TestAddAudioLivePublication_P5_PublishedOnlyAfterFinalFileExists(t *testing
 	var f *livePubFixture
 	var problems []string
 	f = newLivePubFixture(t, files, livePubOptions{
-		onPublish: func(p AudioPath) {
+		onPublish: func(p AudioProjection) {
 			final := f.finalPath(p.Section, p.VirtualPath)
 			info, err := os.Stat(final)
 			if err != nil {
@@ -568,7 +585,7 @@ func TestAddAudioLivePublication_P9_PublishPrecedesInvalidateForSamePath(t *test
 		for i, e := range events {
 			switch e.kind {
 			case "publish":
-				publishedAt[f.finalPath(e.path.Section, e.path.VirtualPath)] = i
+				publishedAt[f.finalPath(e.row.Section, e.row.VirtualPath)] = i
 			case "invalidate":
 				pi, ok := publishedAt[e.file]
 				if !ok {
@@ -576,6 +593,91 @@ func TestAddAudioLivePublication_P9_PublishPrecedesInvalidateForSamePath(t *test
 				} else if pi >= i {
 					t.Errorf("publish of %q at %d not before invalidate at %d", e.file, pi, i)
 				}
+			}
+		}
+	})
+}
+
+func TestAddAudioLivePublication_P10_PublishedProjectionCarriesCommittedIdentity(t *testing.T) {
+	// Every identity field is distinctive and non-zero so a zero value fails.
+	file := FileStat{ID: 4242, Path: "Rel/Disc 3/Track.flac", Length: 987_654_321}
+	path := "Distinct Artist/Distinct Album/07 - Distinct_fedcba98.flac"
+	f := newLivePubFixture(t, []FileStat{file}, livePubOptions{})
+	_, err := f.manager.AddAudio(context.Background(), AddRequest{
+		Type: "music", Hash: livePubHash, Title: "Distinct",
+		Files: []AudioFileRequest{{SourcePath: file.Path, Path: path}},
+	})
+	if err != nil {
+		t.Fatalf("AddAudio() error = %v", err)
+	}
+	rows := f.publishedRows()
+	if len(rows) != 1 {
+		t.Fatalf("published = %#v, want exactly one projection", rows)
+	}
+	got := rows[0]
+	committed, ok := f.registry.committedRow(SectionMusic, path)
+	if !ok {
+		t.Fatal("no committed registry row for the published path")
+	}
+	t.Run("P10_identity_fields_match_the_request_and_source", func(t *testing.T) {
+		if got.Section != SectionMusic || got.VirtualPath != path {
+			t.Errorf("section/path = %q/%q, want %q/%q", got.Section, got.VirtualPath, SectionMusic, path)
+		}
+		if got.Hash != livePubHash {
+			t.Errorf("Hash = %q, want %q", got.Hash, livePubHash)
+		}
+		if got.FileIndex != file.ID {
+			t.Errorf("FileIndex = %d, want %d", got.FileIndex, file.ID)
+		}
+		if got.Size != file.Length {
+			t.Errorf("Size = %d, want %d", got.Size, file.Length)
+		}
+	})
+	t.Run("P10_mtime_is_set_and_matches_the_committed_row", func(t *testing.T) {
+		if got.MtimeNS == 0 {
+			t.Error("MtimeNS = 0, want the committed mtime")
+		}
+		if got.MtimeNS != committed.MtimeNS {
+			t.Errorf("MtimeNS = %d, committed row has %d", got.MtimeNS, committed.MtimeNS)
+		}
+	})
+	t.Run("P10_published_identity_equals_the_committed_row_identity", func(t *testing.T) {
+		if string(got.Section) != committed.Section || got.VirtualPath != committed.VirtualPath ||
+			got.Hash != committed.Hash || got.FileIndex != committed.FileIndex ||
+			got.Size != committed.Size || got.MtimeNS != committed.MtimeNS {
+			t.Errorf("published = %+v, committed = %+v; identity fields must agree", got, committed)
+		}
+	})
+}
+
+func TestAddAudioLivePublication_P11_MultiFilePublishesEachOwnIdentity(t *testing.T) {
+	files := []FileStat{
+		{ID: 907, Path: "Rel/a.flac", Length: 11_111},
+		{ID: 31, Path: "Rel/b.flac", Length: 222_222_222},
+		{ID: 4410, Path: "Rel/c.flac", Length: 3_333},
+	}
+	// Requested out of source order so a shared or first-entry identity, or
+	// one taken by source position, cannot pass by coincidence.
+	order := []int{2, 0, 1}
+	f := newLivePubFixture(t, files, livePubOptions{})
+	req := AddRequest{Type: "music", Hash: livePubHash, Title: "Many"}
+	for _, i := range order {
+		req.Files = append(req.Files, AudioFileRequest{SourcePath: files[i].Path, Path: livePubVPath(i + 1)})
+	}
+	if _, err := f.manager.AddAudio(context.Background(), req); err != nil {
+		t.Fatalf("AddAudio() error = %v", err)
+	}
+	t.Run("P11_each_published_projection_carries_its_own_index_size_and_path", func(t *testing.T) {
+		rows := f.publishedRows()
+		if len(rows) != len(order) {
+			t.Fatalf("published = %d projections, want %d", len(rows), len(order))
+		}
+		for n, i := range order {
+			got := rows[n]
+			if got.VirtualPath != livePubVPath(i+1) || got.FileIndex != files[i].ID ||
+				got.Size != files[i].Length || got.Hash != livePubHash ||
+				got.Section != SectionMusic || got.MtimeNS == 0 {
+				t.Errorf("published[%d] = %+v, want path %q index %d size %d", n, got, livePubVPath(i+1), files[i].ID, files[i].Length)
 			}
 		}
 	})

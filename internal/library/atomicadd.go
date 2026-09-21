@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -248,8 +247,12 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove staged audio stub %s: %v", rel, err)
 			}
 		}
+		// Through the writer, not a joined pathname: a rollback that followed a
+		// symlink would remove a directory this request never created.
 		for _, row := range rows {
-			pruneEmptyDirs(filepath.Dir(filepath.Join(sectionRoot, filepath.FromSlash(row.VirtualPath))), sectionRoot)
+			if err := writer.PruneEmptyDirs(row.VirtualPath); err != nil {
+				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot prune directories for %s: %v", row.VirtualPath, err)
+			}
 		}
 		if len(rows) > 0 {
 			if _, err := m.cfg.AudioProjections.RollbackAudioProjections(txnID); err != nil {
@@ -302,7 +305,14 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		// Published before the cache is dropped: a Readdir racing between the two
 		// would otherwise refill a cache from a namespace without this path.
 		if m.cfg.PublishAudioPath != nil {
-			m.cfg.PublishAudioPath(AudioPath{Section: intent.Section, VirtualPath: row.VirtualPath})
+			m.cfg.PublishAudioPath(AudioProjection{
+				Section:     intent.Section,
+				VirtualPath: row.VirtualPath,
+				Hash:        row.Hash,
+				FileIndex:   row.FileIndex,
+				Size:        row.Size,
+				MtimeNS:     row.MtimeNS,
+			})
 		}
 		if m.cfg.InvalidatePath != nil {
 			m.cfg.InvalidatePath(final)
@@ -340,17 +350,6 @@ func newAudioTxnID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(raw[:]), nil
-}
-
-// pruneEmptyDirs removes now-empty directories from dir up to but excluding
-// root. A non-empty directory stops the walk, so nothing in use is removed.
-func pruneEmptyDirs(dir, root string) {
-	for dir != root && strings.HasPrefix(dir, root+string(filepath.Separator)) {
-		if err := os.Remove(dir); err != nil {
-			return
-		}
-		dir = filepath.Dir(dir)
-	}
 }
 
 // stagingRelPath puts the hidden staging name beside its destination so the

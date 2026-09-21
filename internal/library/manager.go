@@ -72,7 +72,7 @@ type Config struct {
 	// PublishAudioPath, when set, adds a committed projection to the live
 	// namespace the VFS dispatches on. Without it a projection is invisible
 	// until the next startup reconciliation.
-	PublishAudioPath func(AudioPath)
+	PublishAudioPath func(AudioProjection)
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what
