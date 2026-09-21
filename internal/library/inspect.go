@@ -123,6 +123,9 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 func (m *Manager) knownTorrentHashes(ctx context.Context) (map[string]bool, bool) {
 	torrents, err := m.cfg.GoStorm.ListTorrents(ctx)
 	if err != nil {
+		// Logged because this fails the whole request: without it the caller sees
+		// only "cannot establish ownership" and the cause is invisible.
+		m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot list torrents: %v", err)
 		return nil, false
 	}
 	known := make(map[string]bool, len(torrents))
