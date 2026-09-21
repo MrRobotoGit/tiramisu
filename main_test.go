@@ -795,6 +795,59 @@ func readdirAsync(t *testing.T, physical string) *asyncCall[readdirResult] {
 	return startCall(t, func(cancel <-chan struct{}) readdirResult { return readdirNames(cancel, physical) })
 }
 
+// readdirEntries keeps the inode each entry carries, which is the identity a kernel
+// Readdir caches before any Lookup happens.
+func readdirEntries(cancel <-chan struct{}, physical string) (map[string]uint64, syscall.Errno) {
+	d := &VirtualDirNode{physicalPath: physical}
+	stream, errno := d.Readdir(&fuse.Context{Cancel: cancel})
+	if errno != 0 {
+		return nil, errno
+	}
+	defer stream.Close()
+	entries := make(map[string]uint64)
+	for stream.HasNext() {
+		de, errno := stream.Next()
+		if errno != 0 {
+			return entries, errno
+		}
+		entries[de.Name] = de.Ino
+	}
+	return entries, 0
+}
+
+// H3: a live add registers the projection's inode before publishing it, so a Readdir
+// that lands before the first Lookup hands the kernel the same identity the Lookup will.
+// Without registration the entry falls back to a basename-derived inode, or to another
+// projection's via the basename map when the names collide.
+func TestAudioLivePublicationRegistersInode_H3(t *testing.T) {
+	e := newVFSEnv(t)
+	rel := "Artist/Album/01 - Track_01234567.flac"
+	full := e.phys(library.SectionMusic, rel)
+	writeFile(t, full, jsonStub(streamURL(hashA, idxA), rowSize), rowMtime)
+
+	e.setState(t, library.Ready)
+
+	row := committedA(rel)
+	publishAudioProjectionLive(row)
+
+	entries, errno := readdirEntries(nil, filepath.Dir(full))
+	if errno != 0 {
+		t.Fatalf("Readdir(album) errno = %v, want 0", errno)
+	}
+	want := vfs.GenerateFileInode(row.Hash, row.FileIndex)
+	if got := entries[filepath.Base(rel)]; got != want {
+		t.Errorf("dirent inode = %#x, want %#x derived from the committed row", got, want)
+	}
+
+	res := e.lookup("music/" + rel)
+	if res.status != fuse.OK {
+		t.Fatalf("Lookup after the live add status = %v, want OK", res.status)
+	}
+	if res.out.Ino != want {
+		t.Errorf("Lookup inode = %#x, want %#x: the cached entry and the Lookup must agree", res.out.Ino, want)
+	}
+}
+
 // audioFixture is a music/ directory holding one stub the registry will commit and
 // one it will not. Files only: directory entries in an empty audio tree are not
 // something the requirements pin.
