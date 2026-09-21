@@ -51,6 +51,16 @@ type SectionWriter struct {
 	createdDirs []string
 }
 
+// splitParent splits a relative path into its parent directory (".", when there is
+// none) and its final component.
+func splitParent(rel string) (string, string) {
+	i := strings.LastIndex(rel, "/")
+	if i < 0 {
+		return ".", rel
+	}
+	return rel[:i], rel[i+1:]
+}
+
 // recordCreatedDir remembers a directory made by this writer. Creation order is not
 // guaranteed to be deepest-last for every caller, so pruning sorts by depth.
 func (w *SectionWriter) recordCreatedDir(rel string) {

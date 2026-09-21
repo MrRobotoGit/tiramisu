@@ -41,7 +41,9 @@ func (w *SectionWriter) resolveUnder(rel string, createDirs bool) (string, error
 				return "", fmt.Errorf("%w: %s", ErrPathEscapesSection, rel)
 			}
 			if !last && !info.IsDir() {
-				return "", fmt.Errorf("%w: %s", ErrPathEscapesSection, rel)
+				// A file where a directory is expected is ENOTDIR, which is what
+				// the Linux O_DIRECTORY walk reports for the same input.
+				return "", syscall.ENOTDIR
 			}
 		case errors.Is(err, os.ErrNotExist):
 			if !last && createDirs {
@@ -80,9 +82,16 @@ func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (id FileIde
 	if err != nil {
 		return FileIdentity{}, err
 	}
+	// An existing destination of any type is a conflict, like O_CREAT|O_EXCL on
+	// Linux; macOS reports EISDIR for a directory instead of EEXIST.
+	if _, err := os.Lstat(path); err == nil {
+		return FileIdentity{}, fmt.Errorf("%w: %s", ErrDestinationExists, rel)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return FileIdentity{}, err
+	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
+		if errors.Is(err, os.ErrExist) || errors.Is(err, syscall.EISDIR) {
 			return FileIdentity{}, fmt.Errorf("%w: %s", ErrDestinationExists, rel)
 		}
 		return FileIdentity{}, err
@@ -206,7 +215,8 @@ func (w *SectionWriter) Publish(stagedRel, finalRel string) error {
 	return os.Rename(staged, final)
 }
 
-// RemoveStaged deletes rel beneath the root.
+// RemoveStaged deletes rel beneath the root, removing the name itself: like unlink(2)
+// it never follows a final symlink, which is what the Linux implementation does.
 func (w *SectionWriter) RemoveStaged(rel string) error {
 	if err := w.usable(); err != nil {
 		return err
@@ -214,14 +224,15 @@ func (w *SectionWriter) RemoveStaged(rel string) error {
 	if err := checkRel(rel); err != nil {
 		return err
 	}
-	path, err := w.resolveUnder(rel, false)
+	dir, leaf := splitParent(rel)
+	parentPath, err := w.resolveUnder(dir, false)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(filepath.Join(parentPath, leaf)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil

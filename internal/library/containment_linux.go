@@ -16,9 +16,11 @@ import (
 const resolveBeneath = unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS
 
 // beneathErr keeps a refusal by the kernel distinguishable from an ordinary
-// filesystem error: ELOOP and EXDEV are how openat2 reports a blocked escape.
+// filesystem error: ELOOP and EXDEV are how openat2 reports a blocked escape, and
+// EAGAIN is the ".." race it could not rule out (unreachable while checkRel rejects
+// "..", mapped anyway so a relaxed checkRel cannot leak a raw errno).
 func beneathErr(err error, rel string) error {
-	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EXDEV) {
+	if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.EXDEV) || errors.Is(err, unix.EAGAIN) {
 		return fmt.Errorf("%w: %s", ErrPathEscapesSection, rel)
 	}
 	return err
@@ -29,7 +31,9 @@ func beneathErr(err error, rel string) error {
 // directory but cannot redirect the walk. With create, a missing chain is built one
 // component at a time and every step re-resolves the accumulated path from the root -
 // never from the previous component's descriptor, which a rename could carry outside
-// the section. The remaining window is resolution-to-syscall.
+// the section. The remaining windows are one per syscall, not one in total: each new
+// component adds a resolution-to-Mkdirat window, and its parent descriptor exists only
+// for that single step.
 func (w *SectionWriter) openDirAt(rel string, create bool) (int, error) {
 	open := func(path string) (int, error) {
 		return unix.Openat2(int(w.root.Fd()), path, &unix.OpenHow{
@@ -161,16 +165,25 @@ func (w *SectionWriter) Publish(stagedRel, finalRel string) error {
 	if err := checkRel(finalRel); err != nil {
 		return err
 	}
+	// Resolve the source once to fail before any final directory is created, then
+	// resolve it again immediately before the rename: holding the first descriptor
+	// across the final chain's creation would widen its rename window from one
+	// syscall to the whole walk.
 	stagedDir, stagedLeaf, err := w.openParent(stagedRel, false)
 	if err != nil {
 		return err
 	}
-	defer unix.Close(stagedDir)
+	unix.Close(stagedDir)
 	finalDir, finalLeaf, err := w.openParent(finalRel, true)
 	if err != nil {
 		return err
 	}
 	defer unix.Close(finalDir)
+	stagedDir, stagedLeaf, err = w.openParent(stagedRel, false)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(stagedDir)
 
 	if err := unix.Renameat2(stagedDir, stagedLeaf, finalDir, finalLeaf, unix.RENAME_NOREPLACE); err != nil {
 		if errors.Is(err, unix.EEXIST) {

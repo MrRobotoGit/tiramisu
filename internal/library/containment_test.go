@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"syscall"
 	"testing"
 )
 
@@ -852,6 +853,110 @@ func TestSectionWriterDoesNotFollowAMovedAncestor_H5(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outside, "Artist", "Album")); err != nil {
 		t.Fatalf("directory under the moved ancestor was pruned: %v", err)
 	}
+}
+
+// H5 follow-up: the create and publish paths must re-anchor to the root too, not just
+// the remove and prune paths the first H5 test exercises.
+func TestSectionWriterCreateAndPublishAfterMovedAncestor_H5(t *testing.T) {
+	t.Run("H5b_create_after_a_moved_ancestor_rebuilds_in_section", func(t *testing.T) {
+		root := t.TempDir()
+		outside := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "Artist"), 0o755); err != nil {
+			t.Fatalf("create the ancestor: %v", err)
+		}
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		if err := os.Rename(filepath.Join(root, "Artist"), filepath.Join(outside, "Artist")); err != nil {
+			t.Fatalf("move the ancestor out of the section: %v", err)
+		}
+
+		rel := "Artist/Album/Track_01234567.flac"
+		if _, err := writer.WriteStagedIdentity(rel, []byte("staged")); err != nil {
+			t.Fatalf("WriteStagedIdentity(%q) after the move: %v", rel, err)
+		}
+		// The in-section tree is rebuilt from the root; the moved one gains nothing.
+		assertFileContent(t, filepath.Join(root, filepath.FromSlash(rel)), []byte("staged"))
+		if _, err := os.Stat(filepath.Join(outside, "Artist", "Album")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("moved tree gained directories: lstat error = %v, want os.ErrNotExist", err)
+		}
+	})
+
+	t.Run("H5c_publish_after_a_moved_ancestor_touches_nothing", func(t *testing.T) {
+		root := t.TempDir()
+		outside := t.TempDir()
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		stagedRel := "Artist/Album/.tiramisu-txn-0"
+		if err := writer.WriteStaged(stagedRel, []byte("staged")); err != nil {
+			t.Fatalf("WriteStaged(%q): %v", stagedRel, err)
+		}
+		if err := os.Rename(filepath.Join(root, "Artist"), filepath.Join(outside, "Artist")); err != nil {
+			t.Fatalf("move the ancestor out of the section: %v", err)
+		}
+
+		finalRel := "Artist/Album/Track_01234567.flac"
+		if err := writer.Publish(stagedRel, finalRel); err == nil {
+			t.Fatal("Publish after the move = nil, want a resolution failure")
+		}
+		// The moved staged file survives, and no destination appears in the section.
+		assertFileContent(t, filepath.Join(outside, "Artist", "Album", ".tiramisu-txn-0"), []byte("staged"))
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(finalRel))); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("destination appeared in the section: lstat error = %v, want os.ErrNotExist", err)
+		}
+	})
+}
+
+// H5 follow-up: the portable fallback promises to reproduce the Linux surface and its
+// error values, so the two implementations must agree on these inputs.
+func TestSectionWriterErrorParity_H5(t *testing.T) {
+	t.Run("P1_remove_staged_removes_a_final_symlink_without_following_it", func(t *testing.T) {
+		root := t.TempDir()
+		outside := t.TempDir()
+		target := filepath.Join(outside, "target")
+		if err := os.WriteFile(target, []byte("outside"), 0o644); err != nil {
+			t.Fatalf("write the symlink target: %v", err)
+		}
+		if err := os.Mkdir(filepath.Join(root, "A"), 0o755); err != nil {
+			t.Fatalf("create the parent: %v", err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, "A", "link.flac")); err != nil {
+			t.Fatalf("create the final symlink: %v", err)
+		}
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+
+		if err := writer.RemoveStaged("A/link.flac"); err != nil {
+			t.Fatalf("RemoveStaged on a final symlink: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(root, "A", "link.flac")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("symlink lstat error = %v, want os.ErrNotExist", err)
+		}
+		assertFileContent(t, target, []byte("outside"))
+	})
+
+	t.Run("P2_a_file_where_a_directory_belongs_is_ENOTDIR", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "A"), []byte("file"), 0o644); err != nil {
+			t.Fatalf("create the file component: %v", err)
+		}
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		if _, err := writer.WriteStagedIdentity("A/B/track.flac", []byte("data")); !errors.Is(err, syscall.ENOTDIR) {
+			t.Fatalf("WriteStagedIdentity through a file = %v, want ENOTDIR", err)
+		}
+	})
+
+	t.Run("P3_an_existing_destination_directory_is_a_conflict", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "A"), 0o755); err != nil {
+			t.Fatalf("create the destination directory: %v", err)
+		}
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		if _, err := writer.WriteStagedIdentity("A", []byte("data")); !errors.Is(err, ErrDestinationExists) {
+			t.Fatalf("WriteStagedIdentity onto a directory = %v, want ErrDestinationExists", err)
+		}
+	})
 }
 
 // H7: a failed write must not leave a hidden file nothing owns. The function created
