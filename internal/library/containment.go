@@ -24,6 +24,10 @@ type FileIdentity struct {
 	Ino uint64
 }
 
+// stagedFileSync is the injection seam the cleanup test uses to fail a write after the
+// file exists; production always calls Sync directly.
+var stagedFileSync = func(f *os.File) error { return f.Sync() }
+
 // SectionWriter anchors every mutation to a pre-opened section root: spec §14.3
 // requires the parents be re-resolved by the kernel on each operation.
 //

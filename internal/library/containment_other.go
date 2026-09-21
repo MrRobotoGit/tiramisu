@@ -69,7 +69,7 @@ func (w *SectionWriter) WriteStaged(rel string, data []byte) error {
 
 // WriteStagedIdentity is WriteStaged plus the identity of the object it created, which
 // a rollback needs to unlink the right file later.
-func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (FileIdentity, error) {
+func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (id FileIdentity, err error) {
 	if err := w.usable(); err != nil {
 		return FileIdentity{}, err
 	}
@@ -87,11 +87,18 @@ func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (FileIdenti
 		}
 		return FileIdentity{}, err
 	}
+	// From here the object exists and belongs to this call: a failure below must not
+	// leave behind a name nothing owns.
+	defer func() {
+		if err != nil {
+			_ = os.Remove(path)
+		}
+	}()
 	defer f.Close()
-	if _, err := f.Write(data); err != nil {
+	if _, err = f.Write(data); err != nil {
 		return FileIdentity{}, err
 	}
-	if err := f.Sync(); err != nil {
+	if err = stagedFileSync(f); err != nil {
 		return FileIdentity{}, err
 	}
 	info, err := f.Stat()

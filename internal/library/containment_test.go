@@ -854,6 +854,26 @@ func TestSectionWriterDoesNotFollowAMovedAncestor_H5(t *testing.T) {
 	}
 }
 
+// H7: a failed write must not leave a hidden file nothing owns. The function created
+// the object, so it removes it before returning the error.
+func TestSectionWriterWriteStagedRemovesOnFailure_H7(t *testing.T) {
+	root := t.TempDir()
+	writer := mustOpenSectionWriter(t, root)
+	closeSectionWriterAtCleanup(t, writer)
+
+	original := stagedFileSync
+	stagedFileSync = func(*os.File) error { return errors.New("sync failed") }
+	defer func() { stagedFileSync = original }()
+
+	rel := "A/track.flac"
+	if _, err := writer.WriteStagedIdentity(rel, []byte("data")); err == nil {
+		t.Fatal("WriteStagedIdentity() error = nil, want the injected sync failure")
+	}
+	if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("failed write left %q behind: lstat error = %v, want os.ErrNotExist", rel, err)
+	}
+}
+
 // H6: a rollback unlinks a name only while it still holds the object the request
 // created, so a replacement that has taken the name survives.
 func TestSectionWriterIdentityGuardsRollback_H6(t *testing.T) {

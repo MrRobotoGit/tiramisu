@@ -104,7 +104,7 @@ func (w *SectionWriter) WriteStaged(rel string, data []byte) error {
 
 // WriteStagedIdentity is WriteStaged plus the identity of the object it created, which
 // a rollback needs to unlink the right file later.
-func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (FileIdentity, error) {
+func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (id FileIdentity, err error) {
 	if err := w.usable(); err != nil {
 		return FileIdentity{}, err
 	}
@@ -127,16 +127,23 @@ func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (FileIdenti
 		}
 		return FileIdentity{}, beneathErr(err, rel)
 	}
+	// From here the object exists and belongs to this call: a failure below must not
+	// leave behind a name nothing owns.
+	defer func() {
+		if err != nil {
+			_ = unix.Unlinkat(dirfd, leaf, 0)
+		}
+	}()
 	file := os.NewFile(uintptr(fd), rel)
 	defer file.Close()
-	if _, err := file.Write(data); err != nil {
+	if _, err = file.Write(data); err != nil {
 		return FileIdentity{}, err
 	}
-	if err := file.Sync(); err != nil {
+	if err = stagedFileSync(file); err != nil {
 		return FileIdentity{}, err
 	}
 	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil {
+	if err = unix.Fstat(fd, &st); err != nil {
 		return FileIdentity{}, beneathErr(err, rel)
 	}
 	return FileIdentity{Dev: uint64(st.Dev), Ino: st.Ino}, nil
