@@ -77,6 +77,12 @@ type HealthStatus struct {
 	V304BannedPeers       int `json:"v304_banned_peers"`
 	IPBlocklistRejections int `json:"ip_blocklist_rejections"`
 	IPBlocklistIPs        int `json:"ip_blocklist_ips"`
+
+	// AudioNamespaceState is the committed audio namespace's readiness as Tiramisu
+	// reports it in /metrics: Unreconciled, Ready, Unavailable or Failed. Entries is
+	// the committed projection count behind it.
+	AudioNamespaceState   string `json:"audio_namespace_state,omitempty"`
+	AudioNamespaceEntries int    `json:"audio_namespace_entries"`
 }
 
 // ServiceStatus tracks a single service's health.
@@ -444,6 +450,13 @@ func (c *Collector) fetchFUSEBuffer(s *HealthStatus) {
 	s.V304BannedPeers = int(jsonFloat(m, "v304_banned_peers"))
 	s.IPBlocklistRejections = int(jsonFloat(m, "ip_blocklist_rejections"))
 	s.IPBlocklistIPs = int(jsonFloat(m, "ip_blocklist_ips"))
+
+	// Audio namespace readiness (spec 8): what a downstream scanner sees. "Ready"
+	// only once reconciliation published a coherent committed set.
+	if state, ok := m["audio_namespace_state"].(string); ok {
+		s.AudioNamespaceState = state
+	}
+	s.AudioNamespaceEntries = int(jsonFloat(m, "audio_namespace_entries"))
 
 	if budget > 0 {
 		s.FUSEBudgetMB = budget / 1024 / 1024
