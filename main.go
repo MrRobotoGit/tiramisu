@@ -4716,6 +4716,9 @@ func main() {
 			// registry is authoritative for what is published under them.
 			AudioRoot:        gc().PhysicalSourcePath,
 			AudioProjections: audioProjectionRegistry(),
+			// Without this a projection stays invisible to Readdir and Lookup
+			// until the next startup reconciliation.
+			PublishAudioPath: globalAudioNamespace.Add,
 			InvalidatePath:   invalidateSyncRemovedPath,
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.

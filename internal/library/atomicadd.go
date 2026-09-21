@@ -268,6 +268,11 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		if err := os.Rename(staged[i], final); err != nil {
 			return nil, errf(http.StatusInternalServerError, "cannot publish audio stub %s: %v", row.VirtualPath, err)
 		}
+		// Published before the cache is dropped: a Readdir racing between the two
+		// would otherwise refill a cache from a namespace without this path.
+		if m.cfg.PublishAudioPath != nil {
+			m.cfg.PublishAudioPath(AudioPath{Section: intent.Section, VirtualPath: row.VirtualPath})
+		}
 		if m.cfg.InvalidatePath != nil {
 			m.cfg.InvalidatePath(final)
 		}
