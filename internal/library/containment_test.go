@@ -565,7 +565,7 @@ func TestSectionWriterPruneEmptyDirs(t *testing.T) {
 		assertDirectorySnapshot(t, root, before)
 	})
 
-	t.Run("C17c_removes_empty_preexisting_ancestor_only_on_the_pruned_path", func(t *testing.T) {
+	t.Run("C17c_preexisting_ancestor_survives_and_only_created_dirs_are_pruned", func(t *testing.T) {
 		root := t.TempDir()
 		preexistingAncestor := filepath.Join(root, "A")
 		unrelated := filepath.Join(root, "Unrelated")
@@ -585,18 +585,27 @@ func TestSectionWriterPruneEmptyDirs(t *testing.T) {
 			t.Fatalf("RemoveStaged(%q): %v", relPath, err)
 		}
 
-		if err := writer.PruneEmptyDirs(relPath); err != nil {
-			t.Fatalf("PruneEmptyDirs(%q): %v", relPath, err)
+		if err := writer.PruneCreatedDirs(); err != nil {
+			t.Fatalf("PruneCreatedDirs(): %v", err)
 		}
-		if _, err := os.Lstat(preexistingAncestor); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("pre-existing ancestor lstat error = %v, want os.ErrNotExist", err)
+		// The request created B but not A: only B is pruned, and the empty
+		// pre-existing ancestor is left alone.
+		if _, err := os.Lstat(filepath.Join(preexistingAncestor, "B")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("request-created directory lstat error = %v, want os.ErrNotExist", err)
 		}
-		info, err := os.Stat(unrelated)
+		info, err := os.Stat(preexistingAncestor)
+		if err != nil {
+			t.Fatalf("pre-existing ancestor was removed: %v", err)
+		}
+		if !info.IsDir() {
+			t.Errorf("pre-existing ancestor mode = %v, want directory", info.Mode())
+		}
+		unrelatedInfo, err := os.Stat(unrelated)
 		if err != nil {
 			t.Fatalf("unrelated directory was removed: %v", err)
 		}
-		if !info.IsDir() {
-			t.Errorf("unrelated path mode = %v, want directory", info.Mode())
+		if !unrelatedInfo.IsDir() {
+			t.Errorf("unrelated path mode = %v, want directory", unrelatedInfo.Mode())
 		}
 		assertDirectoryEmptyByWalk(t, unrelated)
 	})
@@ -843,4 +852,56 @@ func TestSectionWriterDoesNotFollowAMovedAncestor_H5(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outside, "Artist", "Album")); err != nil {
 		t.Fatalf("directory under the moved ancestor was pruned: %v", err)
 	}
+}
+
+// H6: a rollback unlinks a name only while it still holds the object the request
+// created, so a replacement that has taken the name survives.
+func TestSectionWriterIdentityGuardsRollback_H6(t *testing.T) {
+	t.Run("H6a_remove_if_identity_refuses_a_replacement", func(t *testing.T) {
+		root := t.TempDir()
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		rel := "A/track.flac"
+		id, err := writer.WriteStagedIdentity(rel, []byte("ours"))
+		if err != nil {
+			t.Fatalf("WriteStagedIdentity(%q): %v", rel, err)
+		}
+		// The replacement is created while the original still exists, so it cannot
+		// reuse its inode: the identity check has a deterministic mismatch.
+		replacementPath := filepath.Join(root, "replacement.tmp")
+		replacement := []byte("someone else's file")
+		if err := os.WriteFile(replacementPath, replacement, 0o644); err != nil {
+			t.Fatalf("write replacement: %v", err)
+		}
+		if err := os.Rename(replacementPath, filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("replace the staged name: %v", err)
+		}
+
+		removed, err := writer.RemoveStagedIfIdentity(rel, id)
+		if err != nil {
+			t.Fatalf("RemoveStagedIfIdentity(%q): %v", rel, err)
+		}
+		if removed {
+			t.Error("RemoveStagedIfIdentity removed a replacement that is not this request's object")
+		}
+		assertFileContent(t, filepath.Join(root, filepath.FromSlash(rel)), replacement)
+	})
+
+	t.Run("H6b_remove_if_identity_removes_its_own_object", func(t *testing.T) {
+		root := t.TempDir()
+		writer := mustOpenSectionWriter(t, root)
+		closeSectionWriterAtCleanup(t, writer)
+		rel := "A/track.flac"
+		id, err := writer.WriteStagedIdentity(rel, []byte("ours"))
+		if err != nil {
+			t.Fatalf("WriteStagedIdentity(%q): %v", rel, err)
+		}
+		removed, err := writer.RemoveStagedIfIdentity(rel, id)
+		if err != nil || !removed {
+			t.Fatalf("RemoveStagedIfIdentity(%q) = (%v, %v), want (true, nil)", rel, removed, err)
+		}
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("object lstat error = %v, want os.ErrNotExist", err)
+		}
+	})
 }

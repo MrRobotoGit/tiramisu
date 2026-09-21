@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -14,6 +15,14 @@ var (
 	// ErrDestinationExists means something already occupies the destination.
 	ErrDestinationExists = errors.New("library: destination already exists")
 )
+
+// FileIdentity is an object's device/inode pair, captured when the writer creates the
+// object. A rollback unlinks a name only while it still holds this identity, so a name
+// reused by anything else survives.
+type FileIdentity struct {
+	Dev uint64
+	Ino uint64
+}
 
 // SectionWriter anchors every mutation to a pre-opened section root: spec §14.3
 // requires the parents be re-resolved by the kernel on each operation.
@@ -32,6 +41,40 @@ type SectionWriter struct {
 	// anchor, and re-resolving per call would follow a root symlink repointed
 	// after the writer was opened.
 	rootPath string
+	// createdDirs is every directory this writer created, deepest last. A rollback
+	// prunes only these: a pre-existing empty ancestor is not this request's to
+	// remove, even when the request emptied it.
+	createdDirs []string
+}
+
+// recordCreatedDir remembers a directory made by this writer. Creation order is not
+// guaranteed to be deepest-last for every caller, so pruning sorts by depth.
+func (w *SectionWriter) recordCreatedDir(rel string) {
+	for _, existing := range w.createdDirs {
+		if existing == rel {
+			return
+		}
+	}
+	w.createdDirs = append(w.createdDirs, rel)
+}
+
+// PruneCreatedDirs removes the directories this writer created, deepest first. A
+// directory that is not empty (or already gone) stops that branch: an ancestor of a
+// directory still in use cannot be empty either. Pre-existing directories are never
+// touched, because they were never recorded.
+func (w *SectionWriter) PruneCreatedDirs() error {
+	if err := w.usable(); err != nil {
+		return err
+	}
+	dirs := append([]string(nil), w.createdDirs...)
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, rel := range dirs {
+		if err := w.removeDirIfEmpty(rel); err != nil {
+			return err
+		}
+	}
+	w.createdDirs = nil
+	return nil
 }
 
 // OpenSectionWriter pins sectionRoot. The root itself is operator configuration

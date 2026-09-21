@@ -221,68 +221,89 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		}
 	}
 
-	staged := make([]string, 0, len(rows))
-	published := make([]string, 0, len(rows))
-	unwind := func() {
-		// Final names first: after a rename the staged name is gone, and a
-		// half-published batch must leave neither behind.
-		for _, rel := range published {
-			if err := writer.RemoveStaged(rel); err != nil {
-				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove published audio stub %s: %v", rel, err)
+	// objects tracks every file this request created, with the identity it was born
+	// with: a rollback unlinks a name only while it still holds that object, and
+	// leaves anything else that took the name alone.
+	type stagedObject struct {
+		rel string
+		id  FileIdentity
+	}
+	objects := make([]stagedObject, 0, len(rows))
+	unwind := func() error {
+		var failed []string
+		for _, obj := range objects {
+			removed, err := writer.RemoveStagedIfIdentity(obj.rel, obj.id)
+			switch {
+			case err != nil:
+				failed = append(failed, fmt.Sprintf("%s: %v", obj.rel, err))
+			case !removed:
+				failed = append(failed, fmt.Sprintf("%s: the name no longer holds this request's file", obj.rel))
 			}
 		}
-		for _, rel := range staged {
-			if err := writer.RemoveStaged(rel); err != nil {
-				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove staged audio stub %s: %v", rel, err)
-			}
+		// Only directories this writer created are pruned: a pre-existing empty
+		// ancestor is not this request's to remove.
+		if err := writer.PruneCreatedDirs(); err != nil {
+			m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot prune audio directories created by this request: %v", err)
 		}
-		// Through the writer, not a joined pathname: a rollback that followed a
-		// symlink would remove a directory this request never created.
-		for _, row := range rows {
-			if err := writer.PruneEmptyDirs(row.VirtualPath); err != nil {
-				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot prune directories for %s: %v", row.VirtualPath, err)
-			}
+		if len(failed) > 0 {
+			// The rows are the only proof of ownership for what is left on disk, so
+			// they stay staged for startup recovery instead of being rolled back.
+			abandon()
+			return fmt.Errorf("cleanup incomplete (%s); transaction %s left staged for recovery", strings.Join(failed, "; "), txnID)
 		}
 		if len(rows) > 0 {
 			if _, err := m.cfg.AudioProjections.RollbackAudioProjections(txnID); err != nil {
-				m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot roll back audio transaction %s: %v", txnID, err)
+				abandon()
+				return fmt.Errorf("cannot roll back audio transaction %s: %w", txnID, err)
 			}
 		}
 		abandon()
+		return nil
 	}
 
 	for _, row := range rows {
 		data, err := AudioStubBytes(m.streamURL(row.Hash, row.FileIndex), row.Size, row.Magnet, row.ExternalID, row.ExternalIDNamespace)
 		if err != nil {
-			unwind()
+			if cleanupErr := unwind(); cleanupErr != nil {
+				return nil, errf(http.StatusInternalServerError, "cannot render audio stub for %s: %v; %v", row.VirtualPath, err, cleanupErr)
+			}
 			return nil, errf(http.StatusInternalServerError, "cannot render audio stub for %s: %v", row.VirtualPath, err)
 		}
 		rel := stagingRelPath(row)
-		if err := writer.WriteStaged(rel, data); err != nil {
-			unwind()
+		id, err := writer.WriteStagedIdentity(rel, data)
+		if err != nil {
+			if cleanupErr := unwind(); cleanupErr != nil {
+				err = fmt.Errorf("%w; %v", err, cleanupErr)
+			}
 			return nil, audioErr(err)
 		}
-		staged = append(staged, rel)
+		objects = append(objects, stagedObject{rel: rel, id: id})
 	}
 
 	// Spec §7.2: renames first, commit last, so the one atomic step cannot be
 	// preceded by a failure. An uncommitted final name is inert to dispatch.
 	for i, row := range rows {
-		if err := writer.Publish(staged[i], row.VirtualPath); err != nil {
-			unwind()
+		if err := writer.Publish(objects[i].rel, row.VirtualPath); err != nil {
+			if cleanupErr := unwind(); cleanupErr != nil {
+				err = fmt.Errorf("%w; %v", err, cleanupErr)
+			}
 			return nil, audioErr(err)
 		}
-		published = append(published, row.VirtualPath)
+		objects[i].rel = row.VirtualPath
 	}
 
 	if len(rows) > 0 {
 		committed, err := m.cfg.AudioProjections.CommitAudioProjections(txnID, now)
 		if err != nil {
-			unwind()
+			if cleanupErr := unwind(); cleanupErr != nil {
+				err = fmt.Errorf("%w; %v", err, cleanupErr)
+			}
 			return nil, audioErr(err)
 		}
 		if committed != len(rows) {
-			unwind()
+			if cleanupErr := unwind(); cleanupErr != nil {
+				return nil, errf(http.StatusInternalServerError, "committed %d of %d audio projections; %v", committed, len(rows), cleanupErr)
+			}
 			return nil, errf(http.StatusInternalServerError, "committed %d of %d audio projections", committed, len(rows))
 		}
 	}

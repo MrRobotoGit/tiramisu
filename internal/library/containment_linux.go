@@ -67,6 +67,9 @@ func (w *SectionWriter) openDirAt(rel string, create bool) (int, error) {
 		if err != nil && !errors.Is(err, unix.EEXIST) {
 			return -1, beneathErr(err, acc)
 		}
+		if err == nil {
+			w.recordCreatedDir(acc)
+		}
 	}
 	fd, err = open(rel)
 	if err != nil {
@@ -95,15 +98,22 @@ func (w *SectionWriter) openParent(rel string, create bool) (int, string, error)
 // WriteStaged creates rel beneath the root exclusively: an existing file is a
 // conflict, never a truncation.
 func (w *SectionWriter) WriteStaged(rel string, data []byte) error {
+	_, err := w.WriteStagedIdentity(rel, data)
+	return err
+}
+
+// WriteStagedIdentity is WriteStaged plus the identity of the object it created, which
+// a rollback needs to unlink the right file later.
+func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (FileIdentity, error) {
 	if err := w.usable(); err != nil {
-		return err
+		return FileIdentity{}, err
 	}
 	if err := checkRel(rel); err != nil {
-		return err
+		return FileIdentity{}, err
 	}
 	dirfd, leaf, err := w.openParent(rel, true)
 	if err != nil {
-		return err
+		return FileIdentity{}, err
 	}
 	defer unix.Close(dirfd)
 
@@ -113,16 +123,23 @@ func (w *SectionWriter) WriteStaged(rel string, data []byte) error {
 	})
 	if err != nil {
 		if errors.Is(err, unix.EEXIST) {
-			return fmt.Errorf("%w: %s", ErrDestinationExists, rel)
+			return FileIdentity{}, fmt.Errorf("%w: %s", ErrDestinationExists, rel)
 		}
-		return beneathErr(err, rel)
+		return FileIdentity{}, beneathErr(err, rel)
 	}
 	file := os.NewFile(uintptr(fd), rel)
 	defer file.Close()
 	if _, err := file.Write(data); err != nil {
-		return err
+		return FileIdentity{}, err
 	}
-	return file.Sync()
+	if err := file.Sync(); err != nil {
+		return FileIdentity{}, err
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return FileIdentity{}, beneathErr(err, rel)
+	}
+	return FileIdentity{Dev: uint64(st.Dev), Ino: st.Ino}, nil
 }
 
 // Publish renames stagedRel onto finalRel without replacing anything already
@@ -180,8 +197,80 @@ func (w *SectionWriter) RemoveStaged(rel string) error {
 	return nil
 }
 
-// PruneEmptyDirs removes now-empty directories from relPath's parent up to the
-// root. rmdir cannot remove a non-empty one, so nothing in use is lost.
+// Identity reports rel's device/inode pair without following a symlink.
+func (w *SectionWriter) Identity(rel string) (FileIdentity, error) {
+	if err := w.usable(); err != nil {
+		return FileIdentity{}, err
+	}
+	if err := checkRel(rel); err != nil {
+		return FileIdentity{}, err
+	}
+	dirfd, leaf, err := w.openParent(rel, false)
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	defer unix.Close(dirfd)
+	var st unix.Stat_t
+	if err := unix.Fstatat(dirfd, leaf, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return FileIdentity{}, beneathErr(err, rel)
+	}
+	return FileIdentity{Dev: uint64(st.Dev), Ino: st.Ino}, nil
+}
+
+// RemoveStagedIfIdentity unlinks rel only while it still holds want, so a name reused
+// by another object is left alone. Reports whether the object was removed.
+func (w *SectionWriter) RemoveStagedIfIdentity(rel string, want FileIdentity) (bool, error) {
+	if err := w.usable(); err != nil {
+		return false, err
+	}
+	if err := checkRel(rel); err != nil {
+		return false, err
+	}
+	dirfd, leaf, err := w.openParent(rel, false)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer unix.Close(dirfd)
+	var st unix.Stat_t
+	if err := unix.Fstatat(dirfd, leaf, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, nil
+		}
+		return false, beneathErr(err, rel)
+	}
+	if uint64(st.Dev) != want.Dev || st.Ino != want.Ino {
+		return false, nil
+	}
+	if err := unix.Unlinkat(dirfd, leaf, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return false, beneathErr(err, rel)
+	}
+	return true, nil
+}
+
+// removeDirIfEmpty removes one directory this writer created; a directory that is not
+// empty (or already gone) is left in place, and its ancestors cannot be empty either.
+func (w *SectionWriter) removeDirIfEmpty(rel string) error {
+	parent, leaf, err := w.openParent(rel, false)
+	if err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	defer unix.Close(parent)
+	err = unix.Unlinkat(parent, leaf, unix.AT_REMOVEDIR)
+	if err != nil && !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.ENOTEMPTY) && !errors.Is(err, unix.EEXIST) {
+		return beneathErr(err, rel)
+	}
+	return nil
+}
+
+// PruneEmptyDirs removes now-empty directories from relPath's parent up to the root,
+// regardless of who created them. Production rollback uses PruneCreatedDirs instead:
+// this blind walk is kept for the primitives it exercises.
 func (w *SectionWriter) PruneEmptyDirs(relPath string) error {
 	if err := w.usable(); err != nil {
 		return err

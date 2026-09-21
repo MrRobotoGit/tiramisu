@@ -47,6 +47,8 @@ func (w *SectionWriter) resolveUnder(rel string, createDirs bool) (string, error
 			if !last && createDirs {
 				if err := os.Mkdir(next, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 					return "", err
+				} else if err == nil {
+					w.recordCreatedDir(acc)
 				}
 			} else if !last {
 				return "", err
@@ -61,28 +63,111 @@ func (w *SectionWriter) resolveUnder(rel string, createDirs bool) (string, error
 // WriteStaged creates rel beneath the root exclusively: an existing file is a
 // conflict, never a truncation.
 func (w *SectionWriter) WriteStaged(rel string, data []byte) error {
+	_, err := w.WriteStagedIdentity(rel, data)
+	return err
+}
+
+// WriteStagedIdentity is WriteStaged plus the identity of the object it created, which
+// a rollback needs to unlink the right file later.
+func (w *SectionWriter) WriteStagedIdentity(rel string, data []byte) (FileIdentity, error) {
 	if err := w.usable(); err != nil {
-		return err
+		return FileIdentity{}, err
 	}
 	if err := checkRel(rel); err != nil {
-		return err
+		return FileIdentity{}, err
 	}
 	path, err := w.resolveUnder(rel, true)
 	if err != nil {
-		return err
+		return FileIdentity{}, err
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("%w: %s", ErrDestinationExists, rel)
+			return FileIdentity{}, fmt.Errorf("%w: %s", ErrDestinationExists, rel)
 		}
-		return err
+		return FileIdentity{}, err
 	}
 	defer f.Close()
 	if _, err := f.Write(data); err != nil {
-		return err
+		return FileIdentity{}, err
 	}
-	return f.Sync()
+	if err := f.Sync(); err != nil {
+		return FileIdentity{}, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	id, ok := identityOf(info)
+	if !ok {
+		return FileIdentity{}, fmt.Errorf("library: cannot read the identity of %s", rel)
+	}
+	return id, nil
+}
+
+// identityOf extracts the device/inode pair a rollback compares on.
+func identityOf(info os.FileInfo) (FileIdentity, bool) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return FileIdentity{}, false
+	}
+	return FileIdentity{Dev: uint64(st.Dev), Ino: st.Ino}, true
+}
+
+// Identity reports rel's device/inode pair without following a symlink.
+func (w *SectionWriter) Identity(rel string) (FileIdentity, error) {
+	if err := w.usable(); err != nil {
+		return FileIdentity{}, err
+	}
+	if err := checkRel(rel); err != nil {
+		return FileIdentity{}, err
+	}
+	path, err := w.resolveUnder(rel, false)
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return FileIdentity{}, err
+	}
+	id, ok := identityOf(info)
+	if !ok {
+		return FileIdentity{}, fmt.Errorf("library: cannot read the identity of %s", rel)
+	}
+	return id, nil
+}
+
+// RemoveStagedIfIdentity unlinks rel only while it still holds want, so a name reused
+// by another object is left alone. Reports whether the object was removed.
+func (w *SectionWriter) RemoveStagedIfIdentity(rel string, want FileIdentity) (bool, error) {
+	if err := w.usable(); err != nil {
+		return false, err
+	}
+	if err := checkRel(rel); err != nil {
+		return false, err
+	}
+	path, err := w.resolveUnder(rel, false)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	id, ok := identityOf(info)
+	if !ok || id != want {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return true, nil
 }
 
 // Publish renames stagedRel onto finalRel without replacing anything already
@@ -173,4 +258,26 @@ func (w *SectionWriter) PruneEmptyDirs(relPath string) error {
 // that still has entries; the two differ by platform.
 func isNotEmpty(err error) bool {
 	return errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST)
+}
+
+// removeDirIfEmpty removes one directory this writer created; a directory that is not
+// empty (or already gone) is left in place, and its ancestors cannot be empty either.
+func (w *SectionWriter) removeDirIfEmpty(rel string) error {
+	path, err := w.resolveUnder(rel, false)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if pe, ok := err.(*os.PathError); ok && isNotEmpty(pe.Err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

@@ -394,6 +394,50 @@ func TestAddAudio_RejectsHashMagnetMismatch_B2(t *testing.T) {
 	})
 }
 
+// H6: when cleanup cannot prove it removed this request's files, the rows stay staged
+// for startup recovery instead of being rolled back: the rows are the only proof of
+// what the leftovers belong to.
+func TestAddAudio_CleanupFailureLeavesRowsStaged_H6(t *testing.T) {
+	source := FileStat{ID: 1, Path: "Release/01.flac", Length: 4 << 20}
+	requestPath := "Artist/Album/01_01234567.flac"
+	f := newAtomicFixture(t, []FileStat{source})
+	f.registry.commitErr = errors.New("commit failed")
+	// Before the commit error fires, replace the published file with a different
+	// object so the rollback's identity check refuses to unlink it.
+	f.registry.onCommit = func(_ string, rows []metadb.AudioProjection) {
+		if len(rows) != 1 {
+			t.Errorf("rows at commit = %d, want 1", len(rows))
+			return
+		}
+		final := filepath.Join(f.musicRoot, filepath.FromSlash(rows[0].VirtualPath))
+		replacement := filepath.Join(f.musicRoot, "replacement.tmp")
+		if err := os.WriteFile(replacement, []byte("not this request's file"), 0o644); err != nil {
+			t.Errorf("write replacement: %v", err)
+			return
+		}
+		if err := os.Rename(replacement, final); err != nil {
+			t.Errorf("replace published file: %v", err)
+		}
+	}
+
+	_, err := f.manager.AddAudio(context.Background(), AddRequest{
+		Type:  "music",
+		Hash:  atomicAddHash,
+		Title: "An Album",
+		Files: []AudioFileRequest{{SourcePath: source.Path, Path: requestPath}},
+	})
+	if err == nil {
+		t.Fatal("AddAudio() error = nil, want a cleanup failure")
+	}
+	if !strings.Contains(err.Error(), "cleanup incomplete") {
+		t.Errorf("error = %q, want it to report incomplete cleanup", err)
+	}
+	if rollbacks := f.registry.callsFor("rollback"); len(rollbacks) != 0 {
+		t.Errorf("rollback calls = %+v, want none while the transaction stays staged", rollbacks)
+	}
+	assertFileContent(t, filepath.Join(f.musicRoot, filepath.FromSlash(requestPath)), []byte("not this request's file"))
+}
+
 func TestAddAudio_OneFilePublishesAtomically_E1_E3_E8_E18_E19_E20(t *testing.T) {
 	source := FileStat{ID: 7, Path: "Release/Disc 1/01 - Track.flac", Length: 34_567_890}
 	requestPath := "Artist/Album/01 - Track_01234567.flac"
