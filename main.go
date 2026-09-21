@@ -227,25 +227,145 @@ var reImdbID = regexp.MustCompile(`"imdb://(tt\d+)"`)
 // payload can carry several: the recording, its release group and the artist.
 var reMbid = regexp.MustCompile(`"mbid://([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"`)
 
-// webhookExternalIDs collects every MusicBrainz id in the payload, lowercased and
-// deduplicated. Matching tries the whole set because the controller chose which one
-// to register at add time and the engine cannot tell which of them the webhook means.
-func webhookExternalIDs(payloadStr string) []string {
+// reUUID matches a bare MusicBrainz uuid, which is how Jellyfin's ProviderIds
+// carry the same identities.
+var reUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// webhookIdentityKeys is the identity set a music payload carries, ranked by how
+// specific each id is: the item's own recording beats its release group, which
+// beats the artist. The ranking is what keeps concurrent sessions of the same
+// artist apart when only a coarser id is shared between them.
+type webhookIdentityKeys struct {
+	recording []string
+	release   []string
+	artist    []string
+}
+
+func (k webhookIdentityKeys) empty() bool {
+	return len(k.recording) == 0 && len(k.release) == 0 && len(k.artist) == 0
+}
+
+// rank reports the most specific group id belongs to: 2 recording, 1 release,
+// 0 artist. An unclassified id is deliberately not a match here; the caller puts
+// those in the artist group, where they only win when nothing better matches.
+func (k webhookIdentityKeys) rank(id string) (int, bool) {
+	for rank, group := range [][]string{k.recording, k.release, k.artist} {
+		for _, want := range group {
+			if strings.EqualFold(want, id) {
+				return 2 - rank, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// webhookIdentityKeysFromPayload reads the mbid of the item, its parent and its
+// grandparent from the payload's JSON shape, because a flat scan cannot tell an
+// artist id shared by a whole discography from a recording id unique to one track.
+// Ids from fields this does not model stay matchable at the lowest rank.
+func webhookIdentityKeysFromPayload(payloadStr string) webhookIdentityKeys {
+	keys := webhookIdentityKeys{}
+	var raw struct {
+		Metadata map[string]interface{} `json:"Metadata"`
+	}
+	if err := json.Unmarshal([]byte(payloadStr), &raw); err == nil {
+		meta := raw.Metadata
+		keys.recording = collectMbids(meta["guid"], meta["Guid"])
+		keys.release = collectMbids(meta["parentGuid"], meta["ParentGuid"])
+		keys.artist = collectMbids(meta["grandparentGuid"], meta["GrandparentGuid"])
+		// Jellyfin has no mbid:// scheme: the same identities arrive as bare
+		// uuids under ProviderIds.
+		if pids, ok := meta["ProviderIds"].(map[string]interface{}); ok {
+			keys.recording = append(keys.recording, collectUUIDs(pids["MusicBrainzTrack"])...)
+			keys.release = append(keys.release, collectUUIDs(
+				pids["MusicBrainzReleaseGroup"], pids["MusicBrainzAlbum"])...)
+			keys.artist = append(keys.artist, collectUUIDs(pids["MusicBrainzArtist"])...)
+		}
+	}
+	// Fallback for a payload shape this does not model: keep every mbid matchable,
+	// deduplicated into the lowest rank.
+	for _, id := range flatMbidIDs(payloadStr) {
+		if _, ok := keys.rank(id); !ok {
+			keys.artist = append(keys.artist, id)
+		}
+	}
+	keys.recording = dedupeIDs(keys.recording)
+	keys.release = dedupeIDs(keys.release)
+	keys.artist = dedupeIDs(keys.artist)
+	return keys
+}
+
+// collectMbids extracts "mbid://<uuid>" values from any JSON shape a metadata
+// field takes (a string or an array of objects with an "id").
+func collectMbids(values ...interface{}) []string {
+	var ids []string
+	for _, value := range values {
+		walkJSONStrings(value, func(s string) {
+			for _, m := range reMbid.FindAllStringSubmatch(`"`+s+`"`, -1) {
+				ids = append(ids, strings.ToLower(m[1]))
+			}
+		})
+	}
+	return ids
+}
+
+// collectUUIDs extracts bare MusicBrainz uuids from any JSON shape.
+func collectUUIDs(values ...interface{}) []string {
+	var ids []string
+	for _, value := range values {
+		walkJSONStrings(value, func(s string) {
+			for _, m := range reUUID.FindAllString(s, -1) {
+				ids = append(ids, strings.ToLower(m))
+			}
+		})
+	}
+	return ids
+}
+
+// walkJSONStrings visits every string inside a decoded JSON value.
+func walkJSONStrings(value interface{}, visit func(string)) {
+	switch t := value.(type) {
+	case string:
+		visit(t)
+	case []interface{}:
+		for _, item := range t {
+			walkJSONStrings(item, visit)
+		}
+	case map[string]interface{}:
+		for _, item := range t {
+			walkJSONStrings(item, visit)
+		}
+	}
+}
+
+// flatMbidIDs is the shape-blind scan, kept as a fallback for payload variants the
+// structural reader does not know.
+func flatMbidIDs(payloadStr string) []string {
 	matches := reMbid.FindAllStringSubmatch(payloadStr, -1)
 	if len(matches) == 0 {
 		return nil
 	}
-	seen := make(map[string]bool, len(matches))
 	ids := make([]string, 0, len(matches))
 	for _, m := range matches {
-		id := strings.ToLower(m[1])
-		if seen[id] {
+		ids = append(ids, strings.ToLower(m[1]))
+	}
+	return dedupeIDs(ids)
+}
+
+func dedupeIDs(ids []string) []string {
+	if len(ids) < 2 {
+		return ids
+	}
+	seen := make(map[string]bool, len(ids))
+	out := ids[:0]
+	for _, id := range ids {
+		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		ids = append(ids, id)
+		out = append(out, id)
 	}
-	return ids
+	return out
 }
 
 var reEmptyNumber = regexp.MustCompile(`"(\w+)":\s*,`)
@@ -3578,9 +3698,9 @@ type exactMatchEntry struct {
 
 // exactMatchKeys carries the webhook-side keys used by pass-1 matching.
 type exactMatchKeys struct {
-	imdbID      string
-	externalIDs []string
-	basenames   []string
+	imdbID     string
+	identities webhookIdentityKeys
+	basenames  []string
 }
 
 // findExactMatch selects the pass-1 match among the registry entries.
@@ -3613,14 +3733,13 @@ func findExactMatch(keys exactMatchKeys, entries []exactMatchEntry) (string, *Pl
 			}
 		}
 	}
-	// Audio identity: an album's musicbrainz id is shared by every track, so when
-	// more than one state carries it the most recent sign of life is the session the
-	// webhook is about — first-match would as often stop the wrong track.
-	if len(keys.externalIDs) > 0 {
-		want := make(map[string]bool, len(keys.externalIDs))
-		for _, id := range keys.externalIDs {
-			want[strings.ToLower(id)] = true
-		}
+	// Audio identity, most specific first: a session registered with the payload's
+	// recording id beats one that only shares its release group, which in turn beats
+	// one sharing the artist. Within one rank the most recent sign of life wins — the
+	// coarser the shared id, the weaker that tiebreak is, which is why an exact
+	// recording match is preferred over a recent artist match.
+	if !keys.identities.empty() {
+		bestRank := -1
 		var bestPath string
 		var bestState *PlaybackState
 		var bestAt time.Time
@@ -3629,15 +3748,19 @@ func findExactMatch(keys exactMatchKeys, entries []exactMatchEntry) (string, *Pl
 				continue
 			}
 			id, ns := e.state.GetExternalIdentity()
-			if id == "" || !want[strings.ToLower(id)] {
+			if id == "" {
 				continue
 			}
 			if ns != "" && !strings.EqualFold(ns, "musicbrainz") {
 				continue
 			}
+			rank, ok := keys.identities.rank(id)
+			if !ok {
+				continue
+			}
 			sign := e.state.LastSignOfLife()
-			if bestState == nil || sign.After(bestAt) {
-				bestPath, bestState, bestAt = e.path, e.state, sign
+			if rank > bestRank || (rank == bestRank && (bestState == nil || sign.After(bestAt))) {
+				bestPath, bestState, bestAt, bestRank = e.path, e.state, sign, rank
 			}
 		}
 		if bestState != nil {
@@ -3812,7 +3935,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		if m := reImdbID.FindStringSubmatch(payloadStr); len(m) > 1 {
 			webhookImdbID = m[1]
 		}
-		webhookMbidIDs := webhookExternalIDs(payloadStr)
+		identities := webhookIdentityKeysFromPayload(sanitized)
 
 		// Pass 1: Exact matches only (filename, IMDB ID).
 		var basenames []string
@@ -3824,7 +3947,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		exactMatch, exactState := findExactMatch(
-			exactMatchKeys{imdbID: webhookImdbID, externalIDs: webhookMbidIDs, basenames: basenames},
+			exactMatchKeys{imdbID: webhookImdbID, identities: identities, basenames: basenames},
 			snapshotPlaybackEntries(),
 		)
 
@@ -3948,7 +4071,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		if m := reImdbID.FindStringSubmatch(payloadStr); len(m) > 1 {
 			stopImdbID = m[1]
 		}
-		stopMbidIDs := webhookExternalIDs(payloadStr)
+		stopIdentities := webhookIdentityKeysFromPayload(sanitized)
 
 		var basenames []string
 		for _, m := range payload.Metadata.Media {
@@ -3961,7 +4084,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 
 		// Pass 1: Exact matches (filename, IMDB ID) — never the shared hash suffix.
 		stopMatch, stopState := findExactMatch(
-			exactMatchKeys{imdbID: stopImdbID, externalIDs: stopMbidIDs, basenames: basenames},
+			exactMatchKeys{imdbID: stopImdbID, identities: stopIdentities, basenames: basenames},
 			snapshotPlaybackEntries(),
 		)
 
@@ -4044,19 +4167,14 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 			imdbUnique = n == 1
 		}
 		// An audio identity match is exact: the matched state's registered id is one
-		// of the ids the webhook carried. It is trusted like a basename even though
-		// sibling tracks share the id, because the identity pass picked the session
-		// that is actually playing.
+		// of the ids the webhook carried, at the best rank available. It is trusted
+		// like a basename even though sibling tracks can share a coarser id, because
+		// the identity pass preferred the session with the most specific match.
 		matchByIdentity := false
-		if stopMatch != "" && stopState != nil && len(stopMbidIDs) > 0 {
+		if stopMatch != "" && stopState != nil && !stopIdentities.empty() {
 			id, ns := stopState.GetExternalIdentity()
 			if id != "" && (ns == "" || strings.EqualFold(ns, "musicbrainz")) {
-				for _, want := range stopMbidIDs {
-					if strings.EqualFold(id, want) {
-						matchByIdentity = true
-						break
-					}
-				}
+				_, matchByIdentity = stopIdentities.rank(id)
 			}
 		}
 

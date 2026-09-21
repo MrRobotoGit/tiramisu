@@ -86,3 +86,29 @@ func TestPlexWebhookIgnoresNonMediaSections(t *testing.T) {
 		t.Fatal("a non-media section type confirmed a playback state")
 	}
 }
+
+// Jellyfin reports audio differently: ItemType "Audio" and bare MusicBrainz uuids
+// under ProviderIds, with event names of its own.
+func TestPlexWebhookMatchesJellyfinAudioProviderIds(t *testing.T) {
+	playing := &PlaybackState{
+		Path:       "/mnt/tiramisu/music/Prince - 20Ten (2010)/05. Act Of God_9ac7684d.flac",
+		ExternalID: testAudioMbid, ExternalIDNamespace: "musicbrainz",
+		OpenedAt: time.Now(),
+	}
+	playbackRegistry.Store(playing.Path, playing)
+	t.Cleanup(func() { playbackRegistry.Delete(playing.Path) })
+
+	postPlexWebhook(t, `{"event":"PlaybackStart","Metadata":{"librarySectionType":"Audio",`+
+		`"ProviderIds":{"MusicBrainzTrack":"`+testAudioMbid+`"}}}`)
+
+	if !playbackFlag(t, playing, func() bool { return playing.IsHealthy }) {
+		t.Fatal("Jellyfin audio session was not confirmed by its ProviderIds track id")
+	}
+
+	postPlexWebhook(t, `{"event":"PlaybackStop","Metadata":{"librarySectionType":"Audio",`+
+		`"ProviderIds":{"MusicBrainzTrack":"`+testAudioMbid+`"}}}`)
+
+	if !playbackFlag(t, playing, func() bool { return playing.IsStopped }) {
+		t.Fatal("Jellyfin audio stop was not applied")
+	}
+}
