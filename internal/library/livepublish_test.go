@@ -364,7 +364,7 @@ func TestAddAudioLivePublication_P3_AlreadyPresentIsNotRepublished(t *testing.T)
 		}
 		var present int
 		for _, file := range resp.Files {
-			if file.Status == AudioProjectionPresent {
+			if file.State == AudioProjectionPresent {
 				present++
 			}
 		}

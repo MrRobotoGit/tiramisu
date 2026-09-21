@@ -1,8 +1,10 @@
 package library
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -25,10 +27,27 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "POST only")
 		return
 	}
-	var req AddRequest
-	if err := decode(r, &req); err != nil {
+	body, err := readBody(r)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	var req AddRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Audio requests reject unknown fields; the legacy video decoder stays lenient,
+	// because its callers predate this endpoint and may carry vendor fields.
+	if section, canonical := SectionForType(req.Type); canonical && IsAudioSection(section) {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		var strict AddRequest
+		if err := dec.Decode(&strict); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req = strict
 	}
 	// Audio first, falling through on the routing sentinel so every video
 	// request reaches the legacy path unchanged.
@@ -37,7 +56,11 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, audio)
+		status := http.StatusCreated
+		if audio.AlreadyPresent {
+			status = http.StatusOK
+		}
+		writeJSON(w, status, audio)
 		return
 	}
 	resp, err := h.mgr.Add(r.Context(), req)
@@ -136,8 +159,22 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+// readBody reads at most maxBodyBytes+1: reading exactly the cap accepts a valid JSON
+// value followed by arbitrary excess, which mutates state on an effectively unsized
+// request.
+func readBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxBodyBytes {
+		return nil, fmt.Errorf("request body exceeds %d bytes", maxBodyBytes)
+	}
+	return body, nil
+}
+
 func decode(r *http.Request, dst interface{}) error {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	body, err := readBody(r)
 	if err != nil {
 		return err
 	}

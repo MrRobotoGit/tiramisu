@@ -536,8 +536,8 @@ func TestExternalIdentity_CarriedThroughAdd(t *testing.T) {
 			t.Fatalf("response Files = %#v, want 3", resp.Files)
 		}
 		for _, file := range resp.Files {
-			if file.Status != AudioProjectionCreated {
-				t.Errorf("file %q status = %q, want created", file.Path, file.Status)
+			if file.State != AudioProjectionCreated {
+				t.Errorf("file %q state = %q, want created", file.Path, file.State)
 			}
 		}
 	})

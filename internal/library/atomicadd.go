@@ -20,21 +20,29 @@ import (
 var ErrRequestNotAudio = errors.New("library: request is not an audio type")
 
 type AudioAddedFile struct {
-	Path       string                `json:"path"`
-	SourcePath string                `json:"source_path"`
-	FileIndex  int                   `json:"file_index"`
-	Size       int64                 `json:"size"`
-	Status     AudioProjectionStatus `json:"status"`
+	Path       string `json:"path"`
+	SourcePath string `json:"source_path"`
+	FileIndex  int    `json:"file_index"`
+	Size       int64  `json:"size"`
+	// Mtime is the committed projection's mtime, stable across replays: a present
+	// result must not look like it rewrote anything.
+	Mtime string                `json:"mtime"`
+	State AudioProjectionStatus `json:"state"`
 
-	ExternalID          string `json:"external_id,omitempty"`
-	ExternalIDNamespace string `json:"external_id_ns,omitempty"`
+	// Always present, empty when the caller supplied none: List returns the same
+	// concept with both keys, and a client should not have to branch on absence.
+	ExternalID          string `json:"external_id"`
+	ExternalIDNamespace string `json:"external_id_ns"`
 }
 
 type AudioAddResponse struct {
-	Hash  string           `json:"hash"`
-	Title string           `json:"title"`
-	Type  string           `json:"type"`
-	Files []AudioAddedFile `json:"files"`
+	Hash  string `json:"hash"`
+	Title string `json:"title"`
+	Type  string `json:"type"`
+	// AlreadyPresent is true when every requested projection already existed: the
+	// request is a 200 replay, not a 201 creation.
+	AlreadyPresent bool             `json:"already_present"`
+	Files          []AudioAddedFile `json:"files"`
 }
 
 // AudioProjectionRegistry is the read and write side of the projection
@@ -334,28 +342,39 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		}
 	}
 
+	created := 0
 	files := make([]AudioAddedFile, 0, len(plans))
 	for i, plan := range plans {
 		id, ns := intent.Files[i].ExternalID, intent.Files[i].ExternalIDNamespace
+		mtimeNS := now
 		// The stored row wins for an existing projection: there is no update path,
-		// so a replay with a different identity is reported, not applied.
+		// so a replay with a different identity is reported, not applied, and the
+		// response carries the committed mtime rather than this request's clock.
 		if plan.Status == AudioProjectionPresent && plan.Existing != nil {
 			if plan.Existing.ExternalID != id || plan.Existing.ExternalIDNamespace != ns {
 				m.cfg.Logger.Printf("[LibraryAPI] WARNING: %s keeps stored identity %q/%q, request supplied %q/%q", plan.VirtualPath, plan.Existing.ExternalID, plan.Existing.ExternalIDNamespace, id, ns)
 			}
 			id, ns = plan.Existing.ExternalID, plan.Existing.ExternalIDNamespace
+			mtimeNS = plan.Existing.MtimeNS
+		} else {
+			created++
 		}
 		files = append(files, AudioAddedFile{
 			Path:                plan.VirtualPath,
 			SourcePath:          plan.Source.SourcePath,
 			FileIndex:           plan.Source.FileIndex,
 			Size:                plan.Source.Size,
-			Status:              plan.Status,
+			Mtime:               time.Unix(0, mtimeNS).UTC().Format(time.RFC3339Nano),
+			State:               plan.Status,
 			ExternalID:          id,
 			ExternalIDNamespace: ns,
 		})
 	}
-	return &AudioAddResponse{Hash: engineHash, Title: intent.Title, Type: req.Type, Files: files}, nil
+	return &AudioAddResponse{
+		Hash: engineHash, Title: intent.Title, Type: req.Type,
+		AlreadyPresent: created == 0,
+		Files:          files,
+	}, nil
 }
 
 func newAudioTxnID() (string, error) {

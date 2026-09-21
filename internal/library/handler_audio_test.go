@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"tiramisu/internal/metadb"
 )
@@ -338,18 +340,22 @@ func TestHandlerAddAudioDispatch_W1_W2(t *testing.T) {
 			if response.Code != http.StatusCreated {
 				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.Bytes())
 			}
-			assertJSONObjectKeys(t, response.Body.Bytes(), "files", "hash", "title", "type")
+			assertJSONObjectKeys(t, response.Body.Bytes(), "already_present", "files", "hash", "title", "type")
 			var got AudioAddResponse
 			decodeHandlerResponse(t, response, &got)
-			want := AudioAddResponse{
-				Hash: handlerAudioHash, Title: "Caller title", Type: tc.requestType,
-				Files: []AudioAddedFile{{
-					Path: tc.path, SourcePath: tc.source.Path, FileIndex: tc.source.ID,
-					Size: tc.source.Length, Status: AudioProjectionCreated,
-				}},
+			if got.AlreadyPresent {
+				t.Error("AlreadyPresent = true, want false for a newly created projection")
 			}
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("audio response = %#v, want %#v", got, want)
+			if len(got.Files) != 1 {
+				t.Fatalf("files = %#v, want exactly one", got.Files)
+			}
+			file := got.Files[0]
+			if file.Path != tc.path || file.SourcePath != tc.source.Path || file.FileIndex != tc.source.ID ||
+				file.Size != tc.source.Length || file.State != AudioProjectionCreated {
+				t.Errorf("audio file = %#v, want the created projection for %+v", file, tc.source)
+			}
+			if _, err := time.Parse(time.RFC3339Nano, file.Mtime); err != nil {
+				t.Errorf("mtime = %q, want RFC3339Nano: %v", file.Mtime, err)
 			}
 			var body struct {
 				Files []map[string]json.RawMessage `json:"files"`
@@ -358,7 +364,7 @@ func TestHandlerAddAudioDispatch_W1_W2(t *testing.T) {
 			if len(body.Files) != 1 {
 				t.Fatalf("files = %#v, want one audio file", body.Files)
 			}
-			assertRawMessageKeys(t, body.Files[0], "file_index", "path", "size", "source_path", "status")
+			assertRawMessageKeys(t, body.Files[0], "external_id", "external_id_ns", "file_index", "mtime", "path", "size", "source_path", "state")
 			if !handlerAudioHasRegistryCall(fixture.registry.snapshot(), "StageAudioProjections") {
 				t.Fatal("audio projection registry was not staged; request did not reach AddAudio")
 			}
@@ -846,4 +852,97 @@ func handlerAudioRegistryCallsFor(calls []handlerAudioRegistryCall, method strin
 		}
 	}
 	return matching
+}
+
+// M8: an all-present replay is a 200 with already_present true, and the file carries the
+// committed state and mtime instead of looking like a new creation.
+func TestHandlerAddAudioReplayIs200AlreadyPresent_M8(t *testing.T) {
+	files := []FileStat{{ID: 7, Path: "Release/Disc 1/01 - Track.flac", Length: 34_567_890}}
+	path := "Artist/Album/01 - Track_01234567.flac"
+	initial := metadb.AudioProjection{
+		Section: string(SectionMusic), VirtualPath: path, PortablePathKey: PortablePathKey(path),
+		Hash: handlerAudioHash, FileIndex: files[0].ID, SourcePath: files[0].Path,
+		Size: files[0].Length, MtimeNS: 1_700_000_000_000_000_000, Title: "T",
+		Magnet: "magnet:?existing", State: metadb.AudioCommitted,
+	}
+	fixture := newHandlerAudioFixture(t, files, initial)
+	request := AddRequest{
+		Type: "music", Hash: handlerAudioHash, Title: "T",
+		Files: []AudioFileRequest{{SourcePath: files[0].Path, Path: path}},
+	}
+	response := serveHandlerJSON(t, fixture.handler.Add, http.MethodPost, "/api/library/add", request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", response.Code, response.Body.Bytes())
+	}
+	var got AudioAddResponse
+	decodeHandlerResponse(t, response, &got)
+	if !got.AlreadyPresent {
+		t.Error("already_present = false, want true for an all-present replay")
+	}
+	if len(got.Files) != 1 || got.Files[0].State != AudioProjectionPresent {
+		t.Fatalf("files = %#v, want one present projection", got.Files)
+	}
+	wantMtime := time.Unix(0, initial.MtimeNS).UTC().Format(time.RFC3339Nano)
+	if got.Files[0].Mtime != wantMtime {
+		t.Errorf("mtime = %q, want the committed %q", got.Files[0].Mtime, wantMtime)
+	}
+	if calls := fixture.registry.snapshot(); handlerAudioHasRegistryCall(calls, "StageAudioProjections") {
+		t.Errorf("replay staged rows: %#v", calls)
+	}
+}
+
+// M9: the cap bounds the request, not just its allocation. A valid JSON value followed
+// by excess must be rejected without reaching the registry.
+func TestHandlerAddRejectsOversizedBody_M9(t *testing.T) {
+	files := []FileStat{{ID: 7, Path: "Release/01.flac", Length: 4 << 20}}
+	fixture := newHandlerAudioFixture(t, files)
+	request := AddRequest{
+		Type: "music", Hash: handlerAudioHash, Title: "T",
+		Files: []AudioFileRequest{{SourcePath: files[0].Path, Path: "Artist/Album/01_01234567.flac"}},
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = append(body, bytes.Repeat([]byte(" "), maxBodyBytes)...)
+
+	response := serveHandlerBody(fixture.handler.Add, http.MethodPost, "/api/library/add", body)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", response.Code, response.Body.Bytes())
+	}
+	if !strings.Contains(response.Body.String(), "exceeds") {
+		t.Errorf("body = %s, want the size rejection", response.Body.Bytes())
+	}
+	if calls := fixture.registry.snapshot(); len(calls) != 0 {
+		t.Errorf("registry calls = %#v, want none for a rejected body", calls)
+	}
+}
+
+// M9: audio requests reject fields their contract does not define; the legacy video
+// decoder keeps accepting them, because its callers predate this endpoint.
+func TestHandlerAddUnknownFields_M9(t *testing.T) {
+	files := []FileStat{{ID: 7, Path: "Release/01.flac", Length: 4 << 20}}
+	t.Run("M9a_audio_rejects_an_unknown_field", func(t *testing.T) {
+		fixture := newHandlerAudioFixture(t, files)
+		body := []byte(fmt.Sprintf(
+			`{"type":"music","title":"T","hash":%q,"files":[{"source_path":%q,"path":"Artist/Album/01_01234567.flac"}],"filez":123}`,
+			handlerAudioHash, files[0].Path))
+		response := serveHandlerBody(fixture.handler.Add, http.MethodPost, "/api/library/add", body)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400; body = %s", response.Code, response.Body.Bytes())
+		}
+		if calls := fixture.registry.snapshot(); len(calls) != 0 {
+			t.Errorf("registry calls = %#v, want none for a rejected request", calls)
+		}
+	})
+
+	t.Run("M9b_video_keeps_accepting_an_unknown_field", func(t *testing.T) {
+		source := FileStat{ID: 3, Path: "Release/Feature.mkv", Length: 7_654_321}
+		fixture := newHandlerAudioFixture(t, []FileStat{source})
+		body := []byte(fmt.Sprintf(`{"type":"movie","title":"Legacy","hash":%q,"vendor_field":1}`, handlerAudioHash))
+		response := serveHandlerBody(fixture.handler.Add, http.MethodPost, "/api/library/add", body)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("legacy status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.Bytes())
+		}
+	})
 }

@@ -519,7 +519,7 @@ func TestAddAudio_OneFilePublishesAtomically_E1_E3_E8_E18_E19_E20(t *testing.T) 
 	}
 
 	t.Run("E1_one_file_is_created_and_staged_then_committed_once", func(t *testing.T) {
-		if len(response.Files) != 1 || response.Files[0].Status != AudioProjectionCreated {
+		if len(response.Files) != 1 || response.Files[0].State != AudioProjectionCreated {
 			t.Fatalf("response Files = %#v, want one created file", response.Files)
 		}
 		stages := f.registry.callsFor("stage")
@@ -650,7 +650,7 @@ func TestAddAudio_ResponseOrderAndTwelveFileBatch_E2_E4_E18(t *testing.T) {
 			source := files[order[i]]
 			got := response.Files[i]
 			if got.Path != request.Path || got.SourcePath != request.SourcePath || got.FileIndex != source.ID ||
-				got.Size != source.Length || got.Status != AudioProjectionCreated {
+				got.Size != source.Length || got.State != AudioProjectionCreated {
 				t.Errorf("response.Files[%d] = %+v, want path/source %q/%q index %d size %d created", i, got, request.Path, request.SourcePath, source.ID, source.Length)
 			}
 		}
@@ -737,8 +737,8 @@ func TestAddAudio_PartlyPresentAlbum_E5_E19(t *testing.T) {
 			if i < 3 {
 				want = AudioProjectionPresent
 			}
-			if got.Status != want {
-				t.Errorf("response.Files[%d].Status = %q, want %q", i, got.Status, want)
+			if got.State != want {
+				t.Errorf("response.Files[%d].State = %q, want %q", i, got.State, want)
 			}
 		}
 		stages := f.registry.callsFor("stage")
