@@ -117,8 +117,22 @@ func (m *Manager) RemoveAudio(ctx context.Context, req RemoveRequest) (*AudioRem
 	}
 	defer writer.Close()
 	if id, err := writer.Identity(row.VirtualPath); err == nil {
-		if _, err := writer.RemoveStagedIfIdentity(row.VirtualPath, id); err != nil {
+		removed, err := writer.RemoveStagedIfIdentity(row.VirtualPath, id)
+		if err != nil {
 			return nil, errf(http.StatusInternalServerError, "remove audio stub: %v", err)
+		}
+		if !removed {
+			if _, statErr := writer.Identity(row.VirtualPath); statErr == nil {
+				// Another writer replaced the file between the two calls: the
+				// projection's own bytes are gone, but the file now holding the name
+				// is not ours to delete. The row goes, so a retry cannot mistake the
+				// replacement for the projection, and the caller is told the path is
+				// still occupied.
+				if err := m.cfg.AudioRemoval.DeleteAudioProjection(string(section), virtualPath); err != nil {
+					return nil, errf(http.StatusInternalServerError, "forget audio projection: %v", err)
+				}
+				return nil, errf(http.StatusConflict, "the file at %s is not this projection's stub and was left in place", virtualPath)
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, errf(http.StatusInternalServerError, "stat audio stub: %v", err)
