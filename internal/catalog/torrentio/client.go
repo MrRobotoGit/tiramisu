@@ -3,6 +3,7 @@ package torrentio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -15,6 +16,10 @@ import (
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/prowlarr"
 )
+
+// ErrCloudflareChallenge marks an egress-level block. The fallback URL sits behind the same
+// Cloudflare edge, so retrying it would only spend another rate-limit slot before failing.
+var ErrCloudflareChallenge = errors.New("torrentio cloudflare challenge")
 
 // Client is a Torrentio API client with rate limiting.
 type Client struct {
@@ -67,7 +72,11 @@ func (c *Client) fetchStreams(ctx context.Context, contentType, imdbID string, _
 
 	streams, err := c.doFetch(ctx, url)
 	if err != nil {
-		// Fallback: retry without config (Cloudflare bypass)
+		if errors.Is(err, ErrCloudflareChallenge) {
+			// Same edge, same block: the fallback URL would be challenged too.
+			return nil, err
+		}
+		// Fallback: retry without config
 		fbURL := fmt.Sprintf("%s/stream/%s/%s.json", c.fallback, contentType, imdbID)
 		if contentType == "series" {
 			fbURL = fmt.Sprintf("%s/stream/series/%s:%d:%d.json", c.fallback, imdbID, season, episode)
@@ -102,11 +111,13 @@ func (c *Client) doFetch(ctx context.Context, url string) ([]Stream, error) {
 		return nil, err
 	}
 
-	if resp.StatusCode == 403 || strings.Contains(string(data), "cloudflare") {
+	if resp.StatusCode == 403 || strings.Contains(strings.ToLower(string(data)), "cloudflare") {
 		// The curl fallback that used to live here could never work: curl is absent from the
 		// published Docker image, and from datacenter/VPN egress curl receives the same
-		// Cloudflare challenge as the Go client. Report the block explicitly instead.
-		return nil, fmt.Errorf("torrentio: cloudflare challenge (HTTP %d), egress IP likely blocked; use Prowlarr from a non-datacenter egress", resp.StatusCode)
+		// Cloudflare challenge as the Go client. Report the block explicitly instead. The body
+		// check is case-insensitive because challenge pages spell "Cloudflare" capitalised and
+		// part of them is served with status 200.
+		return nil, fmt.Errorf("%w (HTTP %d), egress IP likely blocked; use Prowlarr from a non-datacenter egress", ErrCloudflareChallenge, resp.StatusCode)
 	}
 
 	var result struct {
