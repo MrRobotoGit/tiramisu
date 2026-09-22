@@ -173,7 +173,10 @@ type RemoveRequest struct {
 	// and may omit it.
 	Type string `json:"type"`
 	Path string `json:"path"`
-	Hash string `json:"hash"`
+	// Prefix removes every projection under a section-relative album prefix. Path
+	// and Prefix are mutually exclusive.
+	Prefix string `json:"prefix"`
+	Hash   string `json:"hash"`
 	// Blacklist keeps the release out: without it the sync engines are free to add the
 	// title back on their next run, which is what you want when removing to upgrade
 	// and not what you want when removing for good.
