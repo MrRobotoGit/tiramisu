@@ -338,6 +338,25 @@ Jellyfin's own event names and item types are mapped onto Tiramisu's internally
 (`PlaybackStart`→`media.play`, `PlaybackStop`→`media.stop`, `Movie`→`movie`,
 `Episode`→`show`), so neither side needs a code change or a plugin hack.
 
+**Music** uses the same endpoint with a different identity: a track has no IMDb id,
+so Tiramisu matches on the MusicBrainz id the projection was filed with. **Plex and
+Plexamp** need no extra configuration: play an album and the log shows
+`[PLEX] Playback confirmed by webhook for: <file>.flac`. **Jellyfin** needs a second
+Generic destination (Jellyfin 10.11 requires plugin 18 or later, 10.10 requires 16
+or later, current is 22) with the same URL and events and this body:
+
+```
+{"event":"{{NotificationType}}","Metadata":{"title":"{{{Name}}}","grandparentTitle":"{{{Artist}}}","librarySectionType":"{{ItemType}}","ProviderIds":{"MusicBrainzTrack":"{{Provider_musicbrainztrack}}","MusicBrainzReleaseGroup":"{{Provider_musicbrainzreleasegroup}}","MusicBrainzAlbum":"{{Provider_musicbrainzalbum}}","MusicBrainzArtist":"{{Provider_musicbrainzartist}}"}}}
+```
+
+Plex sends the release track id, Jellyfin the recording id (the `MUSICBRAINZ_TRACKID`
+tag, exposed as `MusicBrainzTrack`). The id style follows the Plex/Jellyfin switch in
+the Control Panel, so a library must be filed with the style of the player that
+actually plays it, and switching player afterwards means re-filing it with an align
+run in the new style. Jellyfin exposes MusicBrainz providers only when the files
+carry MusicBrainz tags: tagless files still play, but their webhook has no id to
+match and the session falls back to inferred playback.
+
 ### 4. Adaptive Shield
 
 Two read modes, managed automatically:
@@ -575,6 +594,12 @@ http://192.168.1.2:9080/plex/webhook
 - Template:
 ```
 {"event":"{{NotificationType}}","Metadata":{"title":"{{{Name}}}","grandparentTitle":"{{{SeriesName}}}","librarySectionType":"{{ItemType}}","guid":"imdb://{{Provider_imdb}}","Guid":[{"id":"imdb://{{Provider_imdb}}"}]}}
+```
+
+Music needs a second Generic destination with its own template, same URL and events:
+
+```
+{"event":"{{NotificationType}}","Metadata":{"title":"{{{Name}}}","grandparentTitle":"{{{Artist}}}","librarySectionType":"{{ItemType}}","ProviderIds":{"MusicBrainzTrack":"{{Provider_musicbrainztrack}}","MusicBrainzReleaseGroup":"{{Provider_musicbrainzreleasegroup}}","MusicBrainzAlbum":"{{Provider_musicbrainzalbum}}","MusicBrainzArtist":"{{Provider_musicbrainzartist}}"}}}
 ```
 
 Test connectivity:
