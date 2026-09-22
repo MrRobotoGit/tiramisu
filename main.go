@@ -223,6 +223,10 @@ var readBufferPool *sync.Pool
 // reImdbID matches "imdb://tt1234567" in the Guid array of Plex webhook payloads.
 var reImdbID = regexp.MustCompile(`"imdb://(tt\d+)"`)
 
+// webhookMaxBody bounds a webhook post. Plex sends multipart with a thumbnail, so
+// the ceiling has to clear a poster, not just the JSON.
+const webhookMaxBody = 10 * 1024 * 1024
+
 // reMbid matches "mbid://<uuid>" in Plex webhook payloads for music. A track
 // payload can carry several: the recording, its release group and the artist.
 var reMbid = regexp.MustCompile(`"mbid://([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"`)
@@ -3949,13 +3953,35 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		payloadStr = string(body)
 	} else {
-		if err := r.ParseMultipartForm(10 * 1024 * 1024); err != nil {
+		// A form post is a form post: the plugin may send multipart or the older
+		// application/x-www-form-urlencoded, and ParseMultipartForm reports the
+		// latter as ErrNotMultipart after ParseForm has already filled the values.
+		//
+		// The cap matters for the urlencoded branch: ParseForm reads that body with
+		// ReadAll, unbounded, and this process shares a 2200MB limit with the engine.
+		//
+		// ParseForm runs first on purpose: ParseMultipartForm swallows its error for a
+		// urlencoded body and reports ErrNotMultipart instead, so an oversized post
+		// would otherwise be read until the cap and then answer 200.
+		//
+		// The cap matches the multipart limit below rather than undercutting it: this
+		// reader wraps the body before either branch, so a smaller value here would
+		// reject a Plex webhook whose multipart carries a thumbnail, and a rejected
+		// webhook is a playback session that never gets confirmed.
+		r.Body = http.MaxBytesReader(w, r.Body, webhookMaxBody)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Bad request", 400)
+			return
+		}
+		if err := r.ParseMultipartForm(webhookMaxBody); err != nil && !errors.Is(err, http.ErrNotMultipart) {
 			http.Error(w, "Bad request", 400)
 			return
 		}
 		payloadStr = r.FormValue("payload")
 	}
 	if payloadStr == "" {
+		// Silent 200s make a misconfigured plugin a mystery: say so once per event.
+		logger.Printf("[PLEX] Webhook from %s carried no payload", r.RemoteAddr)
 		return
 	}
 

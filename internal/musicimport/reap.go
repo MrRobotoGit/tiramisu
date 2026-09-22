@@ -98,6 +98,7 @@ type albumFailures struct {
 	firstFailNS   int64
 	lastFailNS    int64
 	activeSession bool
+	rows          []AudioRow
 }
 
 // groupAlbums folds the flat projection rows into albums keyed by hash, the torrent
@@ -120,7 +121,7 @@ func groupAlbums(rows []AudioRow) []albumFailures {
 	albums := make([]albumFailures, 0, len(order))
 	for _, hash := range order {
 		group := byHash[hash]
-		album := albumFailures{hash: hash, prefix: commonDirPrefix(group)}
+		album := albumFailures{hash: hash, prefix: commonDirPrefix(group), rows: group}
 		for _, row := range group {
 			if row.ActiveSession {
 				album.activeSession = true

@@ -44,6 +44,17 @@ func SelectCandidates(results []prowlarr.ProwlarrResult, artist, album string, m
 	albumTokens := normalizeTokens(album)
 	artistTokens := normalizeTokens(artist)
 
+	// A title that yields no comparable token cannot be told apart from any other
+	// release by the same artist, and the checks below would wave every one of them
+	// through: "len(albumTokens) > 0" guards the album filter, and the exact-match
+	// bonus reads as satisfied when both sides are zero. The Greenhornes' "★★★★"
+	// filed a 1999 album under the 2010 name that way. Symbols, short numerals and
+	// stopword-only titles all land here, so refusing is the only safe answer: an
+	// album nobody can verify is one to add by hand, not to guess.
+	if strings.TrimSpace(album) != "" && len(albumTokens) == 0 {
+		return nil
+	}
+
 	var candidates []Candidate
 	for _, result := range results {
 		hash := strings.ToLower(strings.TrimSpace(result.InfoHash))
@@ -73,7 +84,7 @@ func SelectCandidates(results []prowlarr.ProwlarrResult, artist, album string, m
 		if score > 50 {
 			score = 50
 		}
-		if matchedAlbum == len(albumTokens) {
+		if len(albumTokens) > 0 && matchedAlbum == len(albumTokens) {
 			score += 40
 		}
 		if matchedArtist == len(artistTokens) {

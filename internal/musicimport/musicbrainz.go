@@ -16,11 +16,25 @@ import (
 // outcome (a stale Plex id) rather than a failure.
 var errMusicBrainzNotFound = errors.New("musicbrainz: not found")
 
+// errMusicBrainzBusy marks an answer the server may give differently a moment later.
+var errMusicBrainzBusy = errors.New("musicbrainz: temporarily unavailable")
+
 // ReleaseGroup is the album-level identity the Library API stores for a projection.
 type ReleaseGroup struct {
 	ID     string
 	Artist string
 	Title  string
+}
+
+// ReleaseTrack is one entry of a release's tracklist. Plex stores and sends the
+// track id, not the recording id: MusicBrainz has no lookup endpoint for it, but the
+// release's own tracklist is where it lives.
+type ReleaseTrack struct {
+	ID        string // MusicBrainz track id, the one Plex speaks
+	Recording string
+	Medium    int
+	Position  string // the track's number inside its medium, verbatim
+	Title     string
 }
 
 // MusicBrainz resolves release ids and searches release groups. Its requests are
@@ -44,10 +58,11 @@ func NewMusicBrainz() *MusicBrainz {
 	}
 }
 
-// ReleaseGroupForRelease follows the release Plex stored to its release group.
-func (m *MusicBrainz) ReleaseGroupForRelease(ctx context.Context, releaseID string) (ReleaseGroup, bool, error) {
+// ReleaseDetails follows the release Plex stored to its release group and reads its
+// tracklist in the same call. The tracklist is the only place a track id resolves.
+func (m *MusicBrainz) ReleaseDetails(ctx context.Context, releaseID string) (ReleaseGroup, []ReleaseTrack, bool, error) {
 	if strings.TrimSpace(releaseID) == "" {
-		return ReleaseGroup{}, false, nil
+		return ReleaseGroup{}, nil, false, nil
 	}
 	var release struct {
 		Title        string `json:"title"`
@@ -58,22 +73,45 @@ func (m *MusicBrainz) ReleaseGroupForRelease(ctx context.Context, releaseID stri
 		ArtistCredit []struct {
 			Name string `json:"name"`
 		} `json:"artist-credit"`
+		Media []struct {
+			Position int `json:"position"`
+			Tracks   []struct {
+				ID        string `json:"id"`
+				Number    string `json:"number"`
+				Title     string `json:"title"`
+				Recording struct {
+					ID string `json:"id"`
+				} `json:"recording"`
+			} `json:"tracks"`
+		} `json:"media"`
 	}
-	err := m.get(ctx, "/release/"+url.PathEscape(releaseID), url.Values{"inc": {"release-groups+artist-credits"}}, &release)
+	err := m.get(ctx, "/release/"+url.PathEscape(releaseID), url.Values{"inc": {"release-groups+artist-credits+recordings"}}, &release)
 	if errors.Is(err, errMusicBrainzNotFound) {
-		return ReleaseGroup{}, false, nil
+		return ReleaseGroup{}, nil, false, nil
 	}
 	if err != nil {
-		return ReleaseGroup{}, false, err
+		return ReleaseGroup{}, nil, false, err
 	}
 	if release.ReleaseGroup.ID == "" {
-		return ReleaseGroup{}, false, nil
+		return ReleaseGroup{}, nil, false, nil
+	}
+	var tracks []ReleaseTrack
+	for _, medium := range release.Media {
+		for _, track := range medium.Tracks {
+			tracks = append(tracks, ReleaseTrack{
+				ID:        track.ID,
+				Recording: track.Recording.ID,
+				Medium:    medium.Position,
+				Position:  track.Number,
+				Title:     track.Title,
+			})
+		}
 	}
 	return ReleaseGroup{
 		ID:     release.ReleaseGroup.ID,
 		Title:  release.ReleaseGroup.Title,
 		Artist: strings.Join(artistNames(release.ArtistCredit), ", "),
-	}, true, nil
+	}, tracks, true, nil
 }
 
 // SearchReleaseGroup looks a release group up by artist and title, for albums Plex
@@ -134,7 +172,41 @@ func artistNames(credit []struct {
 	return names
 }
 
+// musicBrainzRetries is how many times a throttled or unavailable answer is tried
+// again. MusicBrainz returns 503 under load and 429 when the rate is exceeded, both
+// transient: without a retry a whole album is dropped for a reason that has nothing
+// to do with the match, and over a few thousand albums that loss adds up.
+const musicBrainzRetries = 3
+
 func (m *MusicBrainz) get(ctx context.Context, path string, query url.Values, out interface{}) error {
+	var err error
+	for attempt := 0; attempt <= musicBrainzRetries; attempt++ {
+		if attempt > 0 {
+			// Backs off on top of the rate limiter's own spacing: a server already
+			// saying "too fast" is not helped by arriving on schedule.
+			delay := time.Duration(attempt) * time.Second
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+		err = m.getOnce(ctx, path, query, out)
+		if !isTransientMusicBrainz(err) {
+			return err
+		}
+	}
+	return err
+}
+
+// isTransientMusicBrainz reports whether the answer is worth asking for again.
+func isTransientMusicBrainz(err error) bool {
+	return err != nil && (errors.Is(err, errMusicBrainzBusy))
+}
+
+func (m *MusicBrainz) getOnce(ctx context.Context, path string, query url.Values, out interface{}) error {
 	if err := m.wait(ctx); err != nil {
 		return err
 	}
@@ -154,6 +226,8 @@ func (m *MusicBrainz) get(ctx context.Context, path string, query url.Values, ou
 		return json.NewDecoder(response.Body).Decode(out)
 	case http.StatusNotFound:
 		return errMusicBrainzNotFound
+	case http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusBadGateway, http.StatusGatewayTimeout:
+		return fmt.Errorf("musicbrainz %s: status %d: %w", path, response.StatusCode, errMusicBrainzBusy)
 	default:
 		return fmt.Errorf("musicbrainz %s: status %d", path, response.StatusCode)
 	}

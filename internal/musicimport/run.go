@@ -10,8 +10,12 @@ import (
 
 // Options controls one run.
 type Options struct {
-	Section      string
-	IndexerIDs   []int
+	Section    string
+	IndexerIDs []int
+	// IDStyle picks which MusicBrainz id a projection carries: "track" (default) is
+	// the release's track id, the one Plex sends in webhooks; "recording" is the
+	// recording id, the one Jellyfin exposes as MusicBrainzTrack.
+	IDStyle      string
 	MinSeeders   int
 	MaxSizeBytes int64
 	Limit        int
@@ -51,7 +55,7 @@ func (r *Runner) logf(format string, args ...interface{}) {
 // Run walks the Plex albums once. It never mutates the library unless Apply is set.
 func (r *Runner) Run(ctx context.Context) (Summary, error) {
 	var summary Summary
-	present, err := r.Library.CommittedExternalIDs(ctx)
+	committed, err := r.Library.Committed(ctx)
 	if err != nil {
 		return summary, fmt.Errorf("read the library: %w", err)
 	}
@@ -59,7 +63,7 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 	if err != nil {
 		return summary, fmt.Errorf("read Plex: %w", err)
 	}
-	r.logf("albums in Plex: %d, already in the library: %d", len(albums), len(present))
+	r.logf("albums in Plex: %d, album prefixes already in the library: %d", len(albums), len(committed.AlbumPrefixes))
 
 	for _, album := range albums {
 		if ctx.Err() != nil {
@@ -89,7 +93,7 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 			continue
 		}
 
-		group, ok, err := r.releaseGroup(ctx, album, &entry)
+		group, tracks, ok, err := r.resolveAlbum(ctx, album, &entry)
 		if err != nil {
 			r.fail(&summary, album, &entry, err)
 			continue
@@ -100,7 +104,7 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 		}
 		entry.ReleaseGroupID = group.ID
 
-		if present[group.ID] {
+		if committed.HasAlbum(album.Artist, album.Title, group.ID) {
 			summary.Present++
 			r.finish(&summary, album, &entry, StatusAlreadyPresent, "already in the library")
 			continue
@@ -124,7 +128,7 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 			continue
 		}
 
-		if err := r.apply(ctx, album, group, candidate, &entry); err != nil {
+		if err := r.apply(ctx, album, group, tracks, candidate, &entry); err != nil {
 			r.fail(&summary, album, &entry, err)
 			continue
 		}
@@ -142,22 +146,43 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 	return summary, nil
 }
 
-// releaseGroup answers from the state first: the MusicBrainz lookup is the slowest
-// step in the pipeline and its answer never changes.
-func (r *Runner) releaseGroup(ctx context.Context, album Album, entry *Entry) (ReleaseGroup, bool, error) {
+// resolveAlbum answers from the state first: the MusicBrainz lookup is the slowest
+// step in the pipeline and its answer never changes. It returns the release's
+// tracklist when it has one, which is where the per-file track ids live.
+func (r *Runner) resolveAlbum(ctx context.Context, album Album, entry *Entry) (ReleaseGroup, []ReleaseTrack, bool, error) {
 	if entry.ReleaseGroupID != "" {
-		return ReleaseGroup{ID: entry.ReleaseGroupID, Artist: entry.Artist, Title: entry.Title}, true, nil
+		return ReleaseGroup{ID: entry.ReleaseGroupID, Artist: entry.Artist, Title: entry.Title}, nil, true, nil
 	}
 	if album.ReleaseID != "" {
-		group, ok, err := r.Brainz.ReleaseGroupForRelease(ctx, album.ReleaseID)
+		group, tracks, ok, err := r.Brainz.ReleaseDetails(ctx, album.ReleaseID)
 		if err != nil {
-			return ReleaseGroup{}, false, err
+			return ReleaseGroup{}, nil, false, err
 		}
 		if ok {
-			return group, true, nil
+			return group, tracks, true, nil
 		}
 	}
-	return r.Brainz.SearchReleaseGroup(ctx, album.Artist, album.Title)
+	group, ok, err := r.Brainz.SearchReleaseGroup(ctx, album.Artist, album.Title)
+	if err != nil {
+		return ReleaseGroup{}, nil, false, err
+	}
+	return group, nil, ok, nil
+}
+
+// trackIdentity picks the id a projection carries for one track. The default is the
+// release's track id because that is what Plex sends in a music webhook; Jellyfin
+// speaks recording ids, exposed as the MusicBrainzTrack provider.
+func (r *Runner) trackIdentity(track ReleaseTrack, fallback string) string {
+	if strings.EqualFold(r.Options.IDStyle, "recording") && track.Recording != "" {
+		return track.Recording
+	}
+	if track.ID != "" {
+		return track.ID
+	}
+	if track.Recording != "" {
+		return track.Recording
+	}
+	return fallback
 }
 
 // selectTorrent tries the explicit lossless query first, then a plain one: some
@@ -194,8 +219,11 @@ func (r *Runner) selectTorrent(ctx context.Context, album Album, group ReleaseGr
 	return Candidate{}, false
 }
 
-// apply inspects the torrent and files its lossless files as projections.
-func (r *Runner) apply(ctx context.Context, album Album, group ReleaseGroup, candidate Candidate, entry *Entry) error {
+// apply inspects the torrent and files its lossless files as projections. Each file
+// carries its own track id when the release tracklist could be read: that is the id
+// Plex sends in a webhook, so the projection and the player finally speak the same
+// id. Files the tracklist cannot be matched by keep the album's release group.
+func (r *Runner) apply(ctx context.Context, album Album, group ReleaseGroup, tracks []ReleaseTrack, candidate Candidate, entry *Entry) error {
 	files, err := r.Library.Inspect(ctx, candidate.Hash, album.Artist+" - "+album.Title)
 	if err != nil {
 		return fmt.Errorf("inspect %s: %w", candidate.Hash, err)
@@ -205,10 +233,14 @@ func (r *Runner) apply(ctx context.Context, album Album, group ReleaseGroup, can
 		if !strings.HasSuffix(strings.ToLower(file.SourcePath), ".flac") {
 			continue
 		}
+		externalID := group.ID
+		if track, ok := matchTrack(file.SourcePath, tracks); ok {
+			externalID = r.trackIdentity(track, group.ID)
+		}
 		adds = append(adds, AddFile{
 			SourcePath:          file.SourcePath,
 			Path:                VirtualPath(album.Artist, album.Title, candidate.Hash, file.SourcePath),
-			ExternalID:          group.ID,
+			ExternalID:          externalID,
 			ExternalIDNamespace: "musicbrainz",
 		})
 	}

@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie, TV, music or audiobook release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.3.0
+version: 4.4.0
 author: MrRobotoGit
 license: GPL-3.0-only
 metadata:
@@ -25,9 +25,11 @@ access to its filesystem. One helper script is embedded in
 or secret is embedded anywhere: fill the placeholders per deployment, never
 hardcode.
 
-**Requires Tiramisu v1.9.64 or later.** On an older build the endpoints answer
-`404`. Say so and stop. Updating is the fix: writing the stub by hand is never
-the answer, wherever you happen to be running.
+**Requires Tiramisu v1.9.64 or later; the audio contract needs v1.10.0.** On an
+older build the audio endpoints answer `404`, and an old `list` reads the wrong
+library without saying so. Say which version you found and stop. Updating is the
+fix: writing the stub by hand is never the answer, wherever you happen to be
+running.
 
 **The only thing you need from the operator is `CTRL`**, the control API base
 (`http://<host>:9080` by default). The deployment describes itself from there:
@@ -42,7 +44,9 @@ The same response also carries `tmdb_api_key`, the Prowlarr block,
 `torrentio_url`, `media_server_type` and the `plex` block with its library ids.
 Resolve them, do not ask for them.
 
-If `media_server_type` is empty, infer it: a populated `plex.url` means Plex.
+If `media_server_type` is empty, do not infer it from the `plex` block: Jellyfin
+deployments carry `plex.url` and an API key there too, so the inference reads Plex
+on a Jellyfin box. Report the missing field instead of guessing.
 
 What you take from that response is the scoring profile and the indexer
 credentials. The paths it reports are the server's own business.
@@ -59,10 +63,12 @@ on the real filesystem, exposed by the FUSE layer with the declared full size.
    media server to rescan
 4. The FUSE layer presents each stub as a full-size virtual file
 
-Step 3 is one HTTP call for video. **Audio inverts step 2 and 3**: you name every
-file yourself and the engine only validates, so it is `inspect` then `add` — see
-[Audio: music and audiobooks](#audio-music-and-audiobooks). Knowing what it does server-side is still worth it: it
-is what lets you tell a bad pick from a broken deployment.
+Step 3 is one HTTP call for video. **For audio the naming moves to you**: there
+is no metadata source to derive a filename from, so it is `inspect` then `add`,
+and you name every projection — see
+[Audio: music and audiobooks](#audio-music-and-audiobooks). Knowing what the
+engine does server-side is still worth it: it is what lets you tell a bad pick
+from a broken deployment.
 
 ## What to report
 
@@ -104,7 +110,7 @@ making the operator ask twice.
 
 ## Library API: the whole add in one call
 
-Available from v1.9.64 on, on the control port. It does what the sync engine does for
+Available from v1.9.64 on (video; audio from v1.10.0), on the control port. It does what the sync engine does for
 one title: registers the torrent, waits for the file list, picks the file, writes
 the stub with the deployment's own naming, registers TV episodes in the state DB
 and asks the media server to rescan. No filesystem access, no stub written by
@@ -162,9 +168,12 @@ The slice is the half that appears in a movie filename; for `type=tv` print
 against that rather than the fragment; when it is empty, only the path
 identifies the entry.
 
-Only `movie`, `tv` and `gaps` mean anything: any other value, a typo included,
-silently falls back to the movie library, so a wrong word reads as a wrong
-answer. Ask for the library you are about to write into.
+Only `movie`, `tv`, `gaps`, `music` and `audiobook` mean anything: any other
+value, a typo included, silently falls back to the movie library. **The plural
+`audiobooks` is not a value**: it is routed as a video type and answers `200`
+with the movie list — a wrong answer that looks like a right one. `musics` too.
+Ask for the library you are about to write into, spelled the way this file
+spells it.
 
 One entry per stub, with `size`, `hash`, `imdb` and, for TV, `season`/`episode`.
 This is the dedup check: it reads the filesystem server-side, which is the only
@@ -237,6 +246,12 @@ add carries a `files` array and either all of it lands or none of it does.
 `inspect` first to get the source paths, then `add` mapping each one to the
 virtual path you want.
 
+**The torrent is given, not found here.** Audio sourcing starts from a hash or
+magnet the caller already has; building it from a title is the controller's job.
+The `external_id` is what your media server will send back, so match its side:
+Plex sends the MusicBrainz *release track* id, Jellyfin the MusicBrainz
+*recording* id.
+
 ### Step 1: inspect
 
 ```bash
@@ -254,7 +269,8 @@ curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
 `title` is required even here: a cold torrent has to be added to the engine to be
 read, and it needs a name. Metadata that never arrives is an error, not an empty
 list — "not ready" and "no files" are different answers, and the engine keeps them
-apart.
+apart. `metadata_wait` is the same knob as in `add`: seconds to wait for metadata,
+default 60, capped at 300; keep `--max-time` above it.
 
 ### Step 2: add
 
@@ -288,15 +304,29 @@ be filed as `.mp3`.
 
 ```json
 {"hash":"9b31...","title":"20Ten","type":"music","already_present":false,
- "files":[{"path":"/mnt/torrserver/music/Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac",
+ "files":[{"path":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac",
            "source_path":"Prince - 20Ten (2010) FLAC/01. Compassion.flac",
            "file_index":1,"size":28461945,"mtime":"2026-09-21T12:09:48Z",
-           "state":"committed","external_id":"f4a1...","external_id_ns":"musicbrainz"}]}
+           "state":"created","external_id":"f4a1...","external_id_ns":"musicbrainz"}]}
 ```
 
-`201` when it created them, `200` with `"already_present": true` when every
+**In the audio response `path` is virtual** — the section-relative path you sent,
+which is also what `list` and `remove` use. The video response is the one that
+reports a physical `/mnt/torrserver/...` path; do not copy that habit here.
+
+`201` when it created them, `200` with `"already_present": true` when **every**
 requested projection was already there — a replay, and `mtime` stays what it was,
-so a present result never looks like it rewrote anything.
+so a present result never looks like it rewrote anything. A mixed request — some
+paths present, some new — still answers `201`, creates only the missing entries
+and leaves the present ones alone, stored identity included. Each file's `state`
+says which happened: `created` for what this call wrote, `present` for what was
+already there.
+
+**No rescan follows an audio add.** The rescan hook belongs to the video path:
+the config carries library ids for movies and TV, none for music, and no audio
+call asks the media server to look. Scan the `music/` and `audiobooks/` sections
+manually once a batch is filed — that is the intended flow, not a missing
+feature.
 
 **On a replay the stored identity wins.** If your `external_id` disagrees with
 the one already registered for that projection, the request still succeeds, the
@@ -308,8 +338,10 @@ a registered identity, remove the projection and add it again. `external_id` and
 never has to branch on a missing key.
 
 **Audio requests are strict**: an unknown field is a `400`, where the video
-decoder stays lenient for callers that predate the endpoint. Bodies are capped at
-1 MiB.
+decoder stays lenient for callers that predate the endpoint. In `files[]` the
+only accepted keys are `source_path`, `path`, `external_id` and `external_id_ns`:
+`file_index`, `size` and `mtime` come back from `inspect` but must not be echoed
+into the `add`, or the whole request is refused. Bodies are capped at 1 MiB.
 
 ### Listing audio
 
@@ -324,14 +356,19 @@ films:
 ```json
 {"items":[{"type":"music","path":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac",
            "hash":"9b31...","source_path":"...","file_index":1,
+           "size":28461945,"mtime_ns":1758456588000000000,"state":"committed",
            "external_id":"f4a1...","external_id_ns":"musicbrainz"}],
  "next_cursor":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac"}
 ```
 
 Pass `next_cursor` back as `cursor` until it comes back empty, and `prefix` to
-scope to one album instead of walking the section. The items are reconciliation
-data, not media metadata: enough to diff what you sent against what the engine
-holds, no more.
+scope to one album instead of walking the section. `limit` defaults to 200 and
+caps at 1000; `path` and `prefix` are mutually exclusive. The items are
+reconciliation data, not media metadata: enough to diff what you sent against
+what the engine holds, no more. `state` is normally `committed`; `staged` is an
+add not yet published and `removing` a projection the engine has claimed for
+deletion. Add `failures=1` to attach the metadata-failure counters — `fail_count`,
+`first_fail_ns`, `last_fail_ns`, `active_session` — to every entry.
 
 ### What the audio library looks like
 
@@ -374,15 +411,39 @@ curl -s -X POST -H 'Content-Type: application/json' \
   "{CTRL}/api/library/remove"
 ```
 
-**Exact path only, one projection at a time.** None of the video shortcuts apply:
-no `hash` form that removes every stub of a release, no prefix, no recursion. And
-`blacklist` is a `400` here, not a no-op — it is video lifecycle state and audio
-has no sync engine that would re-add a title.
+**One projection, or one album.** `path` removes exactly that file; `prefix`
+removes every projection under an album directory in a single transaction. The two
+are mutually exclusive, and one of them is required. The video shortcuts still do
+not apply: no `hash` form that removes every stub of a release, no recursion below
+the album. And `blacklist` is a `400` here, not a no-op — it is video lifecycle
+state and audio has no sync engine that would re-add a title.
 
 ```json
 {"type":"music","path":"Prince - 20Ten (2010)/01. Compassion_9ac7684d.flac",
  "removed":true,"torrent_referenced":false}
 ```
+
+**The album form is the one you usually want.** Nobody removes a single track: a
+dead swarm takes the whole album, and an album missing nine of its ten tracks is
+not worth keeping.
+
+```bash
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"type":"music","prefix":"Prince - 20Ten (2010)"}' \
+  "{CTRL}/api/library/remove"
+```
+
+```json
+{"type":"music","prefix":"Prince - 20Ten (2010)","removed":10,
+ "torrent_referenced":false}
+```
+
+`removed` counts the projections, so it is a number here and a boolean in the
+exact-path form. Matching is on whole path components: `Artist/Album` never
+reaches `Artist/Album2`. A prefix holding projections from more than one torrent
+is a `409` — that directory is not one album. A prefix matching nothing is a
+success with `removed: 0`, not a `404`, so a reaper retrying after a partial run
+does not have to special-case it.
 
 `torrent_referenced` says whether other projections still point at that torrent.
 The torrent is never dropped by this call: while any row references it a

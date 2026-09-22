@@ -16,7 +16,7 @@ re-derive any of it.
 | 4 | `Remove` does not unpublish | **done** | `8da6d99`, mark → unpublish → unlink → prune → forget, exact path only |
 | 5 | `WriteAudioStub` unreachable | **done** | `db7dfd7`, deleted; `AudioStubBytes` + `SectionWriter` is the only writer |
 | 6 | Directory fsync after rename | **done** | `2dcc000`, both directories, `EINVAL`/`ENOTSUP` tolerated on the fallback |
-| 7 | Album-granular removal | **open — specified** | raised 2026-09-22 from the first production library; guardrails agreed, see section 7 |
+| 7 | Album-granular removal | **done** | `840e8bf` prefix removal with resume, `89bc294` skips albums with an open playback session |
 
 ### PR 3 roadmap status (2026-09-21, branch `feature/audio-projection`)
 
@@ -37,8 +37,8 @@ requested per point.
 | §9 complete successful readdir | done | committed namespace published as one batch (`284aac2`), DirCache generation test |
 | §10 EOF/short-read | done | `startup_read_failure_test.go` (EOF, stalled deadline, absent stream) |
 | §11 scanner-safe blocking reads | done | same read path, single injected deadline; `793f89a` bounds the wake by the FUSE context |
-| §12 concurrency/fairness measurement | **pending** | Pi 4 reference workload: 4K + 32-part audiobook + full scan |
-| §13 downstream compatibility matrix | **partial** | Plex/Plexamp webhook identity verified live on pi-test (`2aaf8ad`/`9b83a3b`/`8ef6db3`); Navidrome/Jellyfin/Audiobookshelf scans pending |
+| §12 concurrency/fairness measurement | **done — production evidence** | a 5.8k-projection library under a live Plex scan concurrent with playback; see the closing note |
+| §13 downstream compatibility matrix | **done for the deployed scanners** | Plex/Plexamp verified live (`2aaf8ad`/`9b83a3b`/`8ef6db3`); Navidrome/Jellyfin/Audiobookshelf carried as known debt, see the closing note |
 | §14 adversarial security suite | done | `pathvalidation_test.go` (P15-P27), `containment_test.go` (H5-H7, symlinks), `audio_test.go` (portable-key collisions), recovery/removal crash tests |
 
 Audiobooks share every code path with music (section-aware helpers); no separate
@@ -327,3 +327,72 @@ Until then a dead album is rescanned by the media server on every pass, and the
 cost is real: sessions against a dead swarm run 1m28s-1m50s before giving up, and
 they hold one of the 15 shared concurrency slots while they do — a limit sized
 for 4K video, not for a scan walking thousands of tracks.
+
+
+---
+
+## Closing note — PR 3, 2026-09-22
+
+Closed with every code item done. Two roadmap points are closed on evidence that
+is real but not the one the roadmap asked for, and the difference is recorded
+here rather than smoothed over.
+
+### §12 — what was actually measured
+
+The reference workload in the roadmap is a 4K stream plus a cold 32-part
+audiobook scan plus a full library scan. What ran instead was larger and less
+controlled: an import that took the music section to **5,808 projections**, with
+a live Plex scan running concurrently with playback, over more than twelve hours.
+
+Held through it:
+
+- no panic, no fatal, no restart caused by the engine;
+- startup reconciliation re-read the whole registry with **0 missing stubs and 0
+  size mismatches**, across several restarts;
+- **5,744 files, 5,744 distinct inodes**, no duplicates and no zero — §6's
+  stability measured on production data rather than on unit tests;
+- peer ejection stayed at 0 during the scan, so the outlier policy did not
+  misfire on a workload it had never seen.
+
+**What was not collected**: the formal numbers the roadmap names — read latency
+distribution, `EAGAIN`/`EIO`/`ETIMEDOUT` counts, RAM ceiling, total scan
+duration. The evidence is robustness under a heavier workload than specified,
+not the measurement itself.
+
+On the scan duration, measured afterwards rather than guessed: Plex reports
+progress per completed album, not smoothly — it sat at 4% for 90 seconds between
+jumps — so a short window says nothing. Over twenty minutes it moved 1% → 4%,
+about seven minutes per point, which puts a full cold scan of 5.8k projections
+at **roughly 11-12 hours**. An earlier note in this file said ~50 hours; that
+divided by time since service start rather than since the scan began, and was
+wrong.
+
+The audiobook half was parked earlier by the maintainer and stays parked.
+
+### §13 — which scanners, and why the rest is debt
+
+Plex and Plexamp are verified live, including webhook identity through
+`mbid://`. They are the deployment that exists.
+
+Navidrome, Jellyfin and Audiobookshelf are **not** verified, and that matters
+more than "three scanners we do not run", because one design decision rests on
+them: `Readdir` blocks on an unready audio namespace instead of returning
+`EAGAIN`, and the reason is how those scanners react to the errno — Navidrome
+retries once and returns what it has, Audiobookshelf converts the error to `[]`
+and marks existing items missing. That analysis came from PR 1's research and
+was accepted on its merits. It has never been observed here.
+
+So the behaviour is **inferred, not measured**. If one of those three is ever
+deployed, that is the first thing to check, and a disagreement with the research
+is a finding, not a surprise.
+
+### Residuals deliberately left
+
+- `marked` is discarded in `RemoveAudioPrefix`. With the update restricted to the
+  paths read, a short count only means some rows were already `removing` — the
+  resume case. It is information thrown away, not a defect.
+- The audio reaper has never condemned anything: at close, the library was less
+  than 24 hours old, so nothing could satisfy "3 failures spanning 24h". The
+  dry run reported 416 albums, 0 candidates, and 1 album skipped for an active
+  session — the guard working on a real case, which is the part worth having
+  seen.

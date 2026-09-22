@@ -48,10 +48,35 @@ func NewTiramisu(baseURL string) *Tiramisu {
 	}
 }
 
-// CommittedExternalIDs returns every committed projection's external identity, so a
-// resumed run can skip albums the library already holds.
-func (t *Tiramisu) CommittedExternalIDs(ctx context.Context) (map[string]bool, error) {
-	present := make(map[string]bool)
+// CommittedSet is what the library already holds: the external identities, and the
+// prefixes derived from the paths carrying the identities found under them. An album
+// registered per track has no single album id any more, so the presence of an album
+// is a path question.
+type CommittedSet struct {
+	ExternalIDs   map[string]bool
+	AlbumPrefixes map[string]map[string]bool // prefix -> external ids under it
+}
+
+// HasAlbum reports whether the album is already committed. The artist-qualified
+// prefix is enough on its own; the bare-name fallback exists for releases added by
+// hand as a single folder, and it only counts when the identities under that folder
+// include this album's: a same-named album by another artist must not hide a
+// missing import.
+func (c CommittedSet) HasAlbum(artist, album, identity string) bool {
+	prefix := strings.Trim(sanitizeComponent(artist)+"/"+sanitizeComponent(album), "/")
+	if len(c.AlbumPrefixes[prefix]) > 0 {
+		return true
+	}
+	bare := c.AlbumPrefixes[sanitizeComponent(album)]
+	if len(bare) == 0 {
+		return false
+	}
+	return identity == "" || bare[identity]
+}
+
+// Committed reads every committed projection once.
+func (t *Tiramisu) Committed(ctx context.Context) (CommittedSet, error) {
+	set := CommittedSet{ExternalIDs: map[string]bool{}, AlbumPrefixes: map[string]map[string]bool{}}
 	cursor := ""
 	for {
 		query := url.Values{"type": {"music"}, "limit": {"500"}}
@@ -60,21 +85,40 @@ func (t *Tiramisu) CommittedExternalIDs(ctx context.Context) (map[string]bool, e
 		}
 		var page struct {
 			Items []struct {
+				Path                string `json:"path"`
 				ExternalID          string `json:"external_id"`
 				ExternalIDNamespace string `json:"external_id_ns"`
 			} `json:"items"`
 			NextCursor string `json:"next_cursor"`
 		}
 		if err := t.do(ctx, http.MethodGet, "/api/library/list?"+query.Encode(), nil, &page); err != nil {
-			return nil, err
+			return set, err
 		}
 		for _, item := range page.Items {
 			if item.ExternalID != "" {
-				present[item.ExternalID] = true
+				set.ExternalIDs[item.ExternalID] = true
+			}
+			parts := strings.Split(item.Path, "/")
+			record := func(prefix string) {
+				if prefix == "" {
+					return
+				}
+				ids := set.AlbumPrefixes[prefix]
+				if ids == nil {
+					ids = map[string]bool{}
+					set.AlbumPrefixes[prefix] = ids
+				}
+				if item.ExternalID != "" {
+					ids[item.ExternalID] = true
+				}
+			}
+			record(parts[0])
+			if len(parts) > 1 {
+				record(parts[0] + "/" + parts[1])
 			}
 		}
 		if page.NextCursor == "" {
-			return present, nil
+			return set, nil
 		}
 		cursor = page.NextCursor
 	}
@@ -142,6 +186,8 @@ func (t *Tiramisu) do(ctx context.Context, method, path string, payload, out int
 // included when the request asked for failures.
 type AudioRow struct {
 	Path          string `json:"path"`
+	SourcePath    string `json:"source_path"`
+	ExternalID    string `json:"external_id"`
 	Hash          string `json:"hash"`
 	FailCount     int64  `json:"fail_count"`
 	FirstFailNS   int64  `json:"first_fail_ns"`
@@ -171,6 +217,29 @@ func (t *Tiramisu) AudioRows(ctx context.Context) ([]AudioRow, error) {
 		}
 		cursor = page.NextCursor
 	}
+}
+
+// MediaServerType reads which player the box is configured for from the engine's
+// config API: "plex" or "jellyfin". The panel is where the user sets it, so the
+// controller follows it instead of asking again.
+func (t *Tiramisu) MediaServerType(ctx context.Context) (string, error) {
+	var config struct {
+		MediaServerType string `json:"media_server_type"`
+	}
+	if err := t.do(ctx, http.MethodGet, "/api/config", nil, &config); err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(config.MediaServerType)), nil
+}
+
+// IDStyleForPlayer maps the media server to the MusicBrainz id a projection should
+// carry: Plex webhooks send the release track id, Jellyfin exposes the recording id
+// as its MusicBrainzTrack provider.
+func IDStyleForPlayer(serverType string) string {
+	if strings.EqualFold(strings.TrimSpace(serverType), "jellyfin") {
+		return "recording"
+	}
+	return "track"
 }
 
 // PrefixRemoveResult is the engine's answer to an album removal.

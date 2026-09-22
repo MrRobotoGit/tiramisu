@@ -29,12 +29,16 @@ func main() {
 	prowlarrKey := flag.String("prowlarr-key", "", "Prowlarr API key (default: prowlarr.api_key from config.json)")
 	libraryURL := flag.String("library-url", "http://127.0.0.1:9080", "Tiramisu Library API base URL")
 	statePath := flag.String("state", "musicimport-state.json", "state file, created when missing")
-	minSeeders := flag.Int("min-seeders", 2, "minimum seeders for a music release")
+	// 5 comes from the first production library: albums that played had a median of
+	// 7.5 seeders, the ones that failed their metadata a median of 4. Below this the
+	// release is likely to be filed and then never readable.
+	minSeeders := flag.Int("min-seeders", 5, "minimum seeders for a music release")
 	maxSizeGB := flag.Float64("max-size-gb", 3, "largest accepted album size in GB")
 	limit := flag.Int("limit", 0, "stop after this many albums (0 = all)")
 	indexers := flag.String("indexers", "", "comma-separated Prowlarr indexer ids to search (default: all enabled)")
 	apply := flag.Bool("apply", false, "write to the library; without it the run is a dry run")
 	reap := flag.Bool("reap", false, "remove albums whose swarm has been unreachable, instead of importing")
+	idStyle := flag.String("id-style", "", "MusicBrainz id to register per file: track (Plex webhooks) or recording (Jellyfin); default follows media_server_type from the panel. It applies to new imports only: existing projections keep the id they were filed with")
 	reapMinFailures := flag.Int("reap-min-failures", 3, "failures needed before an album is condemned")
 	reapMinSpan := flag.Duration("reap-min-span", 24*time.Hour, "how long the failures must span")
 	reapLimit := flag.Int("reap-limit", 25, "most albums removed in one run (0 = no cap)")
@@ -82,6 +86,18 @@ func main() {
 		}
 	}
 
+	library := musicimport.NewTiramisu(*libraryURL)
+	style := *idStyle
+	if style == "" {
+		// The panel's Plex/Jellyfin switch decides which id the player will send back.
+		serverType, err := library.MediaServerType(ctx)
+		if err != nil {
+			log.Printf("musicimport: cannot read media_server_type, assuming Plex: %v", err)
+		}
+		style = musicimport.IDStyleForPlayer(serverType)
+		log.Printf("musicimport: media server %q, registering %s ids", serverType, style)
+	}
+
 	state, err := musicimport.LoadState(*statePath)
 	if err != nil {
 		log.Fatalf("musicimport: state: %v", err)
@@ -90,11 +106,12 @@ func main() {
 		Plex:    plex,
 		Brainz:  musicimport.NewMusicBrainz(),
 		Indexer: prowlarr.NewClient(prowlarr.ConfigProwlarr{Enabled: true, URL: *prowlarrURL, APIKey: *prowlarrKey}),
-		Library: musicimport.NewTiramisu(*libraryURL),
+		Library: library,
 		State:   state,
 		Options: musicimport.Options{
 			Section:      *section,
 			IndexerIDs:   parseIndexers(*indexers),
+			IDStyle:      *idStyle,
 			MinSeeders:   *minSeeders,
 			MaxSizeBytes: int64(*maxSizeGB * float64(1<<30)),
 			Limit:        *limit,
