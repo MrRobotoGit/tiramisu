@@ -47,7 +47,6 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
         <span style="width:16px;height:7px;border-radius:3px;background:rgba(234,179,8,0.50);display:inline-block;flex-shrink:0"></span>Strict Mode
       </span>
       <span class="text-[10px] text-slate-500">Banned Peers: <span id="v304BannedPeers">0</span> / Blocked List: <span id="ipBlocklistIPs" title="distinct addresses rejected">0</span></span>
-      <span class="text-[10px] text-slate-500">Audio Library: <span id="audioNamespaceState" title="committed audio namespace readiness">—</span> (<span id="audioNamespaceEntries">0</span>)</span>
     </div>
   </div>
   <div class="glass rounded-xl p-4">
@@ -274,10 +273,6 @@ async function load(){
     document.getElementById('fuseBudget').textContent=h.fuse_budget_mb.toFixed(0)+' MB budget';
     document.getElementById('cacheHitRatePct').textContent=(h.cache_hit_rate_pct==null)?'—':h.cache_hit_rate_pct.toFixed(1)+'%';
     document.getElementById('v304BannedPeers').textContent=h.v304_banned_peers ?? 0;
-    const ans=document.getElementById('audioNamespaceState');
-    ans.textContent=h.audio_namespace_state ?? '—';
-    ans.className=h.audio_namespace_state==='Ready'?'text-emerald-400':(h.audio_namespace_state==='Failed'?'text-red-400':'text-amber-400');
-    document.getElementById('audioNamespaceEntries').textContent=h.audio_namespace_entries ?? 0;
     const ipk=document.getElementById('ipBlocklistIPs');
     ipk.textContent=h.ip_blocklist_ips ?? 0;
     ipk.title=`${h.ip_blocklist_ips ?? 0} distinct addresses, ${h.ip_blocklist_rejections ?? 0} rejections`;
