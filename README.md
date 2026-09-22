@@ -1156,6 +1156,61 @@ curl -s -X POST -H 'Content-Type: application/json' \
 Removing a stub drops its torrent only when no other stub still points at it:
 one season pack is a single torrent behind many episodes.
 
+### Music and audiobooks (v1.10.0)
+
+`music/` and `audiobooks/` use the same endpoints with their own rules. The caller
+supplies the final path and Tiramisu validates what the engine owns: section
+containment, extension agreement, the mandatory `_<hash8>` suffix (the last eight
+hex digits of the infohash, before the extension) and collision rules. Music admits
+`.flac` only; audiobooks admit `.m4b`, `.m4a` and `.mp3`.
+
+```bash
+# 1. Inspect hydrates the magnet and returns the file list. The engine adds the
+# torrent itself, so a magnet is enough; metadata_wait works as in add.
+curl -s -X POST -H 'Content-Type: application/json' --max-time 300 \
+  -d '{"magnet":"magnet:?xt=urn:btih:...","title":"Dummy Album"}' \
+  http://127.0.0.1:9080/api/library/inspect
+
+# 2. Add an album, one projection per file. external_id is the caller's identity
+# (a MusicBrainz release group, an ASIN) and external_id_ns its namespace: it is
+# stored verbatim, written into the stub, and returned by list.
+curl -s -X POST -H 'Content-Type: application/json' --max-time 300 \
+  -d '{"type":"music","hash":"<infohash>","title":"Dummy Album",
+       "files":[{"source_path":"Release/01 - One.flac",
+                 "path":"Artist/Album/01 - One_e7f8a9b0.flac",
+                 "external_id":"<release-group-mbid>","external_id_ns":"musicbrainz"}]}' \
+  http://127.0.0.1:9080/api/library/add
+
+# 3. List pages instead of returning an array, and shows the identity per row.
+# prefix filters the section; failures=1 adds the reachability counters.
+curl -s 'http://127.0.0.1:9080/api/library/list?type=music&limit=200' | \
+  jq '{next_cursor, items: [.items[] | {path, external_id, external_id_ns}]}'
+curl -s 'http://127.0.0.1:9080/api/library/list?type=music&prefix=Artist/Album&failures=1'
+
+# 4. Remove one projection by exact path, or a whole album by prefix.
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"type":"music","path":"Artist/Album/01 - One_e7f8a9b0.flac"}' \
+  http://127.0.0.1:9080/api/library/remove
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"type":"music","prefix":"Artist/Album"}' \
+  http://127.0.0.1:9080/api/library/remove
+```
+
+`add` answers `201` for the projections it created, or `200` with
+`"already_present": true` when they are already filed. On a replay the stored
+identity wins and a disagreement is logged, so changing an identity means removing
+and adding again. `remove` is idempotent: an absent path answers `removed: false`
+with `state: "absent"`. Prefix removal takes a whole album in one call and answers
+`409` when the rows under it do not share exactly one torrent, which is the engine
+saying that directory is not an album. `blacklist` is not audio lifecycle state and
+is rejected. Hash-wide, directory and batch removal remain out of Phase 1. A
+torrent is never dropped while another projection still references it.
+
+Projections are read-only to their clients: files answer `0444`, directories
+`0555`, and the mutations a scanner never needs (write open, truncate, rename,
+mkdir, chmod) are refused with `EROFS`, while a direct unlink gets `EPERM`. Adding,
+re-filing and removing happen only through the API.
+
 ### Episode gaps (v1.9.71)
 
 When the TV reaper removes an episode whose release died, it does not just
