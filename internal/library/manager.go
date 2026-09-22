@@ -80,6 +80,9 @@ type Config struct {
 	// UnpublishAudioPath, when set, drops a removed projection from the namespace the
 	// VFS dispatches on, before its stub is unlinked.
 	UnpublishAudioPath func(AudioProjection)
+	// ActiveSession, when set, reports whether a hash has an open playback session.
+	// The list exposes it so a reaper can skip an album that is being listened to.
+	ActiveSession func(hash string) bool
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what

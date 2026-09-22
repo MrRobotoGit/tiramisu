@@ -117,8 +117,8 @@ func main() {
 		if *apply {
 			mode = "reaped"
 		}
-		fmt.Printf("\n%s: albums %d, candidates %d, removed %d, projections %d\n",
-			mode, summary.Albums, summary.Candidates, summary.Removed, summary.Files)
+		fmt.Printf("\n%s: albums %d, candidates %d, removed %d, projections %d, skipped for an active session %d\n",
+			mode, summary.Albums, summary.Candidates, summary.Removed, summary.Files, summary.SkippedActive)
 		for _, note := range summary.Notes {
 			fmt.Println(" -", note)
 		}

@@ -5127,7 +5127,10 @@ func main() {
 			// Without this a removed projection keeps resolving until its stub is
 			// gone and the next reconciliation runs.
 			UnpublishAudioPath: unpublishAudioProjectionLive,
-			InvalidatePath:     invalidateSyncRemovedPath,
+			// The audio reaper skips albums with an open session: the swarm counter is
+			// only acquitted when that session closes.
+			ActiveSession:  ttffActiveByHash,
+			InvalidatePath: invalidateSyncRemovedPath,
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.
 			Gaps: func() ([]library.Gap, error) {

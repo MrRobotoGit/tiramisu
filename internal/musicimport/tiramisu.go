@@ -141,11 +141,12 @@ func (t *Tiramisu) do(ctx context.Context, method, path string, payload, out int
 // AudioRow is one projection row as the list reports it, reachability counters
 // included when the request asked for failures.
 type AudioRow struct {
-	Path        string `json:"path"`
-	Hash        string `json:"hash"`
-	FailCount   int64  `json:"fail_count"`
-	FirstFailNS int64  `json:"first_fail_ns"`
-	LastFailNS  int64  `json:"last_fail_ns"`
+	Path          string `json:"path"`
+	Hash          string `json:"hash"`
+	FailCount     int64  `json:"fail_count"`
+	FirstFailNS   int64  `json:"first_fail_ns"`
+	LastFailNS    int64  `json:"last_fail_ns"`
+	ActiveSession bool   `json:"active_session"`
 }
 
 // AudioRows pages the whole music section with its reachability facts.

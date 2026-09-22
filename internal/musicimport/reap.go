@@ -19,11 +19,12 @@ type ReapOptions struct {
 
 // ReapSummary is one reap pass.
 type ReapSummary struct {
-	Albums     int
-	Candidates int
-	Removed    int
-	Files      int
-	Notes      []string
+	Albums        int
+	Candidates    int
+	Removed       int
+	Files         int
+	SkippedActive int
+	Notes         []string
 }
 
 // Reap removes albums whose swarm has been unreachable for long enough. An album is
@@ -47,6 +48,12 @@ func (r *Runner) Reap(ctx context.Context, opts ReapOptions) (ReapSummary, error
 	var candidates []candidate
 	for _, album := range albums {
 		if album.prefix == "" {
+			continue
+		}
+		// An open session has not acquitted its counter yet: the album may be playing
+		// right now and would look condemned for as long as the file stays open.
+		if album.activeSession {
+			summary.SkippedActive++
 			continue
 		}
 		span := time.Duration(album.lastFailNS - album.firstFailNS)
@@ -85,11 +92,12 @@ func (r *Runner) Reap(ctx context.Context, opts ReapOptions) (ReapSummary, error
 }
 
 type albumFailures struct {
-	prefix      string
-	hash        string
-	failCount   int64
-	firstFailNS int64
-	lastFailNS  int64
+	prefix        string
+	hash          string
+	failCount     int64
+	firstFailNS   int64
+	lastFailNS    int64
+	activeSession bool
 }
 
 // groupAlbums folds the flat projection rows into albums keyed by hash, the torrent
@@ -114,6 +122,9 @@ func groupAlbums(rows []AudioRow) []albumFailures {
 		group := byHash[hash]
 		album := albumFailures{hash: hash, prefix: commonDirPrefix(group)}
 		for _, row := range group {
+			if row.ActiveSession {
+				album.activeSession = true
+			}
 			if row.FailCount > album.failCount {
 				album.failCount = row.FailCount
 			}

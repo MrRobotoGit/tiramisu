@@ -272,6 +272,25 @@ func (s *TTFFSession) reportSwarmVerdict() {
 	native.ReachabilityOutcome(s.hash, false)
 }
 
+// ttffActiveByHash reports whether a playback session is still open for a hash. The
+// reaper skips those albums on purpose: the reachability counter is acquitted only
+// when the session closes, so an album that just came back to life still looks
+// condemned while it is playing.
+func ttffActiveByHash(hash string) bool {
+	if hash == "" {
+		return false
+	}
+	active := false
+	sessions.Range(func(_, value interface{}) bool {
+		if session, ok := value.(*TTFFSession); ok && session.hash == hash {
+			active = true
+			return false
+		}
+		return true
+	})
+	return active
+}
+
 // closeSession aggregates the session into the global histograms and logs one
 // [TTFF] line. Idempotent via closeOnce. Removes itself from the registry.
 func (s *TTFFSession) closeSession() {

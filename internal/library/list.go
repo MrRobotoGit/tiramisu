@@ -38,6 +38,9 @@ type AudioListItem struct {
 	FailCount   int64 `json:"fail_count,omitempty"`
 	FirstFailNS int64 `json:"first_fail_ns,omitempty"`
 	LastFailNS  int64 `json:"last_fail_ns,omitempty"`
+	// ActiveSession marks a row whose torrent is being played right now. An album in
+	// this state must not be reaped: its counter is acquitted when the session closes.
+	ActiveSession bool `json:"active_session,omitempty"`
 }
 
 type AudioListResponse struct {
@@ -131,6 +134,7 @@ func (m *Manager) ListAudio(req AudioListRequest) (*AudioListResponse, error) {
 			FailCount:           failures[row.Hash].FailCount,
 			FirstFailNS:         failures[row.Hash].FirstFail * int64(time.Second),
 			LastFailNS:          failures[row.Hash].LastFail * int64(time.Second),
+			ActiveSession:       m.cfg.ActiveSession != nil && m.cfg.ActiveSession(row.Hash),
 		})
 	}
 	return &AudioListResponse{Items: items, NextCursor: next}, nil
