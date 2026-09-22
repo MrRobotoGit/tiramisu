@@ -3,6 +3,7 @@ package metadb
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -65,4 +66,40 @@ func (d *DB) MetadataFailureCount(hash string) (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// FailureStat is one hash's stored reachability record, in Unix seconds.
+type FailureStat struct {
+	FailCount int64
+	FirstFail int64
+	LastFail  int64
+}
+
+// MetadataFailuresFor returns the stats for the given hashes, keyed by hash. It is
+// the read side a controller uses to apply its own threshold, one query per page.
+func (d *DB) MetadataFailuresFor(hashes []string) (map[string]FailureStat, error) {
+	stats := make(map[string]FailureStat, len(hashes))
+	if d == nil || d.db == nil || len(hashes) == 0 {
+		return stats, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(hashes)), ",")
+	args := make([]interface{}, 0, len(hashes))
+	for _, hash := range hashes {
+		args = append(args, hash)
+	}
+	rows, err := d.db.Query(`SELECT hash, fail_count, first_fail, last_fail FROM metadata_failures
+		WHERE hash IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash string
+		var stat FailureStat
+		if err := rows.Scan(&hash, &stat.FailCount, &stat.FirstFail, &stat.LastFail); err != nil {
+			return nil, err
+		}
+		stats[hash] = stat
+	}
+	return stats, rows.Err()
 }

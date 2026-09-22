@@ -184,10 +184,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		// A non-numeric limit falls back to the bounded default rather than failing.
 		limit, _ := strconv.Atoi(query.Get("limit"))
 		audio, err := h.mgr.ListAudio(AudioListRequest{
-			Type:   query.Get("type"),
-			Prefix: query.Get("prefix"),
-			Limit:  limit,
-			Cursor: query.Get("cursor"),
+			Type:         query.Get("type"),
+			Prefix:       query.Get("prefix"),
+			Limit:        limit,
+			Cursor:       query.Get("cursor"),
+			WithFailures: query.Get("failures") == "1",
 		})
 		if err != nil {
 			writeAPIError(w, err)

@@ -34,6 +34,10 @@ func main() {
 	limit := flag.Int("limit", 0, "stop after this many albums (0 = all)")
 	indexers := flag.String("indexers", "", "comma-separated Prowlarr indexer ids to search (default: all enabled)")
 	apply := flag.Bool("apply", false, "write to the library; without it the run is a dry run")
+	reap := flag.Bool("reap", false, "remove albums whose swarm has been unreachable, instead of importing")
+	reapMinFailures := flag.Int("reap-min-failures", 3, "failures needed before an album is condemned")
+	reapMinSpan := flag.Duration("reap-min-span", 24*time.Hour, "how long the failures must span")
+	reapLimit := flag.Int("reap-limit", 25, "most albums removed in one run (0 = no cap)")
 	flag.Parse()
 
 	cfg := config.LoadConfig()
@@ -97,6 +101,28 @@ func main() {
 			Apply:        *apply,
 			Logf:         log.Printf,
 		},
+	}
+
+	if *reap {
+		summary, err := runner.Reap(ctx, musicimport.ReapOptions{
+			MinFailures: *reapMinFailures,
+			MinSpan:     *reapMinSpan,
+			Limit:       *reapLimit,
+			Apply:       *apply,
+		})
+		if err != nil {
+			log.Fatalf("musicimport: %v", err)
+		}
+		mode := "reap dry run"
+		if *apply {
+			mode = "reaped"
+		}
+		fmt.Printf("\n%s: albums %d, candidates %d, removed %d, projections %d\n",
+			mode, summary.Albums, summary.Candidates, summary.Removed, summary.Files)
+		for _, note := range summary.Notes {
+			fmt.Println(" -", note)
+		}
+		return
 	}
 
 	summary, err := runner.Run(ctx)

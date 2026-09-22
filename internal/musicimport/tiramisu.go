@@ -137,3 +137,53 @@ func (t *Tiramisu) do(ctx context.Context, method, path string, payload, out int
 	}
 	return json.NewDecoder(response.Body).Decode(out)
 }
+
+// AudioRow is one projection row as the list reports it, reachability counters
+// included when the request asked for failures.
+type AudioRow struct {
+	Path        string `json:"path"`
+	Hash        string `json:"hash"`
+	FailCount   int64  `json:"fail_count"`
+	FirstFailNS int64  `json:"first_fail_ns"`
+	LastFailNS  int64  `json:"last_fail_ns"`
+}
+
+// AudioRows pages the whole music section with its reachability facts.
+func (t *Tiramisu) AudioRows(ctx context.Context) ([]AudioRow, error) {
+	var rows []AudioRow
+	cursor := ""
+	for {
+		query := url.Values{"type": {"music"}, "limit": {"500"}, "failures": {"1"}}
+		if cursor != "" {
+			query.Set("cursor", cursor)
+		}
+		var page struct {
+			Items      []AudioRow `json:"items"`
+			NextCursor string     `json:"next_cursor"`
+		}
+		if err := t.do(ctx, http.MethodGet, "/api/library/list?"+query.Encode(), nil, &page); err != nil {
+			return nil, err
+		}
+		rows = append(rows, page.Items...)
+		if page.NextCursor == "" {
+			return rows, nil
+		}
+		cursor = page.NextCursor
+	}
+}
+
+// PrefixRemoveResult is the engine's answer to an album removal.
+type PrefixRemoveResult struct {
+	Removed           int  `json:"removed"`
+	TorrentReferenced bool `json:"torrent_referenced"`
+}
+
+// RemovePrefix removes every projection under an album prefix.
+func (t *Tiramisu) RemovePrefix(ctx context.Context, prefix string) (PrefixRemoveResult, error) {
+	var result PrefixRemoveResult
+	payload := map[string]string{"type": "music", "prefix": prefix}
+	if err := t.do(ctx, http.MethodPost, "/api/library/remove", payload, &result); err != nil {
+		return PrefixRemoveResult{}, err
+	}
+	return result, nil
+}

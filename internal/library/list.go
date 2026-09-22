@@ -2,6 +2,7 @@ package library
 
 import (
 	"net/http"
+	"time"
 
 	"tiramisu/internal/metadb"
 )
@@ -13,6 +14,9 @@ type AudioListRequest struct {
 	Prefix string `json:"prefix"`
 	Limit  int    `json:"limit"`
 	Cursor string `json:"cursor"`
+	// WithFailures adds the reachability counters of each row's torrent, the facts a
+	// reaper applies its threshold to. Off by default: it costs one extra query.
+	WithFailures bool
 }
 
 // AudioListItem is reconciliation data, not media metadata: enough for a
@@ -29,6 +33,11 @@ type AudioListItem struct {
 
 	ExternalID          string `json:"external_id"`
 	ExternalIDNamespace string `json:"external_id_ns"`
+
+	// Reachability facts, present only when the request asked for failures.
+	FailCount   int64 `json:"fail_count,omitempty"`
+	FirstFailNS int64 `json:"first_fail_ns,omitempty"`
+	LastFailNS  int64 `json:"last_fail_ns,omitempty"`
 }
 
 type AudioListResponse struct {
@@ -40,6 +49,12 @@ type AudioListResponse struct {
 // as manager.go already does for ClearMetadataFailure.
 type audioProjectionPager interface {
 	AudioProjectionPage(section, pathPrefix, afterPath string, limit int) ([]metadb.AudioProjection, error)
+}
+
+// audioFailureReader is the reachability half a registry may also implement. Kept
+// apart from the pager so a registry that cannot answer failures still pages.
+type audioFailureReader interface {
+	MetadataFailuresFor(hashes []string) (map[string]metadb.FailureStat, error)
 }
 
 // ListAudio returns one page of committed projections, asking for one row beyond
@@ -81,6 +96,24 @@ func (m *Manager) ListAudio(req AudioListRequest) (*AudioListResponse, error) {
 			next = rows[len(rows)-1].VirtualPath
 		}
 	}
+	failures := map[string]metadb.FailureStat{}
+	if req.WithFailures {
+		if reader, ok := m.cfg.AudioProjections.(audioFailureReader); ok {
+			hashes := make([]string, 0, len(rows))
+			seen := make(map[string]bool, len(rows))
+			for _, row := range rows {
+				if row.Hash != "" && !seen[row.Hash] {
+					seen[row.Hash] = true
+					hashes = append(hashes, row.Hash)
+				}
+			}
+			stats, err := reader.MetadataFailuresFor(hashes)
+			if err != nil {
+				return nil, audioErr(err)
+			}
+			failures = stats
+		}
+	}
 	items := make([]AudioListItem, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, AudioListItem{
@@ -95,6 +128,9 @@ func (m *Manager) ListAudio(req AudioListRequest) (*AudioListResponse, error) {
 
 			ExternalID:          row.ExternalID,
 			ExternalIDNamespace: row.ExternalIDNamespace,
+			FailCount:           failures[row.Hash].FailCount,
+			FirstFailNS:         failures[row.Hash].FirstFail * int64(time.Second),
+			LastFailNS:          failures[row.Hash].LastFail * int64(time.Second),
 		})
 	}
 	return &AudioListResponse{Items: items, NextCursor: next}, nil
