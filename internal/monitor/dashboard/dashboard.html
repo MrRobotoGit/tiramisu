@@ -328,7 +328,7 @@ async function load(){
     const sr=await fetch('/api/scheduler/status');
     if(sr.ok){
       const sched=await sr.json();const el=document.getElementById('scheduler');
-      const jobs=Object.entries(sched);
+      const jobs=Object.entries(sched).filter(([name])=>name!=='music');
       if(!jobs.length){el.innerHTML='<div class="text-slate-500 text-sm">No jobs configured</div>';return;}
       el.innerHTML=jobs.map(([name,st])=>{
         const running=st.running;

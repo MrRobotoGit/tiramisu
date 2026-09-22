@@ -33,6 +33,8 @@ type AudioListItem struct {
 
 	ExternalID          string `json:"external_id"`
 	ExternalIDNamespace string `json:"external_id_ns"`
+	// CueTrack is the image track a projection serves; absent for a whole file.
+	CueTrack int `json:"cue_track,omitempty"`
 
 	// Reachability facts, present only when the request asked for failures.
 	FailCount   int64 `json:"fail_count,omitempty"`
@@ -131,6 +133,7 @@ func (m *Manager) ListAudio(req AudioListRequest) (*AudioListResponse, error) {
 
 			ExternalID:          row.ExternalID,
 			ExternalIDNamespace: row.ExternalIDNamespace,
+			CueTrack:            row.CueTrack,
 			FailCount:           failures[row.Hash].FailCount,
 			FirstFailNS:         failures[row.Hash].FirstFail * int64(time.Second),
 			LastFailNS:          failures[row.Hash].LastFail * int64(time.Second),

@@ -16,6 +16,17 @@ type SourceFile struct {
 	SourcePath string `json:"source_path"`
 	FileIndex  int    `json:"file_index"`
 	Size       int64  `json:"size"`
+	// CueTracks are the tracks a cue sheet in the torrent cuts this file into: a
+	// single-file album image. Empty for an ordinary track file.
+	CueTracks []CueTrack `json:"-"`
+}
+
+// CueTrack is one track of an image, numbered as its cue sheet numbers it.
+type CueTrack struct {
+	SourcePath string `json:"source_path"`
+	Track      int    `json:"track"`
+	Title      string `json:"title"`
+	Performer  string `json:"performer"`
 }
 
 // AddFile is one projection in an add request.
@@ -24,6 +35,10 @@ type AddFile struct {
 	Path                string `json:"path"`
 	ExternalID          string `json:"external_id,omitempty"`
 	ExternalIDNamespace string `json:"external_id_ns,omitempty"`
+	// CueTrack files one track of an image (see SourceFile.CueTracks); Tags become
+	// that track's Vorbis comments.
+	CueTrack int               `json:"cue_track,omitempty"`
+	Tags     map[string]string `json:"tags,omitempty"`
 }
 
 // AddResult is the engine's answer to an add.
@@ -124,16 +139,30 @@ func (t *Tiramisu) Committed(ctx context.Context) (CommittedSet, error) {
 	}
 }
 
-// Inspect hydrates the torrent if needed and returns its file list.
+// Inspect hydrates the torrent if needed and returns its file list, each image
+// carrying the cue tracks it is cut into.
 func (t *Tiramisu) Inspect(ctx context.Context, hash, title string) ([]SourceFile, error) {
 	var response struct {
-		Files []SourceFile `json:"files"`
+		Files     []SourceFile `json:"files"`
+		CueTracks []CueTrack   `json:"cue_tracks"`
 	}
 	payload := map[string]string{"hash": hash, "title": title}
 	if err := t.do(ctx, http.MethodPost, "/api/library/inspect", payload, &response); err != nil {
 		return nil, err
 	}
+	for i := range response.Files {
+		for _, track := range response.CueTracks {
+			if track.SourcePath == response.Files[i].SourcePath {
+				response.Files[i].CueTracks = append(response.Files[i].CueTracks, track)
+			}
+		}
+	}
 	return response.Files, nil
+}
+
+// RemovePath removes one projection by its section-relative path.
+func (t *Tiramisu) RemovePath(ctx context.Context, path string) error {
+	return t.do(ctx, http.MethodPost, "/api/library/remove", map[string]string{"type": "music", "path": path}, nil)
 }
 
 // Add files an album's projections.
@@ -189,6 +218,7 @@ type AudioRow struct {
 	SourcePath    string `json:"source_path"`
 	ExternalID    string `json:"external_id"`
 	Hash          string `json:"hash"`
+	CueTrack      int    `json:"cue_track"`
 	FailCount     int64  `json:"fail_count"`
 	FirstFailNS   int64  `json:"first_fail_ns"`
 	LastFailNS    int64  `json:"last_fail_ns"`

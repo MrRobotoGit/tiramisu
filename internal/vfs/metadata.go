@@ -22,6 +22,11 @@ type Metadata struct {
 	// Audio marks a projection under music/ or audiobooks/. Audio projections are
 	// read-only to their clients: the mode bits and the mutation refusals key off it.
 	Audio bool
+	// A cue track of a single-file image: SegmentHeader is served first, then the
+	// torrent file from SegmentOffset. Zero for every other file, video included.
+	SegmentTrack  int
+	SegmentOffset int64
+	SegmentHeader []byte
 }
 
 // FileMetadata represents metadata extracted from a virtual .mkv file

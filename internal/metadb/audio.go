@@ -36,11 +36,16 @@ type AudioProjection struct {
 	// holds the identity, the controller resolves it. Both empty when absent.
 	ExternalID          string
 	ExternalIDNamespace string
-	State               AudioProjectionState
-	TxnID               string
-	StagingName         string
-	CreatedAtNS         int64
-	UpdatedAtNS         int64
+	// A cue track of a single-file image: the projection serves Header followed by
+	// the image bytes from ByteOffset. CueTrack 0 is a whole torrent file.
+	CueTrack    int
+	ByteOffset  int64
+	Header      []byte
+	State       AudioProjectionState
+	TxnID       string
+	StagingName string
+	CreatedAtNS int64
+	UpdatedAtNS int64
 }
 
 // The two conflicts are distinct because they become different API answers: a
@@ -57,10 +62,11 @@ var (
 const audioProjectionColumns = `id, section, virtual_path, portable_path_key, hash, file_index,
 	source_path, size, mtime_ns, title, COALESCE(magnet, ''), state,
 	COALESCE(txn_id, ''), COALESCE(staging_name, ''), created_at_ns, updated_at_ns,
-	COALESCE(external_id, ''), COALESCE(external_id_ns, '')`
+	COALESCE(external_id, ''), COALESCE(external_id_ns, ''),
+	cue_track, byte_offset, COALESCE(header, x'')`
 
-// execAudioSchema creates the registry. UNIQUE(hash, file_index) carries no
-// section on purpose: one torrent file backs at most one projection anywhere.
+// execAudioSchema creates the registry. The source uniqueness carries no section on
+// purpose: one torrent file, or one cue track of it, backs at most one projection.
 func (d *DB) execAudioSchema() error {
 	if _, err := d.db.Exec(`
 CREATE TABLE IF NOT EXISTS audio_projections (
@@ -104,7 +110,66 @@ CREATE INDEX IF NOT EXISTS idx_audio_projections_txn ON audio_projections(txn_id
 		return err
 	}
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (10, 'add audio_projections external identity')`)
-	return nil
+	return d.migrateAudioCueTracks()
+}
+
+// migrateAudioCueTracks is schema 11: the tracks of a single-file image share one
+// torrent file, so the source uniqueness gains the cue track. SQLite cannot alter a
+// table constraint, so the table is rebuilt once, in one transaction. Only the
+// audio registry is touched.
+func (d *DB) migrateAudioCueTracks() error {
+	if d.hasColumn("audio_projections", "cue_track") {
+		return nil
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	const columns = `id, section, virtual_path, portable_path_key, hash, file_index, source_path,
+	size, mtime_ns, title, magnet, state, txn_id, staging_name, created_at_ns, updated_at_ns,
+	external_id, external_id_ns`
+	for _, stmt := range []string{
+		`CREATE TABLE audio_projections_v11 (
+    id                INTEGER PRIMARY KEY,
+    section           TEXT NOT NULL CHECK(section IN ('music', 'audiobooks')),
+    virtual_path      TEXT NOT NULL,
+    portable_path_key TEXT NOT NULL,
+    hash              TEXT NOT NULL,
+    file_index        INTEGER NOT NULL CHECK(file_index > 0),
+    source_path       TEXT NOT NULL,
+    size              INTEGER NOT NULL CHECK(size > 0),
+    mtime_ns          INTEGER NOT NULL,
+    title             TEXT NOT NULL,
+    magnet            TEXT,
+    state             TEXT NOT NULL CHECK(state IN ('staged', 'committed', 'removing')),
+    txn_id            TEXT,
+    staging_name      TEXT,
+    created_at_ns     INTEGER NOT NULL,
+    updated_at_ns     INTEGER NOT NULL,
+    external_id       TEXT DEFAULT '',
+    external_id_ns    TEXT DEFAULT '',
+    cue_track         INTEGER NOT NULL DEFAULT 0 CHECK(cue_track >= 0),
+    byte_offset       INTEGER NOT NULL DEFAULT 0 CHECK(byte_offset >= 0),
+    header            BLOB,
+    UNIQUE(section, virtual_path),
+    UNIQUE(section, portable_path_key),
+    UNIQUE(hash, file_index, cue_track)
+)`,
+		`INSERT INTO audio_projections_v11 (` + columns + `) SELECT ` + columns + ` FROM audio_projections`,
+		`DROP TABLE audio_projections`,
+		`ALTER TABLE audio_projections_v11 RENAME TO audio_projections`,
+		`CREATE INDEX IF NOT EXISTS idx_audio_projections_hash ON audio_projections(hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_audio_projections_section_path ON audio_projections(section, virtual_path)`,
+		`CREATE INDEX IF NOT EXISTS idx_audio_projections_state ON audio_projections(state)`,
+		`CREATE INDEX IF NOT EXISTS idx_audio_projections_txn ON audio_projections(txn_id)`,
+		`INSERT OR IGNORE INTO schema_version (version, description) VALUES (11, 'audio_projections cue tracks')`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("audio schema 11: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // StageAudioProjections inserts every projection in one transaction, in state
@@ -136,11 +201,13 @@ func (d *DB) StageAudioProjections(txnID string, ps []AudioProjection) error {
 			`INSERT INTO audio_projections
 			 (section, virtual_path, portable_path_key, hash, file_index, source_path,
 			  size, mtime_ns, title, magnet, state, txn_id, staging_name,
-			  created_at_ns, updated_at_ns, external_id, external_id_ns)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  created_at_ns, updated_at_ns, external_id, external_id_ns,
+			  cue_track, byte_offset, header)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			p.Section, p.VirtualPath, p.PortablePathKey, p.Hash, p.FileIndex, p.SourcePath,
 			p.Size, p.MtimeNS, p.Title, p.Magnet, string(AudioStaged), txnID, p.StagingName,
 			p.CreatedAtNS, p.UpdatedAtNS, p.ExternalID, p.ExternalIDNamespace,
+			p.CueTrack, p.ByteOffset, p.Header,
 		)
 		if err != nil {
 			return classifyAudioConflict(tx, p, err)
@@ -163,10 +230,10 @@ func classifyAudioConflict(tx *sql.Tx, p AudioProjection, cause error) error {
 		return fmt.Errorf("%w: %s/%s: %v", ErrAudioPathConflict, p.Section, p.VirtualPath, cause)
 	}
 	if err := tx.QueryRow(
-		`SELECT COUNT(*) FROM audio_projections WHERE hash = ? AND file_index = ?`,
-		p.Hash, p.FileIndex,
+		`SELECT COUNT(*) FROM audio_projections WHERE hash = ? AND file_index = ? AND cue_track = ?`,
+		p.Hash, p.FileIndex, p.CueTrack,
 	).Scan(&n); err == nil && n > 0 {
-		return fmt.Errorf("%w: %s:%d: %v", ErrAudioSourceConflict, p.Hash, p.FileIndex, cause)
+		return fmt.Errorf("%w: %s:%d track %d: %v", ErrAudioSourceConflict, p.Hash, p.FileIndex, p.CueTrack, cause)
 	}
 	return cause
 }
@@ -204,7 +271,7 @@ func scanAudioProjection(row interface{ Scan(...any) error }) (*AudioProjection,
 	err := row.Scan(&p.ID, &p.Section, &p.VirtualPath, &p.PortablePathKey, &p.Hash,
 		&p.FileIndex, &p.SourcePath, &p.Size, &p.MtimeNS, &p.Title, &p.Magnet,
 		&p.State, &p.TxnID, &p.StagingName, &p.CreatedAtNS, &p.UpdatedAtNS,
-		&p.ExternalID, &p.ExternalIDNamespace)
+		&p.ExternalID, &p.ExternalIDNamespace, &p.CueTrack, &p.ByteOffset, &p.Header)
 	if err != nil {
 		return nil, err
 	}
@@ -255,11 +322,12 @@ func (d *DB) AudioProjectionByPortableKey(section, portableKey string) (*AudioPr
 		 WHERE section = ? AND portable_path_key = ?`, section, portableKey)
 }
 
-// AudioProjectionBySource returns the row owning a torrent file identity.
-func (d *DB) AudioProjectionBySource(hash string, fileIndex int) (*AudioProjection, bool, error) {
+// AudioProjectionBySource returns the row owning a torrent file identity, or one cue
+// track of it (cueTrack 0 is the whole file).
+func (d *DB) AudioProjectionBySource(hash string, fileIndex, cueTrack int) (*AudioProjection, bool, error) {
 	return d.audioProjectionRow(
 		`SELECT `+audioProjectionColumns+` FROM audio_projections
-		 WHERE hash = ? AND file_index = ?`, hash, fileIndex)
+		 WHERE hash = ? AND file_index = ? AND cue_track = ?`, hash, fileIndex, cueTrack)
 }
 
 // AudioProjectionsByHash returns every row backed by one torrent, in any state:

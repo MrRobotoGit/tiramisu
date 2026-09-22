@@ -79,6 +79,13 @@ func SelectCandidates(results []prowlarr.ProwlarrResult, artist, album string, m
 		if len(artistTokens) > 0 && matchedArtist == 0 {
 			continue
 		}
+		// A self-titled album has no album token to discriminate with: "karate"
+		// anywhere in the title satisfies both sides. Require the pair to be spelled
+		// out contiguously ("Karate - Karate"), which a soundtrack starting with the
+		// same word does not do.
+		if sameTokens(artistTokens, albumTokens) && !strings.Contains(title, selfTitledPhrase(artistTokens)) {
+			continue
+		}
 
 		score := result.Seeders
 		if score > 50 {
@@ -132,6 +139,37 @@ func tokenMatch(title string, want []string) int {
 		}
 	}
 	return matched
+}
+
+// sameTokens reports whether two token sets are equal: the album is self-titled.
+func sameTokens(a, b []string) bool {
+	if len(a) == 0 || len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, token := range a {
+		counts[token]++
+	}
+	for _, token := range b {
+		counts[token]--
+		if counts[token] < 0 {
+			return false
+		}
+	}
+	for _, left := range counts {
+		if left != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// selfTitledPhrase is the contiguous "artist album" sequence a real self-titled
+// release spells out; the title is normalized and padded, so leading and trailing
+// spaces make it a whole-word match.
+func selfTitledPhrase(tokens []string) string {
+	joined := strings.Join(tokens, " ")
+	return " " + joined + " " + joined + " "
 }
 
 // normalizeTitle lowercases and turns every non-alphanumeric run into one space,

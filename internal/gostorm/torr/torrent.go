@@ -311,13 +311,40 @@ func (t *Torrent) GetCache() *torrstor.Cache {
 	return t.cache
 }
 
+// dropAllowed reports whether anacrolix still holds this exact torrent. Its Drop
+// panics with "no such torrent" when the object was already dropped from the client:
+// Client.AddTorrentSpec drops a new torrent itself when MergeSpec fails, and a double
+// close reaches the same object through a stale pointer.
+func dropAllowed(current *torrent.Torrent, held bool, ours *torrent.Torrent) bool {
+	return ours != nil && held && current == ours
+}
+
 func (t *Torrent) drop() {
+	// The check and the Drop must be one critical section across every wrapper of the
+	// same hash: two *Torrent have different muTorrent, so per-wrapper locking alone
+	// lets both pass the check before either drops (TOCTOU).
+	if t.bt != nil && t.bt.client != nil {
+		t.bt.dropMu.Lock()
+		defer t.bt.dropMu.Unlock()
+	}
 	t.muTorrent.Lock()
 	defer t.muTorrent.Unlock()
-	if t.Torrent != nil {
-		t.Torrent.Drop()
-		t.Torrent = nil
+	if t.Torrent == nil {
+		return
 	}
+	if t.bt == nil || t.bt.client == nil {
+		// No client to verify against: "cannot verify" is "do not drop", because
+		// Drop panics on an object the client no longer holds.
+		log.TLogln("[Drop] no client, skipping", t.Hash().HexString())
+		t.Torrent = nil
+		return
+	}
+	if current, held := t.bt.client.Torrent(t.Torrent.InfoHash()); !dropAllowed(current, held, t.Torrent) {
+		t.Torrent = nil
+		return
+	}
+	t.Torrent.Drop()
+	t.Torrent = nil
 }
 
 func (t *Torrent) Close() bool {

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,6 +24,22 @@ type Album struct {
 	// ReleaseID is the MusicBrainz release id Plex stored for the album, empty
 	// when the album was never matched.
 	ReleaseID string
+}
+
+// Artist is one artist as Plex describes it. MBID is empty when the agent never
+// matched the artist to MusicBrainz.
+type Artist struct {
+	Name string
+	MBID string
+}
+
+// Play is one music play from the Plex history.
+type Play struct {
+	Artist    string
+	Album     string
+	Title     string
+	ViewedAt  time.Time
+	SectionID string
 }
 
 // PlexClient reads music libraries from a Plex server.
@@ -62,6 +79,26 @@ type plexAlbumsContainer struct {
 		Year        int        `xml:"year,attr"`
 		Guids       []plexGuid `xml:"Guid"`
 	} `xml:"Directory"`
+}
+
+type plexArtistsContainer struct {
+	XMLName xml.Name `xml:"MediaContainer"`
+	Artists []struct {
+		Title string     `xml:"title,attr"`
+		Guids []plexGuid `xml:"Guid"`
+	} `xml:"Directory"`
+}
+
+// Plex serves history as one element per media type; only tracks matter here.
+type plexHistoryContainer struct {
+	XMLName xml.Name `xml:"MediaContainer"`
+	Tracks  []struct {
+		Title            string `xml:"title,attr"`
+		GrandparentTitle string `xml:"grandparentTitle,attr"`
+		ParentTitle      string `xml:"parentTitle,attr"`
+		ViewedAt         int64  `xml:"viewedAt,attr"`
+		LibrarySectionID string `xml:"librarySectionID,attr"`
+	} `xml:"Track"`
 }
 
 // ArtistSections lists the artist-type library sections, in Plex order.
@@ -115,6 +152,53 @@ func plexReleaseID(guids []plexGuid) string {
 		}
 	}
 	return ""
+}
+
+// Artists lists every artist of an artist-type section, with the MusicBrainz id the
+// agent stored (includeGuids=1 surfaces it as an mbid:// GUID).
+func (p *PlexClient) Artists(ctx context.Context, section string) ([]Artist, error) {
+	var container plexArtistsContainer
+	query := url.Values{"includeGuids": {"1"}, "type": {"8"}}
+	path := "/library/sections/" + url.PathEscape(section) + "/all"
+	if err := p.get(ctx, path, query, &container); err != nil {
+		return nil, err
+	}
+	artists := make([]Artist, 0, len(container.Artists))
+	for _, a := range container.Artists {
+		name := strings.TrimSpace(a.Title)
+		if name == "" {
+			continue
+		}
+		artists = append(artists, Artist{Name: name, MBID: plexReleaseID(a.Guids)})
+	}
+	return artists, nil
+}
+
+// History lists the music plays that started after the given time; a zero time means
+// all of them. The seed pass reads this once per window.
+func (p *PlexClient) History(ctx context.Context, after time.Time) ([]Play, error) {
+	var container plexHistoryContainer
+	query := url.Values{"sort": {"viewedAt:desc"}}
+	if !after.IsZero() {
+		query.Set("viewedAt>", strconv.FormatInt(after.Unix(), 10))
+	}
+	if err := p.get(ctx, "/status/sessions/history/all", query, &container); err != nil {
+		return nil, err
+	}
+	plays := make([]Play, 0, len(container.Tracks))
+	for _, t := range container.Tracks {
+		if strings.TrimSpace(t.GrandparentTitle) == "" {
+			continue
+		}
+		plays = append(plays, Play{
+			Artist:    strings.TrimSpace(t.GrandparentTitle),
+			Album:     strings.TrimSpace(t.ParentTitle),
+			Title:     strings.TrimSpace(t.Title),
+			ViewedAt:  time.Unix(t.ViewedAt, 0),
+			SectionID: t.LibrarySectionID,
+		})
+	}
+	return plays, nil
 }
 
 func (p *PlexClient) get(ctx context.Context, path string, query url.Values, out interface{}) error {

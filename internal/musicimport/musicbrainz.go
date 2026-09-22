@@ -172,6 +172,120 @@ func artistNames(credit []struct {
 	return names
 }
 
+// RecordingRelease is one release a recommended recording appears on, projected down
+// to what the discovery needs: the release (its tracklist), the group (the album
+// identity) and the group's type. Tags are JSON because the discovery state caches
+// the answer.
+type RecordingRelease struct {
+	ReleaseID         string   `json:"release_id"`
+	ReleaseGroupID    string   `json:"release_group_id"`
+	ReleaseGroupTitle string   `json:"release_group_title,omitempty"`
+	PrimaryType       string   `json:"primary_type,omitempty"`
+	SecondaryTypes    []string `json:"secondary_types,omitempty"`
+	Status            string   `json:"status,omitempty"`
+	Date              string   `json:"date,omitempty"`
+}
+
+// RecordingReleases lists the releases a recording appears on. A recording that
+// disappeared from MusicBrainz (merged ids) answers 404: an empty list, not a failure,
+// the recommendation is simply unusable.
+func (m *MusicBrainz) RecordingReleases(ctx context.Context, recordingMBID string) ([]RecordingRelease, error) {
+	if strings.TrimSpace(recordingMBID) == "" {
+		return nil, nil
+	}
+	var result struct {
+		Releases []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Date   string `json:"date"`
+			Group  struct {
+				ID             string   `json:"id"`
+				Title          string   `json:"title"`
+				PrimaryType    string   `json:"primary-type"`
+				SecondaryTypes []string `json:"secondary-types"`
+			} `json:"release-group"`
+		} `json:"releases"`
+	}
+	err := m.get(ctx, "/recording/"+url.PathEscape(recordingMBID),
+		url.Values{"inc": {"releases+release-groups"}}, &result)
+	if errors.Is(err, errMusicBrainzNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RecordingRelease, 0, len(result.Releases))
+	for _, r := range result.Releases {
+		if r.ID == "" || r.Group.ID == "" {
+			continue
+		}
+		out = append(out, RecordingRelease{
+			ReleaseID:         r.ID,
+			ReleaseGroupID:    r.Group.ID,
+			ReleaseGroupTitle: r.Group.Title,
+			PrimaryType:       r.Group.PrimaryType,
+			SecondaryTypes:    r.Group.SecondaryTypes,
+			Status:            r.Status,
+			Date:              r.Date,
+		})
+	}
+	return out, nil
+}
+
+// ReleaseGroupOfRelease projects a release id down to its release group, the identity
+// the dedup compares. Lighter than ReleaseDetails: no tracklist.
+func (m *MusicBrainz) ReleaseGroupOfRelease(ctx context.Context, releaseID string) (string, bool, error) {
+	if strings.TrimSpace(releaseID) == "" {
+		return "", false, nil
+	}
+	var result struct {
+		ReleaseGroup struct {
+			ID string `json:"id"`
+		} `json:"release-group"`
+	}
+	err := m.get(ctx, "/release/"+url.PathEscape(releaseID), url.Values{"inc": {"release-groups"}}, &result)
+	if errors.Is(err, errMusicBrainzNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return result.ReleaseGroup.ID, result.ReleaseGroup.ID != "", nil
+}
+
+// SearchArtist resolves an artist name to its MusicBrainz id: the seed fallback for
+// the artists Plex never matched. An exact name beats a higher fuzzy score.
+func (m *MusicBrainz) SearchArtist(ctx context.Context, name string) (string, bool, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", false, nil
+	}
+	var result struct {
+		Artists []struct {
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Score int    `json:"score"`
+		} `json:"artists"`
+	}
+	query := fmt.Sprintf(`artist:"%s"`, strings.ReplaceAll(name, `"`, " "))
+	if err := m.get(ctx, "/artist", url.Values{"query": {query}, "limit": {"5"}}, &result); err != nil {
+		return "", false, err
+	}
+	best, bestScore := "", 0
+	for _, a := range result.Artists {
+		if a.ID == "" {
+			continue
+		}
+		score := a.Score
+		if strings.EqualFold(strings.TrimSpace(a.Name), strings.TrimSpace(name)) {
+			score += 100
+		}
+		if score > bestScore {
+			best, bestScore = a.ID, score
+		}
+	}
+	return best, best != "", nil
+}
+
 // musicBrainzRetries is how many times a throttled or unavailable answer is tried
 // again. MusicBrainz returns 503 under load and 429 when the rate is exceeded, both
 // transient: without a retry a whole album is dropped for a reason that has nothing

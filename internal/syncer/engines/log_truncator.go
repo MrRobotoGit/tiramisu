@@ -19,7 +19,7 @@ func StartLogTruncator(logsDir string, stop <-chan struct{}) {
 				return
 			case <-time.After(delay):
 				// Truncate all sync log files
-				for _, name := range []string{"movies-sync.log", "tv-sync.log", "watchlist-sync.log"} {
+				for _, name := range []string{"movies-sync.log", "tv-sync.log", "watchlist-sync.log", "music-sync.log"} {
 					path := filepath.Join(logsDir, name)
 					os.Truncate(path, 0)
 				}

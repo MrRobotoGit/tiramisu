@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie, TV, music or audiobook release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.4.0
+version: 4.5.0
 author: MrRobotoGit
 license: GPL-3.0-only
 metadata:
@@ -328,6 +328,30 @@ call asks the media server to look. Scan the `music/` and `audiobooks/` sections
 manually once a batch is filed — that is the intended flow, not a missing
 feature.
 
+**Album images are split by the engine.** Many lossless rips are one FLAC holding
+the whole album plus a cue sheet (`FLAC (image+.cue)`). Send the image like any
+other file — one `files[]` entry, the path where the album should live — and the
+engine does the rest: when a cue sheet in the torrent describes that FLAC with two
+or more tracks, the add files **one projection per track** beside the requested
+path, named `NN - Title_<hash8>.flac` from the sheet, each carrying your
+`external_id`, with the tags (title, artist, album, track number) written into the
+track itself. The response lists the tracks it created, each with its
+`cue_track`, so it holds more files than you sent. `inspect` shows what will
+happen: its `cue_tracks` array lists `source_path`, `track`, `title` and
+`performer` for every image a sheet describes.
+
+If the torrent has not delivered the cue sheet (or the image bytes the cut needs)
+within three minutes, the add answers **`503`** and files nothing: retry later,
+never fall back to filing the image whole — Plex would show one 45-minute track.
+A cut the image cannot support (a damaged or non-FLAC image, a sheet without the
+track) is a `422`.
+
+To give each track its own MusicBrainz id, name the tracks yourself instead:
+one entry per track with the image as `source_path`, the track number as
+`cue_track`, and optionally `tags` (a map of Vorbis comments written verbatim,
+e.g. `{"TITLE":"Lovesong","MUSICBRAINZ_RELEASETRACKID":"..."}`). Entries that
+name a `cue_track` are filed exactly as sent.
+
 **On a replay the stored identity wins.** If your `external_id` disagrees with
 the one already registered for that projection, the request still succeeds, the
 stored value is returned unchanged, and the disagreement is logged. This is
@@ -339,7 +363,8 @@ never has to branch on a missing key.
 
 **Audio requests are strict**: an unknown field is a `400`, where the video
 decoder stays lenient for callers that predate the endpoint. In `files[]` the
-only accepted keys are `source_path`, `path`, `external_id` and `external_id_ns`:
+only accepted keys are `source_path`, `path`, `external_id`, `external_id_ns`,
+`cue_track` and `tags`:
 `file_index`, `size` and `mtime` come back from `inspect` but must not be echoed
 into the `add`, or the whole request is refused. Bodies are capped at 1 MiB.
 

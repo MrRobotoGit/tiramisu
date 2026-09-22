@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"tiramisu/internal/library"
 	"tiramisu/internal/prowlarr"
 )
 
@@ -20,12 +21,16 @@ type Options struct {
 	MaxSizeBytes int64
 	Limit        int
 	Apply        bool
-	Logf         func(format string, args ...interface{})
+	// RetryFailed walks again the albums a previous run left without a torrent, an
+	// identity or with an error. Off, a restart resumes where the last run stopped.
+	RetryFailed bool
+	Logf        func(format string, args ...interface{})
 }
 
 // Summary is the run's tally and the per-album notes worth reading.
 type Summary struct {
 	Albums     int
+	Skipped    int // settled by an earlier run and not retried
 	Present    int
 	NoIdentity int
 	NoMatch    int
@@ -91,6 +96,11 @@ func (r *Runner) Run(ctx context.Context) (Summary, error) {
 		case StatusApplied, StatusAlreadyPresent:
 			summary.Present++
 			continue
+		case StatusNoMatch, StatusNoIdentity, StatusError:
+			if !r.Options.RetryFailed {
+				summary.Skipped++
+				continue
+			}
 		}
 
 		group, tracks, ok, err := r.resolveAlbum(ctx, album, &entry)
@@ -169,11 +179,10 @@ func (r *Runner) resolveAlbum(ctx context.Context, album Album, entry *Entry) (R
 	return group, nil, ok, nil
 }
 
-// trackIdentity picks the id a projection carries for one track. The default is the
-// release's track id because that is what Plex sends in a music webhook; Jellyfin
-// speaks recording ids, exposed as the MusicBrainzTrack provider.
-func (r *Runner) trackIdentity(track ReleaseTrack, fallback string) string {
-	if strings.EqualFold(r.Options.IDStyle, "recording") && track.Recording != "" {
+// trackIDForStyle picks the id a projection carries for one track: the release track
+// id for Plex webhooks, the recording id for Jellyfin.
+func trackIDForStyle(track ReleaseTrack, fallback, style string) string {
+	if strings.EqualFold(style, "recording") && track.Recording != "" {
 		return track.Recording
 	}
 	if track.ID != "" {
@@ -185,30 +194,36 @@ func (r *Runner) trackIdentity(track ReleaseTrack, fallback string) string {
 	return fallback
 }
 
-// selectTorrent tries the explicit lossless query first, then a plain one: some
-// releases never spell FLAC in the title but are still lossless inside.
-func (r *Runner) selectTorrent(ctx context.Context, album Album, group ReleaseGroup, entry *Entry) (Candidate, bool) {
-	artist, title := album.Artist, album.Title
-	if artist == "" {
-		artist = group.Artist
-	}
-	if title == "" {
-		title = group.Title
-	}
+func (r *Runner) trackIdentity(track ReleaseTrack, fallback string) string {
+	return trackIDForStyle(track, fallback, r.Options.IDStyle)
+}
+
+// torrentSearcher is the slice of the Prowlarr client the search needs. An interface
+// so the discovery runner is testable without a server.
+type torrentSearcher interface {
+	SearchWithOptions(ctx context.Context, query string, opts prowlarr.SearchOptions) ([]prowlarr.ProwlarrResult, error)
+	ResolveHash(downloadURL string) string
+}
+
+// selectAlbumTorrent is the search the importer and the discovery share: the lossless
+// query first, the plain one second, first candidate that clears the floor and whose
+// hash resolves.
+func selectAlbumTorrent(ctx context.Context, indexer torrentSearcher, indexerIDs []int, artist, title string, minSeeders int, maxSizeBytes int64, logf func(string, ...any)) (Candidate, bool) {
+	artist, title = asciiPunctuation(artist), asciiPunctuation(title)
 	for _, query := range []string{
 		strings.TrimSpace(artist + " " + title + " FLAC"),
 		strings.TrimSpace(artist + " " + title),
 	} {
-		results, err := r.Indexer.SearchWithOptions(ctx, query, prowlarr.SearchOptions{IndexerIDs: r.Options.IndexerIDs})
+		results, err := indexer.SearchWithOptions(ctx, query, prowlarr.SearchOptions{IndexerIDs: indexerIDs})
 		if err != nil {
-			r.logf("prowlarr %q: %v", query, err)
+			logf("prowlarr %q: %v", query, err)
 			continue
 		}
-		for _, candidate := range SelectCandidates(results, artist, title, r.Options.MinSeeders, r.Options.MaxSizeBytes, 3) {
+		for _, candidate := range SelectCandidates(results, artist, title, minSeeders, maxSizeBytes, 3) {
 			if candidate.Hash == "" {
-				hash := r.Indexer.ResolveHash(candidate.DownloadURL)
+				hash := indexer.ResolveHash(candidate.DownloadURL)
 				if hash == "" {
-					r.logf("cannot resolve a hash for %q", candidate.Title)
+					logf("cannot resolve a hash for %q", candidate.Title)
 					continue
 				}
 				candidate.Hash = strings.ToLower(hash)
@@ -219,37 +234,184 @@ func (r *Runner) selectTorrent(ctx context.Context, album Album, group ReleaseGr
 	return Candidate{}, false
 }
 
-// apply inspects the torrent and files its lossless files as projections. Each file
-// carries its own track id when the release tracklist could be read: that is the id
-// Plex sends in a webhook, so the projection and the player finally speak the same
-// id. Files the tracklist cannot be matched by keep the album's release group.
-func (r *Runner) apply(ctx context.Context, album Album, group ReleaseGroup, tracks []ReleaseTrack, candidate Candidate, entry *Entry) error {
-	files, err := r.Library.Inspect(ctx, candidate.Hash, album.Artist+" - "+album.Title)
+// typographicPunctuation maps the dashes and quotes MusicBrainz spells names with to
+// the ASCII the indexers match; letters, accents included, are left alone.
+var typographicPunctuation = strings.NewReplacer(
+	"\u2010", "-", "\u2011", "-", "\u2012", "-", "\u2013", "-", "\u2014", "-", "\u2015", "-",
+	"\u2018", "'", "\u2019", "'", "\u02bc", "'", "\u2032", "'",
+	"\u201c", `"`, "\u201d", `"`, "\u2026", "...",
+)
+
+func asciiPunctuation(s string) string { return typographicPunctuation.Replace(s) }
+
+// selectTorrent tries the explicit lossless query first, then a plain one: some
+// releases never spell FLAC in the title but are still lossless inside.
+func (r *Runner) selectTorrent(ctx context.Context, album Album, group ReleaseGroup, entry *Entry) (Candidate, bool) {
+	artist, title := album.Artist, album.Title
+	if artist == "" {
+		artist = group.Artist
+	}
+	if title == "" {
+		title = group.Title
+	}
+	return selectAlbumTorrent(ctx, r.Indexer, r.Options.IndexerIDs, artist, title, r.Options.MinSeeders, r.Options.MaxSizeBytes, r.logf)
+}
+
+// libraryWriter is what applyFiles needs from the Library API client.
+type libraryWriter interface {
+	Inspect(ctx context.Context, hash, title string) ([]SourceFile, error)
+	Add(ctx context.Context, hash, title string, files []AddFile) (AddResult, error)
+}
+
+// applyFiles inspects the torrent and files its lossless files as projections, each
+// with its own track id when the tracklist matches and the group id otherwise.
+// Shared by the importer and the discovery.
+func applyFiles(ctx context.Context, library libraryWriter, artist, title string, group ReleaseGroup, tracks []ReleaseTrack, candidate Candidate, idStyle string) (AddResult, error) {
+	files, err := library.Inspect(ctx, candidate.Hash, artist+" - "+title)
 	if err != nil {
-		return fmt.Errorf("inspect %s: %w", candidate.Hash, err)
+		return AddResult{}, fmt.Errorf("inspect %s: %w", candidate.Hash, err)
 	}
 	adds := make([]AddFile, 0, len(files))
 	for _, file := range files {
 		if !strings.HasSuffix(strings.ToLower(file.SourcePath), ".flac") {
 			continue
 		}
+		// An album image is filed track by track, cut by its cue sheet.
+		if len(file.CueTracks) > 1 {
+			adds = append(adds, cueTrackAdds(artist, title, candidate.Hash, file, group, tracks, idStyle)...)
+			continue
+		}
 		externalID := group.ID
 		if track, ok := matchTrack(file.SourcePath, tracks); ok {
-			externalID = r.trackIdentity(track, group.ID)
+			externalID = trackIDForStyle(track, group.ID, idStyle)
 		}
 		adds = append(adds, AddFile{
 			SourcePath:          file.SourcePath,
-			Path:                VirtualPath(album.Artist, album.Title, candidate.Hash, file.SourcePath),
+			Path:                VirtualPath(artist, title, candidate.Hash, file.SourcePath),
 			ExternalID:          externalID,
 			ExternalIDNamespace: "musicbrainz",
 		})
 	}
 	if len(adds) == 0 {
-		return fmt.Errorf("no FLAC file in %s", candidate.Title)
+		return AddResult{}, fmt.Errorf("no FLAC file in %s", candidate.Title)
 	}
-	result, err := r.Library.Add(ctx, candidate.Hash, album.Artist+" - "+album.Title, adds)
+	result, err := library.Add(ctx, candidate.Hash, artist+" - "+title, adds)
 	if err != nil {
-		return fmt.Errorf("add %s: %w", candidate.Title, err)
+		// The release title stays in the error: the caller logs it verbatim and an
+		// anonymous "add failed" costs a manual investigation.
+		return AddResult{}, fmt.Errorf("add %s: %w", candidate.Title, err)
+	}
+	return result, nil
+}
+
+// cueTrackAdds files each cue track of an image as its own projection. The track is
+// matched to the release tracklist as a file named "NN - Title" in the image's
+// directory would be, so the disc a directory names still pins the medium.
+func cueTrackAdds(artist, album, hash string, file SourceFile, group ReleaseGroup, tracks []ReleaseTrack, idStyle string) []AddFile {
+	dir := ""
+	if cut := strings.LastIndexByte(file.SourcePath, '/'); cut >= 0 {
+		dir = file.SourcePath[:cut+1]
+	}
+	disc, _ := trackNumbers(dir + "x.flac")
+	matched := matchCueTracks(file.CueTracks, tracks, disc)
+	adds := make([]AddFile, 0, len(file.CueTracks))
+	for _, cue := range file.CueTracks {
+		name := cue.Title
+		if name == "" {
+			name = fmt.Sprintf("Track %02d", cue.Track)
+		}
+		externalID := group.ID
+		tags := map[string]string{"ARTIST": artist, "ALBUMARTIST": artist, "ALBUM": album, "TRACKNUMBER": fmt.Sprint(cue.Track)}
+		if group.ID != "" {
+			tags["MUSICBRAINZ_RELEASEGROUPID"] = group.ID
+		}
+		if track, ok := matched[cue.Track]; ok {
+			externalID = trackIDForStyle(track, group.ID, idStyle)
+			if track.Title != "" {
+				name = track.Title
+			}
+			if track.Medium > 0 {
+				tags["DISCNUMBER"] = fmt.Sprint(track.Medium)
+			}
+			if track.ID != "" {
+				tags["MUSICBRAINZ_RELEASETRACKID"] = track.ID
+			}
+			if track.Recording != "" {
+				tags["MUSICBRAINZ_TRACKID"] = track.Recording
+			}
+		}
+		tags["TITLE"] = name
+		virtual := dir + library.SafeComponent(fmt.Sprintf("%02d - %s", cue.Track, name)) + ".flac"
+		adds = append(adds, AddFile{
+			SourcePath:          file.SourcePath,
+			Path:                VirtualPath(artist, album, hash, virtual),
+			ExternalID:          externalID,
+			ExternalIDNamespace: "musicbrainz",
+			CueTrack:            cue.Track,
+			Tags:                tags,
+		})
+	}
+	return adds
+}
+
+// matchCueTracks pairs cue tracks with release tracks by title first: an image of
+// another edition (a bonus track, a different running order) shifts positions, so a
+// number alone would hand one track another's id. Position decides only for a cue
+// track without a title. A release track is never given to two cue tracks; an
+// unmatched cue track gets none, which is better than a wrong one.
+func matchCueTracks(cues []CueTrack, tracks []ReleaseTrack, disc int) map[int]ReleaseTrack {
+	out := map[int]ReleaseTrack{}
+	claimed := map[int]bool{}
+	onDisc := func(t ReleaseTrack) bool { return disc == 0 || t.Medium == disc }
+	for _, cue := range cues {
+		want := strings.TrimSpace(normalizeTitle(cue.Title))
+		if want == "" {
+			continue
+		}
+		best := -1
+		for i, t := range tracks {
+			if claimed[i] || !onDisc(t) || strings.TrimSpace(normalizeTitle(t.Title)) != want {
+				continue
+			}
+			// Two media can repeat a title: the one at the cue's position wins, then
+			// the first medium.
+			if best < 0 || positionIs(t, cue.Track) && !positionIs(tracks[best], cue.Track) {
+				best = i
+			}
+		}
+		if best >= 0 {
+			claimed[best] = true
+			out[cue.Track] = tracks[best]
+		}
+	}
+	for _, cue := range cues {
+		if _, done := out[cue.Track]; done || strings.TrimSpace(normalizeTitle(cue.Title)) != "" {
+			continue
+		}
+		for i, t := range tracks {
+			if !claimed[i] && onDisc(t) && positionIs(t, cue.Track) && (disc > 0 || t.Medium <= 1) {
+				claimed[i] = true
+				out[cue.Track] = t
+				break
+			}
+		}
+	}
+	return out
+}
+
+func positionIs(t ReleaseTrack, n int) bool {
+	p, ok := numericPosition(t.Position)
+	return ok && p == n
+}
+
+// apply inspects the torrent and files its lossless files as projections. Each file
+// carries its own track id when the release tracklist could be read: that is the id
+// Plex sends in a webhook, so the projection and the player finally speak the same
+// id. Files the tracklist cannot be matched by keep the album's release group.
+func (r *Runner) apply(ctx context.Context, album Album, group ReleaseGroup, tracks []ReleaseTrack, candidate Candidate, entry *Entry) error {
+	result, err := applyFiles(ctx, r.Library, album.Artist, album.Title, group, tracks, candidate, r.Options.IDStyle)
+	if err != nil {
+		return err
 	}
 	if result.AlreadyPresent {
 		entry.Status = StatusAlreadyPresent

@@ -28,6 +28,8 @@ type AudioAddedFile struct {
 	// result must not look like it rewrote anything.
 	Mtime string                `json:"mtime"`
 	State AudioProjectionStatus `json:"state"`
+	// CueTrack is the image track this projection serves; absent for a whole file.
+	CueTrack int `json:"cue_track,omitempty"`
 
 	// Always present, empty when the caller supplied none: List returns the same
 	// concept with both keys, and a client should not have to branch on absence.
@@ -158,11 +160,29 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		return nil, errf(http.StatusGatewayTimeout, "no metadata after %ds: %v", wait, err)
 	}
 
-	sourcePaths := make([]string, len(intent.Files))
-	for i, file := range intent.Files {
-		sourcePaths[i] = file.SourcePath
+	// The cue tracks of one image share its source path: resolve each path once.
+	var sourcePaths []string
+	seenSource := map[string]bool{}
+	for _, file := range intent.Files {
+		if !seenSource[file.SourcePath] {
+			seenSource[file.SourcePath] = true
+			sourcePaths = append(sourcePaths, file.SourcePath)
+		}
 	}
-	sources, err := ResolveSources(info.FileStats, sourcePaths)
+	resolved, err := ResolveSources(info.FileStats, sourcePaths)
+	if err != nil {
+		abandon()
+		return nil, audioErr(err)
+	}
+	byPath := make(map[string]ResolvedSource, len(resolved))
+	for _, r := range resolved {
+		byPath[r.SourcePath] = r
+	}
+	sources := make([]ResolvedSource, len(intent.Files))
+	for i, file := range intent.Files {
+		sources[i] = byPath[file.SourcePath]
+	}
+	intent.Files, sources, err = m.expandCueImages(ctx, engineHash, info.FileStats, intent.Files, sources)
 	if err != nil {
 		abandon()
 		return nil, audioErr(err)
@@ -174,6 +194,16 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 			abandon()
 			return nil, audioErr(err)
 		}
+	}
+	// A cue track's projection is its header plus a frame range of the image, so its
+	// size is known only once the boundaries are found.
+	segments, err := m.cueSegments(ctx, engineHash, info.FileStats, intent.Files, sources)
+	if err != nil {
+		abandon()
+		return nil, audioErr(err)
+	}
+	for i, seg := range segments {
+		sources[i].Size = seg.Size()
 	}
 	plans, err := PlanAudioProjections(m.cfg.AudioProjections, intent.Section, engineHash, intent.Files, sources)
 	if err != nil {
@@ -207,6 +237,9 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 			Magnet:              magnet,
 			ExternalID:          intent.Files[i].ExternalID,
 			ExternalIDNamespace: intent.Files[i].ExternalIDNamespace,
+			CueTrack:            intent.Files[i].CueTrack,
+			ByteOffset:          segments[i].Offset,
+			Header:              segments[i].Header,
 			StagingName:         fmt.Sprintf(".tiramisu-%s-%d", txnID, i),
 			CreatedAtNS:         now,
 			UpdatedAtNS:         now,
@@ -272,7 +305,7 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	}
 
 	for _, row := range rows {
-		data, err := AudioStubBytes(m.streamURL(row.Hash, row.FileIndex), row.Size, row.Magnet, row.ExternalID, row.ExternalIDNamespace)
+		data, err := AudioCueStubBytes(m.streamURL(row.Hash, row.FileIndex), row.Size, row.Magnet, row.ExternalID, row.ExternalIDNamespace, row.CueTrack, row.ByteOffset)
 		if err != nil {
 			if cleanupErr := unwind(); cleanupErr != nil {
 				return nil, errf(http.StatusInternalServerError, "cannot render audio stub for %s: %v; %v", row.VirtualPath, err, cleanupErr)
@@ -333,6 +366,9 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 				UpdatedAtNS:         row.UpdatedAtNS,
 				ExternalID:          row.ExternalID,
 				ExternalIDNamespace: row.ExternalIDNamespace,
+				CueTrack:            row.CueTrack,
+				ByteOffset:          row.ByteOffset,
+				Header:              row.Header,
 			})
 		}
 		m.cfg.PublishAudioPath(batch)
@@ -369,6 +405,7 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 			Size:                plan.Source.Size,
 			Mtime:               time.Unix(0, mtimeNS).UTC().Format(time.RFC3339Nano),
 			State:               plan.Status,
+			CueTrack:            intent.Files[i].CueTrack,
 			ExternalID:          id,
 			ExternalIDNamespace: ns,
 		})

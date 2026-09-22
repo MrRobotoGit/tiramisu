@@ -104,7 +104,7 @@ func ReconcileAudio(src AudioProjectionSource, im *InodeMap, sourcePath string) 
 			}
 			// The full path, not the basename: two albums both holding
 			// "01 - Intro.flac" share a basename but never an identity.
-			im.AddFile(full, p.Hash, p.FileIndex)
+			im.AddFile(full, SegmentInodeHash(p.Hash, p.CueTrack), p.FileIndex)
 			result.Registered++
 		}
 	}

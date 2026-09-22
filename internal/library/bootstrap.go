@@ -27,6 +27,21 @@ func AudioStubBytes(streamURL string, size int64, magnet, externalID, externalID
 	return json.Marshal(stub)
 }
 
+// AudioCueStubBytes is AudioStubBytes for one cue track: it records which track of
+// the file it is and where its frames start.
+func AudioCueStubBytes(streamURL string, size int64, magnet, externalID, externalIDNS string, cueTrack int, offset int64) ([]byte, error) {
+	data, err := AudioStubBytes(streamURL, size, magnet, externalID, externalIDNS)
+	if err != nil || cueTrack == 0 {
+		return data, err
+	}
+	var stub map[string]interface{}
+	if err := json.Unmarshal(data, &stub); err != nil {
+		return nil, err
+	}
+	stub["cue_track"], stub["offset"] = cueTrack, offset
+	return json.Marshal(stub)
+}
+
 // EnsureSectionRoots creates the audio section roots under sourcePath when they are
 // missing, so an install that predates audio gains them on update rather than
 // needing a manual step. Video roots are install.sh's job and are left alone.

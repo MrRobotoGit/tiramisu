@@ -37,7 +37,15 @@ func main() {
 	limit := flag.Int("limit", 0, "stop after this many albums (0 = all)")
 	indexers := flag.String("indexers", "", "comma-separated Prowlarr indexer ids to search (default: all enabled)")
 	apply := flag.Bool("apply", false, "write to the library; without it the run is a dry run")
+	retryFailed := flag.Bool("retry-failed", false, "walk again the albums an earlier run left unmatched or failed; by default a run resumes where the last stopped")
 	reap := flag.Bool("reap", false, "remove albums whose swarm has been unreachable, instead of importing")
+	splitImages := flag.Bool("split-images", false, "refile albums filed as one single-file image track by track, cut by their cue sheet")
+	resync := flag.Bool("resync", false, "with --split-images, also refile tracks of albums already split whose matching changed (removes before re-adding)")
+	discover := flag.Bool("discover", false, "weekly-style discovery run: Plex listens -> ListenBrainz -> import, instead of the album walk")
+	discoverState := flag.String("discover-state", "music-discovery-state.json", "discovery state file")
+	seedsMinPlays := flag.Int("seeds-min-plays", 8, "plays an artist needs to become a seed")
+	maxAlbums := flag.Int("max-albums", 10, "most albums imported in one discovery run")
+	pace := flag.Duration("pace", 10*time.Second, "wait between two album imports")
 	idStyle := flag.String("id-style", "", "MusicBrainz id to register per file: track (Plex webhooks) or recording (Jellyfin); default follows media_server_type from the panel. It applies to new imports only: existing projections keep the id they were filed with")
 	reapMinFailures := flag.Int("reap-min-failures", 3, "failures needed before an album is condemned")
 	reapMinSpan := flag.Duration("reap-min-span", 24*time.Hour, "how long the failures must span")
@@ -68,18 +76,20 @@ func main() {
 	defer cancel()
 
 	plex := musicimport.NewPlexClient(*plexURL, *plexToken)
+	// The dedup index walks every artist section, exactly like the engine does: a
+	// dry run that skipped them would call "missing" an album Plex already holds.
+	allSections, err := plex.ArtistSections(ctx)
+	if err != nil {
+		log.Fatalf("musicimport: %v", err)
+	}
 	if *section == "" {
-		sections, err := plex.ArtistSections(ctx)
-		if err != nil {
-			log.Fatalf("musicimport: %v", err)
-		}
-		switch len(sections) {
+		switch len(allSections) {
 		case 0:
 			log.Fatal("musicimport: Plex reports no artist section")
 		case 1:
-			*section = sections[0].Key
+			*section = allSections[0].Key
 		default:
-			for _, s := range sections {
+			for _, s := range allSections {
 				log.Printf("section %s: %s", s.Key, s.Title)
 			}
 			log.Fatal("musicimport: more than one artist section, pick one with --section")
@@ -111,13 +121,27 @@ func main() {
 		Options: musicimport.Options{
 			Section:      *section,
 			IndexerIDs:   parseIndexers(*indexers),
-			IDStyle:      *idStyle,
+			IDStyle:      style,
+			RetryFailed:  *retryFailed,
 			MinSeeders:   *minSeeders,
 			MaxSizeBytes: int64(*maxSizeGB * float64(1<<30)),
 			Limit:        *limit,
 			Apply:        *apply,
 			Logf:         log.Printf,
 		},
+	}
+
+	if *splitImages {
+		summary, err := musicimport.SplitImages(ctx, library, musicimport.NewMusicBrainz(), state, style, *apply, *resync, *limit, log.Printf)
+		if err != nil {
+			log.Fatalf("musicimport: %v", err)
+		}
+		fmt.Printf("\n%s: image albums %d, no cue %d, planned %d, converted %d, failed %d, tracks %d, resynced albums %d, refiled tracks %d\n",
+			modeLabel(*apply, "split dry run", "split"), summary.Albums, summary.NoCue, summary.Planned, summary.Converted, summary.Failed, summary.Tracks, summary.Resynced, summary.Fixed)
+		for _, note := range summary.Notes {
+			fmt.Println(" -", note)
+		}
+		return
 	}
 
 	if *reap {
@@ -142,6 +166,59 @@ func main() {
 		return
 	}
 
+	if *discover {
+		state, err := musicimport.LoadDiscoveryState(*discoverState)
+		if err != nil {
+			log.Fatalf("musicimport: discovery state: %v", err)
+		}
+		// The album walk's own state already resolved every Plex album to its release
+		// group: merging it saves an hour of MusicBrainz calls on the first run.
+		if imports, err := musicimport.LoadState(*statePath); err == nil {
+			state.MergeImportState(imports)
+		}
+		discovery := &musicimport.DiscoverRunner{
+			Plex:    plex,
+			Brainz:  musicimport.NewMusicBrainz(),
+			Listen:  musicimport.NewListenBrainz(),
+			Indexer: prowlarr.NewClient(prowlarr.ConfigProwlarr{Enabled: true, URL: *prowlarrURL, APIKey: *prowlarrKey}),
+			Library: library,
+			State:   state,
+			Options: musicimport.DiscoverOptions{
+				Section:  *section,
+				Sections: allSections,
+				SeedOpts: musicimport.SeedOptions{Count: 5, MinPlays: *seedsMinPlays, Windows: []time.Duration{7 * 24 * time.Hour, 30 * 24 * time.Hour, 90 * 24 * time.Hour, 365 * 24 * time.Hour, 0}},
+				Radio: musicimport.RadioOptions{
+					Mode: "medium", MaxSimilarArtists: 5, MaxRecordingsPerArtist: 3, PopBegin: 10, PopEnd: 60,
+				},
+				MinListenCount: 500,
+				AlbumTypes:     []string{"Album", "EP"},
+				MaxAlbums:      *maxAlbums,
+				MaxPerArtist:   1,
+				MinSeeders:     *minSeeders,
+				MaxSizeBytes:   int64(*maxSizeGB * float64(1<<30)),
+				IDStyle:        style,
+				Pace:           *pace,
+				Logf:           log.Printf,
+			},
+		}
+		// The dry run is safe by construction: it reads Plex, ListenBrainz and Prowlarr
+		// (to show the torrent it would pick) and stops before the Library API write.
+		if *apply {
+			log.Print("musicimport: --discover --apply imports for real; without --apply nothing is written")
+		}
+		summary, err := discovery.RunDryRun(ctx, !*apply)
+		if err != nil {
+			log.Fatalf("musicimport: %v", err)
+		}
+		fmt.Printf("\n%s: seeds %d (%s), candidates %d, present %d, planned %d, imported %d, no-torrent %d, failed %d\n",
+			modeLabel(*apply, "discover dry run", "discovered"),
+			summary.Seeds, summary.Window, summary.Candidates, summary.Present, summary.Planned, summary.Imported, summary.NoTorrent, summary.Failed)
+		for _, note := range summary.Notes {
+			fmt.Println(" -", note)
+		}
+		return
+	}
+
 	summary, err := runner.Run(ctx)
 	if err != nil {
 		log.Fatalf("musicimport: %v", err)
@@ -150,11 +227,19 @@ func main() {
 	if *apply {
 		mode = "applied"
 	}
-	fmt.Printf("\n%s: albums %d, already present %d, no identity %d, no match %d, selected %d, applied %d, errors %d\n",
-		mode, summary.Albums, summary.Present, summary.NoIdentity, summary.NoMatch, summary.Selected, summary.Applied, summary.Errors)
+	fmt.Printf("\n%s: albums %d, already present %d, settled earlier %d, no identity %d, no match %d, selected %d, applied %d, errors %d\n",
+		mode, summary.Albums, summary.Present, summary.Skipped, summary.NoIdentity, summary.NoMatch, summary.Selected, summary.Applied, summary.Errors)
 	for _, note := range summary.Notes {
 		fmt.Println(" -", note)
 	}
+}
+
+// modeLabel names a run for the summary line.
+func modeLabel(apply bool, dry, done string) string {
+	if apply {
+		return done
+	}
+	return dry
 }
 
 // parseIndexers reads the --indexers flag: "10,2" becomes [10 2], empty becomes nil.

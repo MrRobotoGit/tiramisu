@@ -37,10 +37,32 @@ type WatchlistSyncConfig struct {
 	IntervalHours int  `json:"interval_hours"` // 1,2,3,4,6,8,12,24
 }
 
+// MusicDiscoveryConfig holds the weekly discovery knobs: seed thresholds, the
+// ListenBrainz window and the import pacing. Defaults live in LoadConfig.
+type MusicDiscoveryConfig struct {
+	Mode                   string   `json:"mode"` // easy|medium|hard
+	MaxSimilarArtists      int      `json:"max_similar_artists"`
+	MaxRecordingsPerArtist int      `json:"max_recordings_per_artist"`
+	PopBegin               int      `json:"pop_begin"`
+	PopEnd                 int      `json:"pop_end"`
+	MinListenCount         int      `json:"min_listen_count"`
+	SeedsCount             int      `json:"seeds_count"`
+	SeedsMinPlays          int      `json:"seeds_min_plays"`
+	SeedsWindowsDays       []int    `json:"seeds_windows_days"` // ordered, 0 = all-time
+	AlbumTypes             []string `json:"album_types"`
+	MaxAlbumsPerRun        int      `json:"max_albums_per_run"`
+	MaxAlbumsPerArtist     int      `json:"max_albums_per_artist"`
+	MinSeeders             int      `json:"min_seeders"`
+	MaxSizeGB              float64  `json:"max_size_gb"`
+	PaceSeconds            int      `json:"pace_seconds"`
+	MaxAttempts            int      `json:"max_attempts"`
+}
+
 type SchedulerConfig struct {
 	Enabled       bool                `json:"enabled"`
 	MoviesSync    DailyJobConfig      `json:"movies_sync"`
 	TVSync        DailyJobConfig      `json:"tv_sync"`
+	MusicSync     DailyJobConfig      `json:"music_sync"`
 	WatchlistSync WatchlistSyncConfig `json:"watchlist_sync"`
 }
 
@@ -239,10 +261,11 @@ type Config struct {
 
 	// --- External Services (V1.4.6) ---
 	Plex struct {
-		URL         string `json:"url"`
-		Token       string `json:"token"`
-		LibraryID   int    `json:"library_id"`
-		TVLibraryID int    `json:"tv_library_id"`
+		URL            string `json:"url"`
+		Token          string `json:"token"`
+		LibraryID      int    `json:"library_id"`
+		TVLibraryID    int    `json:"tv_library_id"`
+		MusicLibraryID int    `json:"music_library_id"`
 	} `json:"plex"`
 	TMDBAPIKey   string `json:"tmdb_api_key"`
 	TorrentioURL string `json:"torrentio_url"` // Torrentio base URL (used when Prowlarr is disabled)
@@ -252,6 +275,9 @@ type Config struct {
 
 	// --- Built-in Sync Scheduler ---
 	Scheduler SchedulerConfig `json:"scheduler"`
+
+	// --- Music Discovery (weekly sync) ---
+	MusicDiscovery MusicDiscoveryConfig `json:"music_discovery"`
 
 	// --- Media Server ---
 	MediaServerType string `json:"media_server_type"` // "plex" | "jellyfin"
@@ -343,7 +369,17 @@ func LoadConfig() Config {
 			Enabled:       false, // off by default — won't break installs using cron
 			MoviesSync:    DailyJobConfig{Enabled: true, DaysOfWeek: []int{1, 4}, Hour: 3, Minute: 0},
 			TVSync:        DailyJobConfig{Enabled: true, DaysOfWeek: []int{3, 5}, Hour: 4, Minute: 0},
+			MusicSync:     DailyJobConfig{Enabled: true, DaysOfWeek: []int{0}, Hour: 15, Minute: 0},
 			WatchlistSync: WatchlistSyncConfig{Enabled: true, IntervalHours: 1},
+		},
+
+		MusicDiscovery: MusicDiscoveryConfig{
+			Mode: "medium", MaxSimilarArtists: 5, MaxRecordingsPerArtist: 3,
+			PopBegin: 10, PopEnd: 60, MinListenCount: 500,
+			SeedsCount: 5, SeedsMinPlays: 8, SeedsWindowsDays: []int{7, 30, 90, 365, 0},
+			AlbumTypes:      []string{"Album", "EP"},
+			MaxAlbumsPerRun: 10, MaxAlbumsPerArtist: 1,
+			MinSeeders: 5, MaxSizeGB: 3, PaceSeconds: 10, MaxAttempts: 3,
 		},
 
 		TorrentioURL:     "https://torrentio.strem.fun",

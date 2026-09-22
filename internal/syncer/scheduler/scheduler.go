@@ -47,6 +47,7 @@ type SchedulerConfig struct {
 	Enabled       bool
 	MoviesSync    DailyJobConfig
 	TVSync        DailyJobConfig
+	MusicSync     DailyJobConfig
 	WatchlistSync WatchlistSyncConfig
 }
 
@@ -174,6 +175,8 @@ func (s *Scheduler) shouldRun(name string, state JobState) bool {
 		return s.shouldRunDaily(state, s.cfg.MoviesSync.Enabled, s.cfg.MoviesSync.DaysOfWeek, s.cfg.MoviesSync.Hour, s.cfg.MoviesSync.Minute)
 	case "tv":
 		return s.shouldRunDaily(state, s.cfg.TVSync.Enabled, s.cfg.TVSync.DaysOfWeek, s.cfg.TVSync.Hour, s.cfg.TVSync.Minute)
+	case "music":
+		return s.shouldRunDaily(state, s.cfg.MusicSync.Enabled, s.cfg.MusicSync.DaysOfWeek, s.cfg.MusicSync.Hour, s.cfg.MusicSync.Minute)
 	case "watchlist":
 		return s.shouldRunInterval(state, s.cfg.WatchlistSync.Enabled, s.cfg.WatchlistSync.IntervalHours)
 	}
@@ -280,6 +283,8 @@ func (s *Scheduler) updateNextRuns() {
 			next = nextRunTime(s.cfg.MoviesSync.Enabled, s.cfg.MoviesSync.DaysOfWeek, s.cfg.MoviesSync.Hour, s.cfg.MoviesSync.Minute)
 		case "tv":
 			next = nextRunTime(s.cfg.TVSync.Enabled, s.cfg.TVSync.DaysOfWeek, s.cfg.TVSync.Hour, s.cfg.TVSync.Minute)
+		case "music":
+			next = nextRunTime(s.cfg.MusicSync.Enabled, s.cfg.MusicSync.DaysOfWeek, s.cfg.MusicSync.Hour, s.cfg.MusicSync.Minute)
 		case "watchlist":
 			if s.cfg.WatchlistSync.Enabled && s.cfg.WatchlistSync.IntervalHours > 0 {
 				next = state.LastRun.Add(time.Duration(s.cfg.WatchlistSync.IntervalHours) * time.Hour)

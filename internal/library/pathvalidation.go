@@ -99,6 +99,31 @@ func validatePathSyntax(virtualPath string) error {
 	return nil
 }
 
+// SafeComponent turns a title into a path component validatePathComponent accepts:
+// forbidden characters dropped (":" becomes " -"), control characters removed, and
+// no leading period or trailing period or space.
+func SafeComponent(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r == ':':
+			b.WriteString(" -")
+		case r == '/' || r == '\\':
+			b.WriteByte('-')
+		case r <= 0x1f, r >= 0x80 && r <= 0x9f, strings.ContainsRune(forbiddenPathChars, r):
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	out = strings.TrimLeft(out, ".")
+	out = strings.TrimRight(out, ". ")
+	if out == "" {
+		return "Untitled"
+	}
+	return out
+}
+
 func validatePathComponent(component string) error {
 	// Also catches absolute paths and trailing separators.
 	if component == "" {

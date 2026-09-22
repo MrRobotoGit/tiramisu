@@ -318,6 +318,7 @@ func (b *StartupCacheBuilder) reconcileAudio() {
 				Hash: p.Hash, FileIndex: p.FileIndex, Size: p.Size, MtimeNS: p.MtimeNS,
 				UpdatedAtNS: p.UpdatedAtNS,
 				ExternalID:  p.ExternalID, ExternalIDNamespace: p.ExternalIDNamespace,
+				CueTrack: p.CueTrack, ByteOffset: p.ByteOffset, Header: p.Header,
 			})
 			path := filepath.Join(b.sourcePath, p.Section, filepath.FromSlash(p.VirtualPath))
 			meta, err := vfs.ReadMetadataFromFileWithLimits(path, vfs.AudioSizeLimits)

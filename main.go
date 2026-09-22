@@ -708,7 +708,7 @@ func (r *VirtualMkvRoot) Lookup(ctx context.Context, name string, out *fuse.Entr
 	if classifyVFSPath(fullPath).Stub {
 		meta, err := stubMeta(fullPath)
 		if err == nil {
-			addFileToInodeMap(fullPath, meta.URL)
+			addMetaToInodeMap(fullPath, meta)
 			ino := getFileInodeFromMap(fullPath)
 			node := &VirtualMkvNode{vMeta: meta}
 			stable := fs.StableAttr{
@@ -960,7 +960,7 @@ func (d *VirtualDirNode) Lookup(ctx context.Context, name string, out *fuse.Entr
 	if classifyVFSPath(fullPath).Stub {
 		meta, err := stubMeta(fullPath)
 		if err == nil {
-			addFileToInodeMap(fullPath, meta.URL)
+			addMetaToInodeMap(fullPath, meta)
 			ino := getFileInodeFromMap(fullPath)
 			node := &VirtualMkvNode{vMeta: meta}
 			stable := fs.StableAttr{
@@ -1204,6 +1204,9 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	// exists, so no write path ever has to exist behind it (spec 4).
 	if n.vMeta.Audio && audioWriteIntent(flags) {
 		return nil, 0, syscall.EROFS
+	}
+	if len(n.vMeta.SegmentHeader) > 0 {
+		return n.openCueTrack(ctx, flags)
 	}
 
 	// PROACTIVE CLEANUP TRIGGER (V246): must be sync before any Read() can arrive.
@@ -2327,6 +2330,66 @@ func safeGo(fn func()) {
 // Compile-time interface checks for MkvHandle
 var _ fs.FileReader = (*MkvHandle)(nil)
 var _ fs.FileReleaser = (*MkvHandle)(nil)
+
+// cueHandle serves one cue track of a single-file image: the generated header from
+// memory, then the image's frames through an ordinary MkvHandle whose file ends
+// where the track ends. MkvHandle itself is untouched.
+type cueHandle struct {
+	inner  *MkvHandle
+	header []byte
+	base   int64 // where the track's frames start in the torrent file
+	length int64 // image bytes the track spans
+}
+
+var _ fs.FileReader = (*cueHandle)(nil)
+var _ fs.FileReleaser = (*cueHandle)(nil)
+
+// openCueTrack opens the image through the regular path, sized to end at the end of
+// the track, and wraps it.
+func (n *VirtualMkvNode) openCueTrack(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	length := n.vMeta.Size - int64(len(n.vMeta.SegmentHeader))
+	if length <= 0 {
+		return nil, 0, syscall.EIO
+	}
+	inner := *n.vMeta
+	inner.Size = n.vMeta.SegmentOffset + length
+	inner.SegmentHeader = nil
+	fh, fuseFlags, errno := (&VirtualMkvNode{vMeta: &inner, wake: n.wake}).Open(ctx, flags)
+	if errno != 0 {
+		return nil, 0, errno
+	}
+	h, ok := fh.(*MkvHandle)
+	if !ok {
+		return nil, 0, syscall.EIO
+	}
+	return &cueHandle{inner: h, header: n.vMeta.SegmentHeader, base: n.vMeta.SegmentOffset, length: length}, fuseFlags, 0
+}
+
+func (h *cueHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	hdrFrom, hdrTo, innerOff, innerN := vfs.SegmentRead(len(h.header), h.base, h.length, off, len(dest))
+	n := copy(dest, h.header[hdrFrom:hdrTo])
+	if innerN > 0 {
+		want := dest[n : n+innerN]
+		res, errno := h.inner.Read(ctx, want, innerOff)
+		if errno != 0 {
+			// Never the header alone: a short read away from EOF is EOF to the
+			// kernel, and a cold torrent would truncate the track for the player.
+			return nil, errno
+		}
+		data, _ := res.Bytes(want)
+		got := copy(dest[n:], data)
+		res.Done()
+		if got < innerN {
+			return nil, syscall.EIO
+		}
+		n += got
+	}
+	return fuse.ReadResultData(dest[:n]), 0
+}
+
+func (h *cueHandle) Release(ctx context.Context) syscall.Errno {
+	return h.inner.Release(ctx)
+}
 
 // shortAwayFromEOF reports whether a read of n bytes into a want-sized buffer at off leaves a
 // gap before end of file. Short AT eof is normal; short before it is what the kernel turns
@@ -5013,6 +5076,7 @@ func main() {
 			Enabled:       gc().Scheduler.Enabled,
 			MoviesSync:    scheduler.DailyJobConfig(gc().Scheduler.MoviesSync),
 			TVSync:        scheduler.DailyJobConfig(gc().Scheduler.TVSync),
+			MusicSync:     scheduler.DailyJobConfig(gc().Scheduler.MusicSync),
 			WatchlistSync: scheduler.WatchlistSyncConfig(gc().Scheduler.WatchlistSync),
 		}
 
@@ -5059,6 +5123,16 @@ func main() {
 				DB:              stateDB,
 				AudioRegistry:   audioOwnershipRegistry(),
 				InvalidatePath:  invalidateSyncRemovedPath,
+			}),
+			"music": engines.NewMusicSyncEngine(engines.MusicSyncConfig{
+				PlexURL:      gc().Plex.URL,
+				PlexToken:    gc().Plex.Token,
+				PlexMusicLib: strconv.Itoa(gc().Plex.MusicLibraryID),
+				LibraryURL:   fmt.Sprintf("http://127.0.0.1:%d", gc().MetricsPort),
+				StateDir:     GetStateDir(),
+				LogsDir:      logsDir,
+				ProwlarrCfg:  gc().Prowlarr,
+				Discovery:    gc().MusicDiscovery,
 			}),
 			"watchlist": engines.NewWatchlistSyncer(engines.WatchlistSyncerConfig{
 				GoStormURL:      gc().GoStormBaseURL,
@@ -5655,7 +5729,7 @@ func publishAudioProjectionsLive(ps []library.AudioProjection) {
 	for _, p := range ps {
 		if globalInodeMap != nil {
 			full := filepath.Join(physicalSourcePath, string(p.Section), filepath.FromSlash(p.VirtualPath))
-			globalInodeMap.AddFile(full, p.Hash, p.FileIndex)
+			globalInodeMap.AddFile(full, vfs.SegmentInodeHash(p.Hash, p.CueTrack), p.FileIndex)
 		}
 	}
 	if globalAudioNamespace != nil {
@@ -5679,6 +5753,23 @@ func addFileToInodeMap(fullPath, url string) uint64 {
 		return 0
 	}
 	return globalInodeMap.AddFile(fullPath, hash, index)
+}
+
+// addMetaToInodeMap registers a virtual file's inode. A cue track joins its track to
+// the key, since the tracks of an image share one torrent file; every other file,
+// video included, goes through addFileToInodeMap unchanged.
+func addMetaToInodeMap(fullPath string, meta *vfs.Metadata) uint64 {
+	if meta.SegmentTrack <= 0 {
+		return addFileToInodeMap(fullPath, meta.URL)
+	}
+	if globalInodeMap == nil {
+		return 0
+	}
+	hash, index := vfs.ExtractHashAndIndex(meta.URL)
+	if hash == "" {
+		return 0
+	}
+	return globalInodeMap.AddFile(fullPath, vfs.SegmentInodeHash(hash, meta.SegmentTrack), index)
 }
 
 func GetInodeMapStats() (files, dirs, hits, misses int64) {
@@ -5850,6 +5941,9 @@ func audioProjectionMeta(fullPath string, p library.AudioProjection) *vfs.Metada
 		ExternalID:          p.ExternalID,
 		ExternalIDNamespace: p.ExternalIDNamespace,
 		Audio:               true,
+		SegmentTrack:        p.CueTrack,
+		SegmentOffset:       p.ByteOffset,
+		SegmentHeader:       p.Header,
 	}
 }
 

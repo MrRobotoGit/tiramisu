@@ -2,6 +2,7 @@ package library
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -20,6 +21,11 @@ type AudioFileRequest struct {
 	// and returned verbatim; both or neither.
 	ExternalID          string `json:"external_id,omitempty"`
 	ExternalIDNamespace string `json:"external_id_ns,omitempty"`
+	// CueTrack projects one track of a single-file image, as numbered in the cue
+	// sheet the torrent carries beside it; 0 projects the whole file. Tags become
+	// the track's Vorbis comments, verbatim; without them the cue's are used.
+	CueTrack int               `json:"cue_track,omitempty"`
+	Tags     map[string]string `json:"tags,omitempty"`
 }
 
 // AudioAddRequest is a structurally valid audio add with its type resolved.
@@ -70,7 +76,14 @@ func ValidateAudioAddRequest(req AddRequest) (AudioAddRequest, error) {
 		if seenPath[file.Path] {
 			return AudioAddRequest{}, errf(http.StatusBadRequest, "files[%d].path %q is requested twice", i, file.Path)
 		}
-		if seenSource[file.SourcePath] {
+		if file.CueTrack < 0 {
+			return AudioAddRequest{}, errf(http.StatusBadRequest, "files[%d].cue_track %d is negative", i, file.CueTrack)
+		}
+		if file.CueTrack == 0 && len(file.Tags) > 0 {
+			return AudioAddRequest{}, errf(http.StatusBadRequest, "files[%d].tags apply to a cue track only", i)
+		}
+		sourceKey := fmt.Sprintf("%s\x00%d", file.SourcePath, file.CueTrack)
+		if seenSource[sourceKey] {
 			return AudioAddRequest{}, errf(http.StatusBadRequest, "files[%d].source_path %q is requested twice", i, file.SourcePath)
 		}
 		// Half an identity identifies nothing, whichever half is missing. A value
@@ -84,7 +97,7 @@ func ValidateAudioAddRequest(req AddRequest) (AudioAddRequest, error) {
 			file.ExternalID, file.ExternalIDNamespace = "", ""
 		}
 		seenPath[file.Path] = true
-		seenSource[file.SourcePath] = true
+		seenSource[sourceKey] = true
 		// Stored as supplied: only title is trimmed, never a path.
 		files = append(files, file)
 	}
@@ -110,7 +123,9 @@ func StatusForError(err error) int {
 		errors.Is(err, ErrSourceDuplicate),
 		errors.Is(err, metadb.ErrAudioIdentityIncomplete):
 		return http.StatusBadRequest
-	case errors.Is(err, ErrSourceNotFound):
+	case errors.Is(err, ErrCueUnavailable):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, ErrSourceNotFound), errors.Is(err, ErrCueSplit):
 		// Well formed but unsatisfiable, as pickFile already answers.
 		return http.StatusUnprocessableEntity
 	case errors.Is(err, ErrSourceAmbiguous):

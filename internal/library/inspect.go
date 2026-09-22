@@ -3,7 +3,10 @@ package library
 import (
 	"context"
 	"net/http"
+	"path"
 	"strings"
+
+	"tiramisu/internal/audio/cue"
 )
 
 // InspectRequest identifies a torrent to read the file list of. It selects
@@ -23,9 +26,19 @@ type InspectFile struct {
 	Size       int64  `json:"size"`
 }
 
+// InspectCueTrack is one track of a single-file image, as its cue sheet numbers
+// it: a caller adds it with cue_track, like a file of a multi-file release.
+type InspectCueTrack struct {
+	SourcePath string `json:"source_path"`
+	Track      int    `json:"track"`
+	Title      string `json:"title,omitempty"`
+	Performer  string `json:"performer,omitempty"`
+}
+
 type InspectResponse struct {
-	Hash  string        `json:"hash"`
-	Files []InspectFile `json:"files"`
+	Hash      string            `json:"hash"`
+	Files     []InspectFile     `json:"files"`
+	CueTracks []InspectCueTrack `json:"cue_tracks"`
 }
 
 // Inspect reports a torrent's files. Metadata that never arrives is an error, not
@@ -99,7 +112,42 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 	for _, file := range info.FileStats {
 		files = append(files, InspectFile{SourcePath: file.Path, FileIndex: file.ID, Size: file.Length})
 	}
-	return &InspectResponse{Hash: engineHash, Files: files}, nil
+	return &InspectResponse{Hash: engineHash, Files: files, CueTracks: m.inspectCueTracks(ctx, engineHash, info.FileStats)}, nil
+}
+
+// inspectCueTracks lists the tracks of every FLAC a cue sheet in the torrent
+// describes. A sheet that cannot be read hides nothing but its own tracks: the image
+// stays addable as a whole file.
+func (m *Manager) inspectCueTracks(ctx context.Context, hash string, files []FileStat) []InspectCueTrack {
+	ctx, cancel := context.WithTimeout(ctx, cueSplitTimeout)
+	defer cancel()
+	out := []InspectCueTrack{}
+	var sheets []*cue.Sheet
+	loaded := false
+	for _, f := range files {
+		if !strings.EqualFold(path.Ext(f.Path), ".flac") {
+			continue
+		}
+		if !loaded {
+			sheets, _ = m.cueSheets(ctx, hash, files)
+			loaded = true
+			if len(sheets) == 0 {
+				return out
+			}
+		}
+		sheet, file, ok := matchCueSheet(sheets, files, f.Path)
+		if !ok || len(file.Tracks) < 2 {
+			continue
+		}
+		for _, t := range file.Tracks {
+			performer := t.Performer
+			if performer == "" {
+				performer = sheet.Performer
+			}
+			out = append(out, InspectCueTrack{SourcePath: f.Path, Track: t.Number, Title: t.Title, Performer: performer})
+		}
+	}
+	return out
 }
 
 // knownTorrentHashes snapshots what the engine already holds. A failed listing

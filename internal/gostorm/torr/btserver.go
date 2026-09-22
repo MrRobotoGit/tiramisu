@@ -35,6 +35,11 @@ type BTServer struct {
 	tickerStop chan struct{}
 
 	mu sync.Mutex
+
+	// dropMu serialises "check the client still holds it, then Drop" across wrappers:
+	// two *Torrent for the same hash have different muTorrent, and an unguarded
+	// second Drop panics with "no such torrent".
+	dropMu sync.Mutex
 }
 
 var privateIPBlocks []*net.IPNet

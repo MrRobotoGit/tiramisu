@@ -19,7 +19,7 @@ const (
 // *metadb.DB satisfies it.
 type AudioProjectionLookup interface {
 	GetAudioProjection(section, virtualPath string) (*metadb.AudioProjection, bool, error)
-	AudioProjectionBySource(hash string, fileIndex int) (*metadb.AudioProjection, bool, error)
+	AudioProjectionBySource(hash string, fileIndex, cueTrack int) (*metadb.AudioProjection, bool, error)
 	AudioProjectionByPortableKey(section, portableKey string) (*metadb.AudioProjection, bool, error)
 }
 
@@ -34,7 +34,7 @@ type AudioProjectionPlan struct {
 
 // ClassifyAudioProjection decides whether a projection is present, would be
 // created, or conflicts. The destination is checked before the release.
-func ClassifyAudioProjection(lookup AudioProjectionLookup, section Section, hash, virtualPath string, source ResolvedSource) (AudioProjectionPlan, error) {
+func ClassifyAudioProjection(lookup AudioProjectionLookup, section Section, hash, virtualPath string, source ResolvedSource, cueTrack int) (AudioProjectionPlan, error) {
 	existing, found, err := lookup.GetAudioProjection(string(section), virtualPath)
 	if err != nil {
 		return AudioProjectionPlan{}, fmt.Errorf("reading projection %s/%s: %w", section, virtualPath, err)
@@ -45,6 +45,7 @@ func ClassifyAudioProjection(lookup AudioProjectionLookup, section Section, hash
 		if existing.State == metadb.AudioCommitted &&
 			existing.Hash == hash &&
 			existing.FileIndex == source.FileIndex &&
+			existing.CueTrack == cueTrack &&
 			existing.SourcePath == source.SourcePath &&
 			existing.Size == source.Size {
 			return AudioProjectionPlan{
@@ -66,7 +67,7 @@ func ClassifyAudioProjection(lookup AudioProjectionLookup, section Section, hash
 		return AudioProjectionPlan{}, fmt.Errorf("%w: %s/%s collides with %s on a case-insensitive or normalising filesystem", metadb.ErrAudioPathConflict, section, virtualPath, keyOwner.VirtualPath)
 	}
 
-	owner, found, err := lookup.AudioProjectionBySource(hash, source.FileIndex)
+	owner, found, err := lookup.AudioProjectionBySource(hash, source.FileIndex, cueTrack)
 	if err != nil {
 		return AudioProjectionPlan{}, fmt.Errorf("reading source %s:%d: %w", hash, source.FileIndex, err)
 	}
@@ -85,12 +86,13 @@ func PlanAudioProjections(lookup AudioProjectionLookup, section Section, hash st
 	plans := make([]AudioProjectionPlan, 0, len(requests))
 	// Two distinct source paths can resolve to one file index, which the registry
 	// would only catch at commit; planning must not project it twice.
-	claimedBy := make(map[int]string, len(requests))
+	type sourceKey struct{ index, cueTrack int }
+	claimedBy := make(map[sourceKey]string, len(requests))
 	keyClaimedBy := make(map[string]string, len(requests))
 	for i := range requests {
 		// The destination is classified first so a taken path outranks an in-request
 		// duplicate, wherever the duplicate sits.
-		plan, err := ClassifyAudioProjection(lookup, section, hash, requests[i].Path, sources[i])
+		plan, err := ClassifyAudioProjection(lookup, section, hash, requests[i].Path, sources[i], requests[i].CueTrack)
 		if err != nil {
 			return nil, err
 		}
@@ -101,10 +103,11 @@ func PlanAudioProjections(lookup AudioProjectionLookup, section Section, hash st
 		}
 		keyClaimedBy[portableKey] = requests[i].Path
 
-		if previous, claimed := claimedBy[sources[i].FileIndex]; claimed {
+		key := sourceKey{sources[i].FileIndex, requests[i].CueTrack}
+		if previous, claimed := claimedBy[key]; claimed {
 			return nil, fmt.Errorf("%w: %s:%d requested at both %q and %q", metadb.ErrAudioSourceConflict, hash, sources[i].FileIndex, previous, requests[i].Path)
 		}
-		claimedBy[sources[i].FileIndex] = requests[i].Path
+		claimedBy[key] = requests[i].Path
 		plans = append(plans, plan)
 	}
 	return plans, nil

@@ -560,6 +560,10 @@ type AudioProjection struct {
 	// state a webhook later matches against. Empty when the caller supplied none.
 	ExternalID          string
 	ExternalIDNamespace string
+	// A cue track serves Header, then the torrent file from ByteOffset.
+	CueTrack   int
+	ByteOffset int64
+	Header     []byte
 }
 
 // Path returns the projection's namespace key.
