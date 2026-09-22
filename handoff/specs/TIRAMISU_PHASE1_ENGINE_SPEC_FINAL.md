@@ -782,6 +782,15 @@ For audio, `blacklist` MUST NOT be lifecycle state. An audio remove request cont
 
 Hash removal, prefix removal, recursive directory removal, and `paths: []` batch removal are Phase 2 conveniences.
 
+> **Amendment, 2026-09-22 — prefix removal is pulled forward.** The first
+> production library (397 albums, 5331 projections, roughly a third on dead
+> swarms) showed that the album, not the track, is the only unit anyone removes,
+> and that the exact-path form makes that operation cost one call per track.
+> Album-granular removal by section-relative prefix is therefore in scope, with
+> component-wise matching, a `409` when the rows under the prefix do not share
+> exactly one hash, and the per-row state machine of §8 unchanged. The other
+> three forms above remain Phase 2. See `PR3_CARRIED_ITEMS.md` §7.
+
 ## 6.8 Error envelope
 
 New audio/inspect errors SHOULD use this backward-friendly shape:

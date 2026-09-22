@@ -296,7 +296,14 @@ be filed as `.mp3`.
 
 `201` when it created them, `200` with `"already_present": true` when every
 requested projection was already there — a replay, and `mtime` stays what it was,
-so a present result never looks like it rewrote anything. `external_id` and
+so a present result never looks like it rewrote anything.
+
+**On a replay the stored identity wins.** If your `external_id` disagrees with
+the one already registered for that projection, the request still succeeds, the
+stored value is returned unchanged, and the disagreement is logged. This is
+deliberate: the identity does not select the bytes — `(hash, file_index)` does —
+so refusing the call would fail a request whose projection is correct. To change
+a registered identity, remove the projection and add it again. `external_id` and
 `external_id_ns` are always in the response, empty when you sent none, so a client
 never has to branch on a missing key.
 
