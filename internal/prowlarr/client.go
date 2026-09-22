@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,9 @@ func NewClient(cfg ConfigProwlarr) *Client {
 	return &Client{
 		cfg: cfg,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			// Slightly above searchTimeout: the per-call deadline must fire first, or
+			// every slow search would be retried up to three times by catalog.Do.
+			Timeout: searchTimeout + 5*time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        10,
 				MaxIdleConnsPerHost: 5,
@@ -205,7 +208,63 @@ func (c *Client) fetchFromProwlarrStatus(imdbID, contentType, title string, year
 	return merged, failures > 0, nil
 }
 
-// queryCtx executes a single Prowlarr API GET request, respecting context cancellation.
+// SearchOptions narrows one free-text search.
+type SearchOptions struct {
+	Categories []int
+	IndexerIDs []int
+}
+
+// SearchWithOptions runs one free-text query with the given narrowing. The whole
+// call is bounded by searchTimeout, so a stalled indexer cannot hold a caller for
+// the retries catalog.Do would otherwise stack on top of it.
+func (c *Client) SearchWithOptions(ctx context.Context, query string, opts SearchOptions) ([]ProwlarrResult, error) {
+	if c == nil {
+		return nil, fmt.Errorf("prowlarr: client is disabled")
+	}
+	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+
+	params := map[string]string{
+		"apikey": c.cfg.APIKey,
+		"type":   "search",
+		"query":  query,
+		"limit":  "100",
+	}
+	if len(opts.Categories) > 0 {
+		params["categories"] = joinInts(opts.Categories)
+	}
+	if len(opts.IndexerIDs) > 0 {
+		params["indexerIds"] = joinInts(opts.IndexerIDs)
+	}
+	return c.queryCtx(ctx, params)
+}
+
+// Search runs one free-text query and returns the raw results. It is the generic
+// entry point for callers whose query is not an IMDb id, such as the music importer.
+// categories, when non-empty, restricts the search to those indexer category ids.
+func (c *Client) Search(ctx context.Context, query string, categories ...int) ([]ProwlarrResult, error) {
+	return c.SearchWithOptions(ctx, query, SearchOptions{Categories: categories})
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.Itoa(value))
+	}
+	return strings.Join(parts, ",")
+}
+
+// ResolveHash follows a result's download link to its magnet and returns the info
+// hash. Indexers like RuTracker expose no hash in the search response, only this
+// link, so callers that gate on the hash resolve it here.
+func (c *Client) ResolveHash(downloadURL string) string {
+	if c == nil || strings.TrimSpace(downloadURL) == "" {
+		return ""
+	}
+	return c.resolveHashFromDownloadURL(downloadURL)
+}
+
+// queryCtx runs one Prowlarr search and returns the raw results.
 func (c *Client) queryCtx(ctx context.Context, params map[string]string) ([]ProwlarrResult, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.searchURL, nil)
 	if err != nil {
