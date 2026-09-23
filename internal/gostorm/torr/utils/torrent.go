@@ -37,6 +37,14 @@ var defTrackers = []string{
 	// Tier 3: HTTP/HTTPS fallback
 	"http://tracker.opentrackr.org:1337/announce",
 	"https://tracker.lilithraws.org:443/announce",
+
+	// RuTracker's anonymous announce (the form its magnets carry). Its small lossless
+	// swarms live there more than in the DHT; for a hash it does not track the
+	// tracker just answers with nothing.
+	"http://bt.t-ru.org/ann?magnet",
+	"http://bt2.t-ru.org/ann?magnet",
+	"http://bt3.t-ru.org/ann?magnet",
+	"http://bt4.t-ru.org/ann?magnet",
 }
 var (
 	loadedTrackers []string
