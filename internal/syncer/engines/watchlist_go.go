@@ -162,7 +162,7 @@ func (e *WatchlistGoEngine) Run(ctx context.Context) error {
 				continue
 			}
 
-			magnet := BuildMagnet(infoHash, item.Title, DefaultTrackers())
+			magnet := releaseMagnet(ctx, e.prowlarr, e.gostorm, infoHash, item.Title, candidate.DownloadURL, e.logger.Printf)
 			hash, err := e.gostorm.AddTorrent(ctx, magnet, item.Title)
 			if err != nil || hash == "" {
 				continue

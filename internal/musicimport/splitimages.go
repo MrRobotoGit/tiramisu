@@ -72,7 +72,7 @@ func SplitImages(ctx context.Context, library splitLibrary, brainz releaseReader
 			return summary, err
 		}
 		title := album.artist + " - " + album.album
-		files, err := library.Inspect(ctx, album.hash, title)
+		files, err := library.Inspect(ctx, album.hash, title, nil)
 		if err != nil {
 			summary.Failed++
 			logf("inspect %s: %v", title, err)
@@ -114,7 +114,7 @@ func SplitImages(ctx context.Context, library splitLibrary, brainz releaseReader
 			summary.Notes = append(summary.Notes, fmt.Sprintf("would split %s into %d tracks", title, len(adds)))
 			continue
 		}
-		if _, err := library.Add(ctx, album.hash, title, adds); err != nil {
+		if _, err := library.Add(ctx, album.hash, title, nil, adds); err != nil {
 			summary.Failed++
 			logf("add tracks of %s: %v", title, err)
 			continue
@@ -161,7 +161,7 @@ func resync(ctx context.Context, library splitLibrary, album imageAlbum, adds []
 			logf("remove %s: %v", p, err)
 		}
 	}
-	if _, err := library.Add(ctx, album.hash, title, changed); err != nil {
+	if _, err := library.Add(ctx, album.hash, title, nil, changed); err != nil {
 		summary.Failed++
 		logf("refile %d tracks of %s: %v", len(changed), title, err)
 		return

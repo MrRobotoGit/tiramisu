@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 	"tiramisu/internal/gostorm/torrshash"
 
@@ -90,7 +91,7 @@ func addTorrent(req torrReqJS, c *gin.Context) {
 		return
 	}
 
-	log.TLogln("add torrent", req.Link)
+	log.TLogln("add torrent", redactSecrets(req.Link))
 	req.Link = strings.ReplaceAll(req.Link, "&amp;", "&")
 
 	var torrSpec *torrent.TorrentSpec
@@ -232,3 +233,9 @@ func wipeTorrents(c *gin.Context) {
 
 	c.Status(200)
 }
+
+// reSecret matches the per-user credentials tracker URLs carry, raw or URL-encoded.
+var reSecret = regexp.MustCompile(`(?i)((?:pk|passkey|authkey|torrent_pass|uk|apikey)(?:=|%3D))[^&%\s"]+`)
+
+// redactSecrets keeps a tracker passkey out of the log, which users share for help.
+func redactSecrets(s string) string { return reSecret.ReplaceAllString(s, "${1}***") }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"tiramisu/internal/catalog"
+	"tiramisu/internal/library"
 )
 
 const (
@@ -264,6 +266,50 @@ func (c *Client) ResolveHash(downloadURL string) string {
 	return c.resolveHashFromDownloadURL(downloadURL)
 }
 
+// maxTorrentBytes bounds a .torrent download: real ones are a few hundred KB.
+const maxTorrentBytes = 8 << 20
+
+// FetchTorrent fetches the release a download link points to: a .torrent (an indexer
+// logged in with the user's account serves one, with their passkey tracker and the
+// metadata) or a redirect to a magnet (its trackers). Called for the release a sync
+// picks, never for every result.
+func (c *Client) FetchTorrent(ctx context.Context, downloadURL string) (library.TorrentSource, error) {
+	if c == nil || strings.TrimSpace(downloadURL) == "" {
+		return library.TorrentSource{}, fmt.Errorf("no download link")
+	}
+	ctx, cancel := context.WithTimeout(ctx, resolveHashTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return library.TorrentSource{}, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	noRedirect := &http.Client{
+		Timeout:       resolveHashTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := noRedirect.Do(req)
+	if err != nil {
+		return library.TorrentSource{}, fmt.Errorf("fetch release: %s", library.RedactSecrets(err.Error()))
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound:
+		return library.ParseMagnetSource(resp.Header.Get("Location"))
+	case resp.StatusCode == http.StatusOK:
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxTorrentBytes+1))
+		if err != nil {
+			return library.TorrentSource{}, err
+		}
+		if len(data) > maxTorrentBytes {
+			return library.TorrentSource{}, fmt.Errorf("release file larger than %d bytes", maxTorrentBytes)
+		}
+		return library.ParseTorrentFile(data)
+	default:
+		return library.TorrentSource{}, fmt.Errorf("fetch release: status %d", resp.StatusCode)
+	}
+}
+
 // queryCtx runs one Prowlarr search and returns the raw results.
 func (c *Client) queryCtx(ctx context.Context, params map[string]string) ([]ProwlarrResult, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.searchURL, nil)
@@ -322,6 +368,7 @@ func (c *Client) toStream(res ProwlarrResult) Stream {
 			res.Title, res.Seeders, res.Leechers, sizeGB),
 		InfoHash:      res.InfoHash,
 		SizeGB:        sizeGB,
+		DownloadURL:   res.DownloadUrl,
 		BehaviorHints: BehaviorHints{BingeGroup: fmt.Sprintf("prowlarr-%s", resTag)},
 	}
 }

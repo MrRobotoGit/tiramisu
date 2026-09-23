@@ -36,6 +36,29 @@ func InitApiHelper(bt *BTServer) {
 	bts = bt
 }
 
+// mergeTrackerTiers appends to base every tracker of extra it lacks, as one more tier.
+func mergeTrackerTiers(base, extra [][]string) [][]string {
+	seen := map[string]bool{}
+	for _, tier := range base {
+		for _, tr := range tier {
+			seen[tr] = true
+		}
+	}
+	var missing []string
+	for _, tier := range extra {
+		for _, tr := range tier {
+			if tr != "" && !seen[tr] {
+				seen[tr] = true
+				missing = append(missing, tr)
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return base
+	}
+	return append(base, missing)
+}
+
 func AddTorrent(spec *torrent.TorrentSpec, title, poster string, data string, category string) (*Torrent, error) {
 	// V255: Inject cached InfoBytes + PeerAddrs from DB to skip metadata re-fetch
 	// and peer discovery. Magnet links always have InfoBytes=nil and PeerAddrs=nil.
@@ -48,6 +71,9 @@ func AddTorrent(spec *torrent.TorrentSpec, title, poster string, data string, ca
 		if len(spec.PeerAddrs) == 0 && len(cached.TorrentSpec.PeerAddrs) > 0 {
 			spec.PeerAddrs = cached.TorrentSpec.PeerAddrs
 		}
+		// The trackers the torrent was first added with (its indexer's, possibly with the
+		// user's passkey) come back too: a wake builds a bare magnet from the hash.
+		spec.Trackers = mergeTrackerTiers(spec.Trackers, cached.TorrentSpec.Trackers)
 	}
 
 	btsMu.RLock()

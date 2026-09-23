@@ -16,6 +16,10 @@ type Candidate struct {
 	Seeders     int
 	Size        int64
 	Score       int
+	// TorrentFile and Trackers come from the indexer's link when it serves them: the
+	// .torrent (metadata, a logged-in indexer's passkey) or its magnet's trackers.
+	TorrentFile []byte
+	Trackers    []string
 }
 
 const minAlbumBytes = 15 << 20 // an album below 15 MB is not a lossless release

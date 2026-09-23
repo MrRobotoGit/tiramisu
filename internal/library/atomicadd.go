@@ -108,8 +108,12 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	if err != nil {
 		return nil, err
 	}
+	file, err := releaseFile(req.TorrentFile, hash)
+	if err != nil {
+		return nil, err
+	}
 	if magnet == "" {
-		magnet = BuildMagnet(hash, intent.Title, DefaultTrackers())
+		magnet = BuildMagnet(hash, intent.Title, MergeTrackers(DefaultTrackers(), file.Trackers))
 	}
 
 	// Locked on the canonical spelling so a base32 magnet and its hex form are one
@@ -123,6 +127,7 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	}
 	preexisting := known[lockKey]
 
+	m.uploadReleaseFile(ctx, file, intent.Title)
 	addedHash, err := m.cfg.GoStorm.AddTorrent(ctx, magnet, intent.Title)
 	if err != nil || addedHash == "" {
 		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)

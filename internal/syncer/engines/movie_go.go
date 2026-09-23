@@ -690,7 +690,7 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 			continue
 		}
 
-		magnet := BuildMagnet(c.Hash, title, DefaultTrackers())
+		magnet := releaseMagnet(ctx, e.prowlarr, e.gostorm, c.Hash, title, c.DownloadURL, e.logger.Printf)
 		hash, confirmed, err := e.gostorm.AddTorrentConfirmed(ctx, magnet, title)
 		if err != nil || hash == "" || !confirmed {
 			// The engine refused the release, or answered without acknowledging it:
@@ -774,6 +774,7 @@ type MovieStream struct {
 	QualityScore int
 	Seeders      int
 	SizeGB       float64
+	DownloadURL  string // the indexer's link, for the .torrent of the release picked
 }
 
 // getMovieStreams asks both indexers and scores their releases together. Stopping at the
@@ -951,6 +952,7 @@ func (e *MovieGoEngine) classifyMovieStream(s prowlarr.Stream) (*MovieStream, st
 		QualityScore: score,
 		Seeders:      seeders,
 		SizeGB:       sizeGB,
+		DownloadURL:  s.DownloadURL,
 	}, ""
 }
 

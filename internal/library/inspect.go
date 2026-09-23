@@ -16,6 +16,8 @@ type InspectRequest struct {
 	Magnet       string `json:"magnet"`
 	Title        string `json:"title"`
 	MetadataWait int    `json:"metadata_wait"`
+	// TorrentFile is the release's .torrent (base64 in JSON), as for an add.
+	TorrentFile []byte `json:"torrent_file,omitempty"`
 }
 
 // InspectFile is one source file as the engine sees it. source_path is what a
@@ -57,8 +59,12 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 	if err != nil {
 		return nil, err
 	}
+	file, err := releaseFile(req.TorrentFile, hash)
+	if err != nil {
+		return nil, err
+	}
 	if magnet == "" {
-		magnet = BuildMagnet(hash, title, DefaultTrackers())
+		magnet = BuildMagnet(hash, title, MergeTrackers(DefaultTrackers(), file.Trackers))
 	}
 
 	// Held across ownership, add and cleanup, keyed on the canonical spelling so a
@@ -74,6 +80,7 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 	}
 	preexisting := known[lockKey]
 
+	m.uploadReleaseFile(ctx, file, title)
 	addedHash, err := m.cfg.GoStorm.AddTorrent(ctx, magnet, title)
 	if err != nil || addedHash == "" {
 		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)

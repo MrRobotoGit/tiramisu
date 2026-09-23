@@ -26,10 +26,13 @@ type ProwlarrResult struct {
 
 // Stream represents a Stremio/Torrentio stream entry returned by FetchTorrents.
 type Stream struct {
-	Name          string        `json:"name"`
-	Title         string        `json:"title"`
-	InfoHash      string        `json:"infoHash"`
-	SizeGB        float64       `json:"-"` // Raw size from Prowlarr API (not title parsing)
+	Name     string  `json:"name"`
+	Title    string  `json:"title"`
+	InfoHash string  `json:"infoHash"`
+	SizeGB   float64 `json:"-"` // Raw size from Prowlarr API (not title parsing)
+	// DownloadURL is the indexer's link to the release, kept so the one release a sync
+	// picks can have its .torrent fetched (trackers, metadata). Empty for Torrentio.
+	DownloadURL   string        `json:"-"`
 	BehaviorHints BehaviorHints `json:"behaviorHints"`
 }
 

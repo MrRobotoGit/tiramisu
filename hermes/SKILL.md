@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie, TV, music or audiobook release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.6.0
+version: 4.7.0
 author: MrRobotoGit
 license: GPL-3.0-only
 metadata:
@@ -292,6 +292,7 @@ not optional and the engine will not add it for you.
 |-------|---------|
 | `type` | `music` or `audiobook`. **No aliases**: `musics`, `Music`, `audiobooks` are all `400`. Unlike the video types, a typo here is refused rather than silently falling back |
 | `hash` / `magnet` | as for video, but a `hash` that disagrees with the magnet's own BTIH is `400 hash_magnet_mismatch` and nothing is added |
+| `torrent_file` | optional, the release's `.torrent` (base64), for `add` and `inspect`, video and audio alike. Fetch it from the indexer's `downloadUrl` when that returns a file: the engine gets the metadata at once (no wait on the swarm) and keeps the file's trackers, a logged-in indexer's passkey included, for every later wake. It must be the release `hash` names, or the call is a `400` |
 | `title` | the torrent's display name in the engine. It is not the folder name: that comes from the paths you pass |
 | `files[].source_path` | a `source_path` from `inspect`, verbatim |
 | `files[].path` | the virtual path inside the section. The directories are yours to choose and are created as needed, but the **filename must end in `_<hash8>` before the extension** — see below. A path without it is a `400` |

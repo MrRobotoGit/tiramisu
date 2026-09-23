@@ -143,12 +143,18 @@ func (t *Tiramisu) Committed(ctx context.Context) (CommittedSet, error) {
 
 // Inspect hydrates the torrent if needed and returns its file list, each image
 // carrying the cue tracks it is cut into.
-func (t *Tiramisu) Inspect(ctx context.Context, hash, title string) ([]SourceFile, error) {
+func (t *Tiramisu) Inspect(ctx context.Context, hash, title string, torrentFile []byte) ([]SourceFile, error) {
 	var response struct {
 		Files     []SourceFile `json:"files"`
 		CueTracks []CueTrack   `json:"cue_tracks"`
 	}
-	payload := map[string]string{"hash": hash, "title": title}
+	payload := map[string]interface{}{"hash": hash, "title": title}
+	if strings.HasPrefix(hash, "magnet:") {
+		payload = map[string]interface{}{"magnet": hash, "title": title}
+	}
+	if len(torrentFile) > 0 {
+		payload["torrent_file"] = torrentFile
+	}
 	if err := t.do(ctx, http.MethodPost, "/api/library/inspect", payload, &response); err != nil {
 		return nil, err
 	}
@@ -168,9 +174,16 @@ func (t *Tiramisu) RemovePath(ctx context.Context, path string) error {
 }
 
 // Add files an album's projections.
-func (t *Tiramisu) Add(ctx context.Context, hash, title string, files []AddFile) (AddResult, error) {
+func (t *Tiramisu) Add(ctx context.Context, hash, title string, torrentFile []byte, files []AddFile) (AddResult, error) {
 	var result AddResult
 	payload := map[string]interface{}{"type": "music", "hash": hash, "title": title, "files": files}
+	if strings.HasPrefix(hash, "magnet:") {
+		delete(payload, "hash")
+		payload["magnet"] = hash
+	}
+	if len(torrentFile) > 0 {
+		payload["torrent_file"] = torrentFile
+	}
 	if err := t.do(ctx, http.MethodPost, "/api/library/add", payload, &result); err != nil {
 		return AddResult{}, err
 	}

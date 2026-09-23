@@ -208,6 +208,39 @@ type torrentSearcher interface {
 // selectAlbumTorrent is the search the importer and the discovery share: the lossless
 // query first, the plain one second, first candidate that clears the floor and whose
 // hash resolves.
+// releaseFetcher is the Prowlarr side that fetches a release's .torrent or magnet.
+type releaseFetcher interface {
+	FetchTorrent(ctx context.Context, downloadURL string) (library.TorrentSource, error)
+}
+
+// withRelease attaches the release's .torrent and trackers to a candidate, when the
+// indexer can fetch them and they are the release the candidate names.
+func withRelease(ctx context.Context, indexer torrentSearcher, c Candidate, logf func(string, ...any)) Candidate {
+	f, ok := indexer.(releaseFetcher)
+	if !ok || c.DownloadURL == "" {
+		return c
+	}
+	src, err := f.FetchTorrent(ctx, c.DownloadURL)
+	if err != nil {
+		logf("release file for %q: %v", c.Title, err)
+		return c
+	}
+	if !strings.EqualFold(src.Hash, c.Hash) {
+		return c
+	}
+	c.TorrentFile, c.Trackers = src.File, src.Trackers
+	return c
+}
+
+// releaseRef is how a candidate is named to the Library API: its hash, or a magnet
+// carrying the indexer's trackers when those came without a .torrent.
+func releaseRef(c Candidate) string {
+	if len(c.TorrentFile) == 0 && len(c.Trackers) > 0 {
+		return library.BuildMagnet(c.Hash, c.Title, library.MergeTrackers(library.DefaultTrackers(), c.Trackers))
+	}
+	return c.Hash
+}
+
 func selectAlbumTorrent(ctx context.Context, indexer torrentSearcher, indexerIDs []int, artist, title string, minSeeders int, maxSizeBytes int64, logf func(string, ...any)) (Candidate, bool) {
 	artist, title = asciiPunctuation(artist), asciiPunctuation(title)
 	for _, query := range []string{
@@ -228,7 +261,7 @@ func selectAlbumTorrent(ctx context.Context, indexer torrentSearcher, indexerIDs
 				}
 				candidate.Hash = strings.ToLower(hash)
 			}
-			return candidate, true
+			return withRelease(ctx, indexer, candidate, logf), true
 		}
 	}
 	return Candidate{}, false
@@ -259,15 +292,15 @@ func (r *Runner) selectTorrent(ctx context.Context, album Album, group ReleaseGr
 
 // libraryWriter is what applyFiles needs from the Library API client.
 type libraryWriter interface {
-	Inspect(ctx context.Context, hash, title string) ([]SourceFile, error)
-	Add(ctx context.Context, hash, title string, files []AddFile) (AddResult, error)
+	Inspect(ctx context.Context, hash, title string, torrentFile []byte) ([]SourceFile, error)
+	Add(ctx context.Context, hash, title string, torrentFile []byte, files []AddFile) (AddResult, error)
 }
 
 // applyFiles inspects the torrent and files its lossless files as projections, each
 // with its own track id when the tracklist matches and the group id otherwise.
 // Shared by the importer and the discovery.
 func applyFiles(ctx context.Context, library libraryWriter, artist, title string, group ReleaseGroup, tracks []ReleaseTrack, candidate Candidate, idStyle string) (AddResult, error) {
-	files, err := library.Inspect(ctx, candidate.Hash, artist+" - "+title)
+	files, err := library.Inspect(ctx, releaseRef(candidate), artist+" - "+title, candidate.TorrentFile)
 	if err != nil {
 		return AddResult{}, fmt.Errorf("inspect %s: %w", candidate.Hash, err)
 	}
@@ -295,7 +328,7 @@ func applyFiles(ctx context.Context, library libraryWriter, artist, title string
 	if len(adds) == 0 {
 		return AddResult{}, fmt.Errorf("no FLAC file in %s", candidate.Title)
 	}
-	result, err := library.Add(ctx, candidate.Hash, artist+" - "+title, adds)
+	result, err := library.Add(ctx, releaseRef(candidate), artist+" - "+title, candidate.TorrentFile, adds)
 	if err != nil {
 		// The release title stays in the error: the caller logs it verbatim and an
 		// anonymous "add failed" costs a manual investigation.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -103,6 +104,49 @@ func (c *GoStormClient) AddTorrentConfirmed(ctx context.Context, magnet, title s
 	// 2xx with nothing usable in the body: the hash is the one we sent, not one the
 	// engine acknowledged.
 	return hash, false, nil
+}
+
+// UploadTorrent hands GoStorm a release's .torrent (POST /torrent/upload, saved to its
+// DB): the metadata is known at once and the file's own trackers are kept for every
+// later wake. Returns the torrent's hash.
+func (c *GoStormClient) UploadTorrent(ctx context.Context, data []byte, title string) (string, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	_ = w.WriteField("save", "true")
+	if title != "" {
+		_ = w.WriteField("title", title)
+	}
+	part, err := w.CreateFormFile("file", "release.torrent")
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", err
+	}
+	if err := w.Close(); err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/torrent/upload", &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 120))
+		return "", fmt.Errorf("gostorm upload %d: %s", resp.StatusCode, msg)
+	}
+	var result struct {
+		Hash string `json:"hash"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.Hash == "" {
+		return "", fmt.Errorf("gostorm upload: no hash in the answer")
+	}
+	return strings.ToLower(result.Hash), nil
 }
 
 // GetTorrentInfo polls GoStorm until file_stats appear.

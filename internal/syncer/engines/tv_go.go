@@ -820,6 +820,7 @@ type TVStream struct {
 	Seeders       int
 	SizeGB        float64
 	Priority      int
+	DownloadURL   string // the indexer's link, for the .torrent of the release picked
 }
 
 // seasonSearch is what one season's search established. Complete means every source
@@ -1113,6 +1114,7 @@ func (e *TVGoEngine) classifyStream(s prowlarr.Stream) *TVStream {
 		Seeders:       seeders,
 		SizeGB:        s.SizeGB,
 		Priority:      qualityScore + priorityBonus,
+		DownloadURL:   s.DownloadURL,
 	}
 }
 
@@ -1231,7 +1233,7 @@ func (e *TVGoEngine) extractSeeders(title string) int {
 }
 
 func (e *TVGoEngine) processFullpack(ctx context.Context, showName, showIMDB string, stream TVStream, firstAirDate string, knownTitles []string) int {
-	magnet := BuildMagnet(stream.Hash, stream.Title, DefaultTrackers())
+	magnet := releaseMagnet(ctx, e.prowlarr, e.gostorm, stream.Hash, stream.Title, stream.DownloadURL, e.logger.Printf)
 	hash, err := e.gostorm.AddTorrent(ctx, magnet, stream.Title)
 	if err != nil || hash == "" {
 		return 0
@@ -1340,7 +1342,7 @@ func (e *TVGoEngine) processSingle(ctx context.Context, showName, showIMDB strin
 		}
 	}
 
-	magnet := BuildMagnet(stream.Hash, title, DefaultTrackers())
+	magnet := releaseMagnet(ctx, e.prowlarr, e.gostorm, stream.Hash, title, stream.DownloadURL, e.logger.Printf)
 	hash, err := e.gostorm.AddTorrent(ctx, magnet, title)
 	if err != nil || hash == "" {
 		return 0

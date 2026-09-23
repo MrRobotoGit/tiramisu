@@ -147,6 +147,9 @@ type AddRequest struct {
 	FirstAirDate string `json:"first_air_date"`
 	// FileIndex picks one file inside the torrent; 0 means the largest video file.
 	FileIndex int `json:"file_index"`
+	// TorrentFile is the release's .torrent (base64 in JSON), when the caller fetched
+	// one: the engine gets the metadata at once and keeps the file's own trackers.
+	TorrentFile []byte `json:"torrent_file,omitempty"`
 	// QualityScore is stored in the TV registry. Left at 0, the next TV sync is free
 	// to replace the episode with any release it scores above zero.
 	QualityScore int `json:"quality_score"`
@@ -333,12 +336,17 @@ func (m *Manager) Add(ctx context.Context, req AddRequest) (*AddResponse, error)
 		return &AddResponse{Hash: hash, Title: req.Title, Type: kind, Files: existing, AlreadyPresent: true}, nil
 	}
 
+	file, err := releaseFile(req.TorrentFile, hash)
+	if err != nil {
+		return nil, err
+	}
 	magnet := req.Magnet
 	if magnet == "" {
-		magnet = BuildMagnet(hash, req.Title, DefaultTrackers())
+		magnet = BuildMagnet(hash, req.Title, MergeTrackers(DefaultTrackers(), file.Trackers))
 	}
 
 	requestedHash := hash
+	m.uploadReleaseFile(ctx, file, req.Title)
 	addedHash, err := m.cfg.GoStorm.AddTorrent(ctx, magnet, req.Title)
 	if err != nil || addedHash == "" {
 		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)
