@@ -264,20 +264,32 @@ func crc8(b []byte) byte {
 	return c
 }
 
-// confirmed reports whether a frame header at b[i:] is followed by the frame that
-// continues it: the next valid header must carry exactly sample+block. The first
-// header after i decides; a real frame is never followed by a gap in numbering.
+// maxFrameScan bounds how far past a frame its successor is looked for: larger than
+// any frame a lossless rip produces.
+const maxFrameScan = 128 << 10
+
+// successor finds the frame that continues the one at b[i:]: the next header carrying
+// exactly sample+block. Headers with any other number are skipped, not trusted: a byte
+// run inside the audio can pass for a header, CRC included.
+func (im *Image) successor(b []byte, i int, f frame) (int, frame, bool) {
+	want := f.sample + int64(f.block)
+	end := min(len(b)-16, i+maxFrameScan)
+	for k := i + 16; k < end; k++ {
+		if next, ok := im.parseFrame(b, k); ok && next.sample == want {
+			return k, next, true
+		}
+	}
+	return 0, frame{}, false
+}
+
+// confirmed reports whether a header at b[i:] is a real frame: its successor is in
+// the window, or it is the last frame and ends the stream.
 func (im *Image) confirmed(b []byte, i int, f frame) bool {
-	// The last frame has no successor: it is confirmed by ending the stream.
 	if f.sample+int64(f.block) >= im.Info.TotalSamples {
 		return true
 	}
-	for k := i + 16; k < len(b)-16; k++ {
-		if next, ok := im.parseFrame(b, k); ok {
-			return next.sample == f.sample+int64(f.block)
-		}
-	}
-	return false
+	_, _, ok := im.successor(b, i, f)
+	return ok
 }
 
 // Boundary returns the byte offset of the first frame starting at or after sample,
@@ -314,44 +326,51 @@ func (im *Image) Boundary(sample int64) (int64, int64, error) {
 			return 0, 0, fmt.Errorf("flacsplit: read at %d: %w", start, err)
 		}
 		b := buf[:n]
-		var first, last frame
-		var firstOff, lastOff int64
-		found := false
+		// The last confirmed frame before the target anchors the answer: the chain of
+		// frames is followed from it, so the frame returned is the first at or after
+		// the target, never one past a frame whose confirmation a decoy spoiled.
+		anchorOff, firstGEOff := -1, -1
+		var anchor, firstGE frame
 		for i := 0; i < len(b)-16; i++ {
 			f, ok := im.parseFrame(b, i)
 			if !ok || !im.confirmed(b, i, f) {
 				continue
 			}
-			if !found {
-				first, firstOff, found = f, start+int64(i), true
+			if f.sample < sample {
+				anchor, anchorOff = f, i
+				continue
 			}
-			last, lastOff = f, start+int64(i)
-			if f.sample >= sample {
-				// Correct only if the window also holds a frame before the target, or
-				// starts at the first frame: otherwise one could sit just before it.
-				if first.sample < sample || start == im.AudioStart {
-					return start + int64(i), f.sample, nil
-				}
-				break
-			}
+			firstGE, firstGEOff = f, i
+			break
 		}
-		// No frame starts at or after the target: it falls inside the last frame, so
-		// the track runs to the end of the image.
-		if found && last.sample < sample && last.sample+int64(last.block) >= im.Info.TotalSamples {
-			return im.Size, im.Info.TotalSamples, nil
+		if anchorOff < 0 && firstGEOff >= 0 && start == im.AudioStart {
+			return start + int64(firstGEOff), firstGE.sample, nil
 		}
-		// Re-aim from the frame nearest the target, not from the window: the average
-		// bytes per sample misjudges a passage compressed denser or looser than the
-		// album, and aiming from the window edge then crawls a few KB per probe.
 		switch {
-		case !found:
-			est = lo + (hi-lo)/2
-		case first.sample >= sample:
-			hi = min(hi, firstOff)
-			est = firstOff - int64(float64(first.sample-sample)*perSample)
+		case anchorOff >= 0:
+			cur, curOff := anchor, anchorOff
+			for {
+				if cur.sample+int64(cur.block) >= im.Info.TotalSamples {
+					// The target falls inside the last frame: the track runs to the end.
+					return im.Size, im.Info.TotalSamples, nil
+				}
+				nextOff, next, ok := im.successor(b, curOff, cur)
+				if !ok {
+					break
+				}
+				if next.sample >= sample {
+					return start + int64(nextOff), next.sample, nil
+				}
+				cur, curOff = next, nextOff
+			}
+			// The chain left the window before the target: re-aim past its end.
+			lo = max(lo, start+int64(curOff))
+			est = start + int64(curOff) + int64(float64(sample-cur.sample)*perSample)
+		case firstGEOff >= 0:
+			hi = min(hi, start+int64(firstGEOff))
+			est = start + int64(firstGEOff) - int64(float64(firstGE.sample-sample)*perSample)
 		default:
-			lo = max(lo, lastOff)
-			est = lastOff + int64(float64(sample-last.sample)*perSample)
+			est = lo + (hi-lo)/2
 		}
 		if est <= lo || est >= hi {
 			est = lo + (hi-lo)/2

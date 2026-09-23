@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"tiramisu/internal/gostorm/settings"
 	"tiramisu/internal/gostorm/torr"
 	"tiramisu/internal/gostorm/torr/state"
 	apiUtils "tiramisu/internal/gostorm/web/api/utils"
@@ -102,6 +103,9 @@ func (c *NativeClient) Wake(ctx context.Context, magnetUrl string, fileIdx int) 
 		// V255: Use PeekTorrent to check RAM only, not re-activate from DB.
 		if existing := torr.PeekTorrent(hash); existing != nil && existing.Torrent != nil {
 			t = existing
+			// A reused torrent may already be past its expiry: the ticker would close it
+			// between this wake and the first read.
+			t.AddExpiredTime(wakeExpiry())
 			// V265: If we have an existing torrent, we fall through to the metadata check
 			// instead of returning nil, to ensure Open waits if metadata isn't ready.
 		} else {
@@ -155,6 +159,12 @@ func (c *NativeClient) Wake(ctx context.Context, magnetUrl string, fileIdx int) 
 				pieceLenKB = int(info.PieceLength) / 1024
 			}
 		}
+		// GotInfo is what every other entry point goes through: it attaches the cache
+		// (without one, expiry ignores active readers), marks the torrent working and
+		// renews its expiry. Info is already here, so it returns at once.
+		if !t.GotInfo() {
+			return fmt.Errorf("torrent closed while waking: %s", hash)
+		}
 		log.Printf("[NativeBridge] Metadata ready for %s (piece=%dKB)", hash, pieceLenKB)
 		// V255: Save metadata to DB immediately so next Wake() skips GotInfo() wait.
 		// Note: ForceSaveTorrentToDB at torrent expiry captures the full peer swarm
@@ -168,6 +178,12 @@ func (c *NativeClient) Wake(ctx context.Context, magnetUrl string, fileIdx int) 
 	}
 
 	return nil
+}
+
+// wakeExpiry is how long a woken torrent survives before its first read: the same
+// idle timeout a torrent gets once it has info.
+func wakeExpiry() time.Duration {
+	return time.Second * time.Duration(settings.BTsets.TorrentDisconnectTimeout)
 }
 
 // CleanupHashes removes hashes from the local map that are no longer present in the GoStorm core.
