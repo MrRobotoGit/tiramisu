@@ -59,7 +59,9 @@ type Tiramisu struct {
 func NewTiramisu(baseURL string) *Tiramisu {
 	return &Tiramisu{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: 300 * time.Second},
+		// An add that cuts a box set from a single-file image runs past five
+		// minutes on a slow swarm; the engine bounds its own work.
+		http: &http.Client{Timeout: 20 * time.Minute},
 	}
 }
 

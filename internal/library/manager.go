@@ -57,6 +57,9 @@ type Config struct {
 	MediaServer  MediaServer
 	MovieSection int
 	TVSection    int
+	// MusicSection is the music library id: an audio add or removal is invisible to
+	// the media server until it rescans, like a stub. 0 leaves Plex alone.
+	MusicSection int
 	// RefreshDelay is how long refreshes are coalesced for; 0 means the default.
 	RefreshDelay time.Duration
 	// AudioRegistry, when set, is asked whether an audio projection still
@@ -759,6 +762,15 @@ func (m *Manager) pickFileForEpisode(req AddRequest, files []FileStat) (*FileSta
 		}
 	}
 	return m.pickFile(0, files)
+}
+
+// audioSection is the media server library of an audio section; audiobooks have
+// no configured id yet.
+func (m *Manager) audioSection(s Section) int {
+	if s == SectionMusic {
+		return m.cfg.MusicSection
+	}
+	return 0
 }
 
 func (m *Manager) section(kind string) int {

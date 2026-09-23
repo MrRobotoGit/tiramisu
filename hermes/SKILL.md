@@ -1,7 +1,7 @@
 ---
 name: tiramisu-manual-content-add
 description: "Use when adding a specific movie, TV, music or audiobook release to a Tiramisu library by hand. Picks a release with the deployment's own scoring and files it through the Library API, which needs no access to the filesystem."
-version: 4.5.0
+version: 4.6.0
 author: MrRobotoGit
 license: GPL-3.0-only
 metadata:
@@ -322,11 +322,12 @@ and leaves the present ones alone, stored identity included. Each file's `state`
 says which happened: `created` for what this call wrote, `present` for what was
 already there.
 
-**No rescan follows an audio add.** The rescan hook belongs to the video path:
-the config carries library ids for movies and TV, none for music, and no audio
-call asks the media server to look. Scan the `music/` and `audiobooks/` sections
-manually once a batch is filed — that is the intended flow, not a missing
-feature.
+**A music add or removal rescans the music library**, as a video add does: the
+engine asks the media server to scan the library whose id is `music_library_id`
+in the config, once for a burst of calls (the requests of the next few seconds
+share one scan). Without that id Plex is left alone and the `music/` section must be
+scanned by hand; audiobooks have no configured id yet and are always scanned by
+hand.
 
 **Album images are split by the engine.** Many lossless rips are one FLAC holding
 the whole album plus a cue sheet (`FLAC (image+.cue)`). Send the image like any

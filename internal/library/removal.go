@@ -163,6 +163,7 @@ func (m *Manager) RemoveAudio(ctx context.Context, req RemoveRequest) (*AudioRem
 		return nil, errf(http.StatusInternalServerError, "forget audio projection: %v", err)
 	}
 
+	m.scheduleRefresh(m.audioSection(section))
 	rows, err := m.cfg.AudioRemoval.AudioProjectionsByHash(row.Hash)
 	if err != nil {
 		return nil, errf(http.StatusInternalServerError, "count audio torrent references: %v", err)
@@ -277,6 +278,7 @@ func (m *Manager) RemoveAudioPrefix(ctx context.Context, req RemoveRequest) (*Au
 		}
 	}
 
+	m.scheduleRefresh(m.audioSection(section))
 	remaining, err := m.cfg.AudioRemoval.AudioProjectionsByHash(hash)
 	if err != nil {
 		return nil, errf(http.StatusInternalServerError, "count audio torrent references: %v", err)

@@ -305,6 +305,10 @@ func (im *Image) Boundary(sample int64) (int64, int64, error) {
 		if start > im.Size-16 {
 			start = im.Size - window
 		}
+		// An image smaller than the window: never aim before its first frame.
+		if start < im.AudioStart {
+			start = im.AudioStart
+		}
 		n, err := im.r.ReadAt(buf, start)
 		if err != nil && !errors.Is(err, io.EOF) {
 			return 0, 0, fmt.Errorf("flacsplit: read at %d: %w", start, err)
