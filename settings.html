@@ -1099,6 +1099,11 @@
                                 <input type="number" name="plex_tv_library_id" data-nested="plex.tv_library_id">
                                 <div class="hint">Plex library ID for TV series. Only gates the post-sync Plex refresh call (0 = skip refresh) — the TMDB/Torrentio sync engine runs regardless, Jellyfin-only setups can leave this at 0.</div>
                             </div>
+                            <div class="form-group">
+                                <label>Music Library ID</label>
+                                <input type="number" name="plex_music_library_id" data-nested="plex.music_library_id" min="0">
+                                <div class="hint">Plex library ID Tiramisu files music into. Gates the post-import refresh, and it is the only library the music sync reads to follow new albums (0 = refresh and new-album follow off). Jellyfin setups leave this at 0: the library is found automatically.</div>
+                            </div>
                         </div>
                     </div>
 
@@ -2298,6 +2303,7 @@
                     form.querySelector('[data-nested="plex.token"]').value = p.token || p.Token || "";
                     form.querySelector('[data-nested="plex.library_id"]').value = p.library_id || p.LibraryID || 0;
                     form.querySelector('[data-nested="plex.tv_library_id"]').value = p.tv_library_id || p.TVLibraryID || 0;
+                    form.querySelector('[data-nested="plex.music_library_id"]').value = p.music_library_id || p.MusicLibraryID || 0;
                 }
                 const pr = originalEngine.prowlarr || originalEngine.Prowlarr;
                 if (pr) {
@@ -2392,7 +2398,11 @@
                 url: formData.get('plex_url') || oldPlex.url || oldPlex.URL || "",
                 token: formData.get('plex_token') || oldPlex.token || oldPlex.Token || "",
                 library_id: parseInt(formData.get('plex_library_id')) || oldPlex.library_id || oldPlex.LibraryID || 0,
-                tv_library_id: parseInt(formData.get('plex_tv_library_id')) || oldPlex.tv_library_id || oldPlex.TVLibraryID || 0
+                tv_library_id: parseInt(formData.get('plex_tv_library_id')) || oldPlex.tv_library_id || oldPlex.TVLibraryID || 0,
+                // 0 is a real choice here (follow off), so an empty field falls back but 0 does not.
+                music_library_id: formData.get('plex_music_library_id') === ''
+                    ? (oldPlex.music_library_id || oldPlex.MusicLibraryID || 0)
+                    : (parseInt(formData.get('plex_music_library_id')) || 0)
             };
 
             const prowlarrKey = originalEngine.prowlarr ? 'prowlarr' : 'Prowlarr';
@@ -2654,8 +2664,11 @@
             const cfgRes = await fetch('/api/config');
             const data = await cfgRes.json();
 
+            // The card has no music row: keep its schedule, the backend rewrites the whole file.
+            const musicSync = data.scheduler?.music_sync;
             data.scheduler = {
                 enabled: document.getElementById('sched-enabled').checked,
+                music_sync: musicSync,
                 movies_sync: {
                     enabled: moviesDays.length > 0,
                     days_of_week: moviesDays,
