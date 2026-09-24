@@ -275,13 +275,31 @@ func (m *MusicBrainz) RecentReleaseGroups(ctx context.Context, artistMBIDs []str
 	}
 	query := fmt.Sprintf("arid:(%s) AND firstreleasedate:[%s TO %s]",
 		strings.Join(artistMBIDs, " OR "), from.Format("2006-01-02"), to.Format("2006-01-02"))
-	if len(types) > 0 {
-		clauses := make([]string, len(types))
-		for i, t := range types {
-			clauses[i] = "primarytype:" + strings.ToLower(t)
-		}
-		query += " AND (" + strings.Join(clauses, " OR ") + ")"
+	return m.searchReleaseGroups(ctx, query+typeClause(types))
+}
+
+// ArtistAlbums lists the release groups of one artist restricted to the given primary
+// types: enough to date a debut, which for a new artist is a single page.
+func (m *MusicBrainz) ArtistAlbums(ctx context.Context, artistMBID string, types []string) ([]ArtistReleaseGroup, error) {
+	if strings.TrimSpace(artistMBID) == "" {
+		return nil, nil
 	}
+	return m.searchReleaseGroups(ctx, "arid:"+artistMBID+typeClause(types))
+}
+
+func typeClause(types []string) string {
+	if len(types) == 0 {
+		return ""
+	}
+	clauses := make([]string, len(types))
+	for i, t := range types {
+		clauses[i] = "primarytype:" + strings.ToLower(t)
+	}
+	return " AND (" + strings.Join(clauses, " OR ") + ")"
+}
+
+// searchReleaseGroups runs a release-group search and follows its pages.
+func (m *MusicBrainz) searchReleaseGroups(ctx context.Context, query string) ([]ArtistReleaseGroup, error) {
 	var out []ArtistReleaseGroup
 	for {
 		var page struct {

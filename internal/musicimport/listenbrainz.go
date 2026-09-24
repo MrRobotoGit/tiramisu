@@ -97,6 +97,32 @@ func (l *ListenBrainz) RadioArtist(ctx context.Context, seedMBID string, opts Ra
 	return tracks, nil
 }
 
+// LBRelease is one release of the sitewide fresh-releases feed.
+type LBRelease struct {
+	ArtistMBIDs      []string `json:"artist_mbids"`
+	ArtistCredit     string   `json:"artist_credit_name"`
+	ReleaseGroupMBID string   `json:"release_group_mbid"`
+	ReleaseMBID      string   `json:"release_mbid"`
+	ReleaseName      string   `json:"release_name"`
+	ReleaseDate      string   `json:"release_date"`
+	PrimaryType      string   `json:"release_group_primary_type"`
+}
+
+// FreshReleases lists every release of the last days (at most 90) on MusicBrainz, the
+// whole site, not one user's: the pool the new-artist pass filters by taste.
+func (l *ListenBrainz) FreshReleases(ctx context.Context, days int) ([]LBRelease, error) {
+	query := url.Values{"days": {strconv.Itoa(days)}, "past": {"true"}, "future": {"false"}, "sort": {"release_date"}}
+	var result struct {
+		Payload struct {
+			Releases []LBRelease `json:"releases"`
+		} `json:"payload"`
+	}
+	if err := l.get(ctx, "/1/explore/fresh-releases/", query, &result); err != nil {
+		return nil, err
+	}
+	return result.Payload.Releases, nil
+}
+
 // listenBrainzRetries is how many times a throttled or busy answer is tried again.
 const listenBrainzRetries = 3
 

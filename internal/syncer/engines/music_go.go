@@ -143,23 +143,28 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 			},
 			MinListenCount: d.MinListenCount,
 			NewReleases:    newReleases,
-			AlbumTypes:     d.AlbumTypes,
-			MaxAlbums:      d.MaxAlbumsPerRun,
-			MaxPerArtist:   d.MaxAlbumsPerArtist,
-			MaxAttempts:    d.MaxAttempts,
-			MinSeeders:     d.MinSeeders,
-			MaxSizeBytes:   int64(d.MaxSizeGB * float64(1<<30)),
-			IDStyle:        style,
-			Pace:           time.Duration(d.PaceSeconds) * time.Second,
-			Logf:           e.logger.Printf,
+			NewArtists: musicimport.NewArtistOptions{
+				Enabled: d.NewArtists.Enabled && d.NewArtists.WindowDays > 0 && d.NewArtists.DebutYears > 0,
+				Window:  time.Duration(d.NewArtists.WindowDays) * 24 * time.Hour,
+				Debut:   time.Duration(d.NewArtists.DebutYears) * 365 * 24 * time.Hour,
+			},
+			AlbumTypes:   d.AlbumTypes,
+			MaxAlbums:    d.MaxAlbumsPerRun,
+			MaxPerArtist: d.MaxAlbumsPerArtist,
+			MaxAttempts:  d.MaxAttempts,
+			MinSeeders:   d.MinSeeders,
+			MaxSizeBytes: int64(d.MaxSizeGB * float64(1<<30)),
+			IDStyle:      style,
+			Pace:         time.Duration(d.PaceSeconds) * time.Second,
+			Logf:         e.logger.Printf,
 		},
 	}
 	summary, err := runner.Run(ctx)
 	if err != nil {
 		return err
 	}
-	e.logger.Printf("run done: seeds %d (%s), candidates %d, new releases %d, present %d, imported %d, no-torrent %d, failed %d, parked %d",
-		summary.Seeds, summary.Window, summary.Candidates, summary.NewReleases, summary.Present, summary.Imported, summary.NoTorrent, summary.Failed, summary.Parked)
+	e.logger.Printf("run done: seeds %d (%s), similar candidates %d, new artists %d, new releases %d, present %d, imported %d, no-torrent %d, failed %d, parked %d",
+		summary.Seeds, summary.Window, summary.Candidates, summary.NewArtists, summary.NewReleases, summary.Present, summary.Imported, summary.NoTorrent, summary.Failed, summary.Parked)
 	return nil
 }
 

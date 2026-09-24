@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // LibraryIndex answers what Plex and Tiramisu already hold, at artist and album
@@ -147,6 +148,12 @@ func BuildLibraryIndex(ctx context.Context, plex albumSource, sections []Section
 		artistKeys:    map[string]string{},
 		resolvedKeys:  map[string]bool{},
 		logf:          logf,
+	}
+	// Artists Tiramisu filed count as held before the media server has scanned them.
+	for prefix := range committed.AlbumPrefixes {
+		if artist, _, ok := strings.Cut(prefix, "/"); ok {
+			ix.AddArtist("", artist)
+		}
 	}
 	for _, section := range sections {
 		artists, err := plex.Artists(ctx, section.Key)

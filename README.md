@@ -420,7 +420,7 @@ subprocess to babysit.
 | **Movies** | Scheduler / manual | TMDB Discover + Popular → Prowlarr/Torrentio → GoStorm → virtual `.mkv` |
 | **TV Series** | Scheduler / manual | TV series with fullpack-first approach, episode registry |
 | **Watchlist** | Scheduler / manual | Plex cloud watchlist → IMDB → Prowlarr/Torrentio → GoStorm |
-| **Music** | Scheduler / manual | New albums of your artists + listening discovery → MusicBrainz → Prowlarr → FLAC projections |
+| **Music** | Scheduler / manual | New albums of your artists + new artists close to yours + similar artists → MusicBrainz → Prowlarr → FLAC projections |
 
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
 **Minimum seeders**: 15, for the main sync and the watchlist alike (the watchlist uses the movie profile)
@@ -937,6 +937,10 @@ nano /home/pi/Tiramisu/config.json
 | `scheduler.music_sync` | Sunday 15:00 | Weekly music sync slot (`config.json` only: the Sync Scheduler card has no music row) |
 | `music_discovery.new_releases.enabled` | `true` | Follow the new albums of the artists in Tiramisu's music library |
 | `music_discovery.new_releases.window_days` | `30` | How recent an album's first edition must be to count as new |
+| `music_discovery.new_artists.enabled` | `true` | Import recent albums of new artists whose nearest artists you own |
+| `music_discovery.new_artists.window_days` | `30` | How far back the fresh-releases feed is read (at most 90) |
+| `music_discovery.new_artists.debut_years` | `3` | An artist counts as new when its first album or EP is at most this old |
+| `music_discovery.max_albums_per_run` | `20` | Cap shared by the new-artist and similar-artist passes (new albums of your own artists are uncapped) |
 | `tmdb_api_key` | *(none)* | TMDB API key |
 | `prowlarr.enabled` | `false` | Use Prowlarr as primary indexer (falls back to Torrentio if disabled) |
 | `prowlarr.api_key` | *(none)* | Prowlarr API key (Settings → General → API Key) |
@@ -1103,7 +1107,7 @@ curl -X POST http://127.0.0.1:9080/api/scheduler/music/run
 ```
 
 Weekly, Sunday 15:00 by default (`scheduler.music_sync`). Every album is filed
-through the Library API as FLAC projections, one per track. Two passes:
+through the Library API as FLAC projections, one per track. Three passes:
 
 - **New albums of your artists.** Every artist of Tiramisu's music library with a
   MusicBrainz id is followed: albums and EPs whose first edition came out in the
@@ -1112,15 +1116,26 @@ through the Library API as FLAC projections, one per track. Two passes:
   qualify. An album with no torrent yet is retried on every run while it stays in
   the window. MusicBrainz is asked in batches of 40 artists, so 800 artists cost
   about 20 requests.
-- **Listening discovery (Plex only).** The artists you play most, from the Plex
-  history, seed ListenBrainz radio; the studio albums of similar artists are
-  imported, capped by `max_albums_per_run` and `max_albums_per_artist`.
+- **New artists close to yours.** The sitewide ListenBrainz fresh-releases feed is
+  filtered down to artists you do not have whose nearest artists on ListenBrainz
+  include yours, and whose first album or EP is at most `debut_years` (3) old;
+  more of your artists among the neighbours ranks higher. Only about a third of new
+  artists have similarity data yet, so expect a handful a month. The first run
+  looks up every artist of the window (about an hour for 30 days); the answers are
+  cached in the discovery state for 30 days, so later runs look up only the week's
+  new names.
+- **Similar artists (Plex only).** Your 20 most played artists seed ListenBrainz
+  radio; their similar artists are pooled and ranked by how many of your artists
+  point at them. Artists any library already holds are never suggested.
+
+The last two passes share `max_albums_per_run` (20), new artists first, one album
+per artist.
 
 The new-album pass reads only Tiramisu's own music library, for the artists and
 for the duplicate check: on Plex the section in `plex.music_library_id` (0 turns
 the pass off), on Jellyfin the music library that holds the albums Tiramisu filed.
-Jellyfin keeps no play history, so there the new-album pass is the only one. It
-reads `/Library/VirtualFolders` and `/Items` with the `Authorization: MediaBrowser`
+Jellyfin keeps no play history, so there the similar-artist pass is skipped and the
+other two run. It reads `/Library/VirtualFolders` and `/Items` with the `Authorization: MediaBrowser`
 header, which Jellyfin 10.x and 12.x both accept, and needs MusicBrainz ids on the
 albums (tagged files, or the bundled MusicBrainz metadata provider).
 

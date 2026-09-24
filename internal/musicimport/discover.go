@@ -46,6 +46,10 @@ type DiscoveryState struct {
 	Releases   map[string]string             `json:"releases,omitempty"`
 	Recordings map[string][]RecordingRelease `json:"-"`
 	Albums     map[string]discoveryAlbum     `json:"albums"`
+	// Neighbours caches the nearest artists of every new artist the run looked at,
+	// empty when ListenBrainz knows none: the fresh-releases pool is scanned weekly
+	// and most of it is the same as last week.
+	Neighbours map[string]artistNeighbours `json:"neighbours,omitempty"`
 
 	path string
 }
@@ -69,6 +73,7 @@ func LoadDiscoveryState(path string) (*DiscoveryState, error) {
 		Releases:   map[string]string{},
 		Recordings: map[string][]RecordingRelease{},
 		Albums:     map[string]discoveryAlbum{},
+		Neighbours: map[string]artistNeighbours{},
 		path:       path,
 	}
 	data, err := os.ReadFile(path)
@@ -88,6 +93,7 @@ func LoadDiscoveryState(path string) (*DiscoveryState, error) {
 			Releases:   map[string]string{},
 			Recordings: map[string][]RecordingRelease{},
 			Albums:     map[string]discoveryAlbum{},
+			Neighbours: map[string]artistNeighbours{},
 			path:       path,
 		}
 		return fresh, nil
@@ -106,6 +112,9 @@ func LoadDiscoveryState(path string) (*DiscoveryState, error) {
 	}
 	if state.Albums == nil {
 		state.Albums = map[string]discoveryAlbum{}
+	}
+	if state.Neighbours == nil {
+		state.Neighbours = map[string]artistNeighbours{}
 	}
 	state.path = path
 	return state, nil
@@ -203,6 +212,7 @@ type recommendation struct {
 	Recordings []string
 	Releases   []RecordingRelease
 	Listens    int
+	Rank       int // position of the artist in the pooled ranking, 0 = strongest
 }
 
 // candidate is one album the discovery decided to try, with the evidence behind it.
@@ -214,6 +224,7 @@ type candidate struct {
 	ReleaseID  string
 	Recordings []string
 	Listens    int
+	rank       int
 	// fresh marks a new release: the date window retires it, so it is never parked.
 	fresh    bool
 	released time.Time
@@ -249,6 +260,7 @@ func buildCandidates(recs []recommendation, allowed map[string]bool) []candidate
 						Title:      release.ReleaseGroupTitle,
 						RGID:       release.ReleaseGroupID,
 						ReleaseID:  release.ReleaseID,
+						rank:       rec.Rank,
 					},
 					recordings: map[string]bool{},
 				}
@@ -275,6 +287,9 @@ func buildCandidates(recs []recommendation, allowed map[string]bool) []candidate
 		out = append(out, b.cand)
 	}
 	sort.Slice(out, func(i, j int) bool {
+		if out[i].rank != out[j].rank {
+			return out[i].rank < out[j].rank
+		}
 		if len(out[i].Recordings) != len(out[j].Recordings) {
 			return len(out[i].Recordings) > len(out[j].Recordings)
 		}
@@ -316,11 +331,13 @@ type discoverBrainz interface {
 	ReleaseDetails(ctx context.Context, releaseID string) (ReleaseGroup, []ReleaseTrack, bool, error)
 	RecentReleaseGroups(ctx context.Context, artistMBIDs []string, types []string, from, to time.Time) ([]ArtistReleaseGroup, error)
 	GroupReleases(ctx context.Context, rgID string) ([]RecordingRelease, error)
+	ArtistAlbums(ctx context.Context, artistMBID string, types []string) ([]ArtistReleaseGroup, error)
 }
 
 // discoverListen is the slice of ListenBrainz the runner needs.
 type discoverListen interface {
 	RadioArtist(ctx context.Context, seedMBID string, opts RadioOptions) ([]LBTrack, error)
+	FreshReleases(ctx context.Context, days int) ([]LBRelease, error)
 }
 
 // discoverLibrary is the slice of the Library API the runner needs.
@@ -337,6 +354,7 @@ type DiscoverOptions struct {
 	Radio          RadioOptions
 	MinListenCount int
 	NewReleases    NewReleaseOptions
+	NewArtists     NewArtistOptions
 	AlbumTypes     []string
 	MaxAlbums      int
 	MaxPerArtist   int
@@ -373,6 +391,7 @@ type DiscoverSummary struct {
 	Window      string
 	Candidates  int
 	NewReleases int
+	NewArtists  int
 	Present     int
 	Imported    int
 	Planned     int
@@ -416,13 +435,29 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		r.Options.MaxAttempts = 3
 	}
 
-	// 1-3. Listening discovery: it needs the play history, which only Plex keeps.
+	// 1. What Tiramisu already filed, for every dedup below.
+	committed, err := r.Library.Committed(ctx)
+	if err != nil {
+		return summary, fmt.Errorf("library: %w", err)
+	}
+
+	// 2-4. Discovery: similar artists (from the play history, which only Plex keeps)
+	// and new artists close to yours. Both read every library, to tell the artists
+	// you already have.
 	var cands []candidate
+	var index *LibraryIndex
 	var listenErr error
-	if history, ok := r.Media.(historySource); ok {
-		cands, listenErr = r.listeningCandidates(ctx, history, now, &summary, logf)
+	history, hasHistory := r.Media.(historySource)
+	if hasHistory || r.Options.NewArtists.Enabled {
+		index, err = BuildLibraryIndex(ctx, r.Media, r.Options.Sections, r.resolveReleaseGroup, committed, logf)
+		if err != nil {
+			return summary, err
+		}
+	}
+	if hasHistory {
+		cands, listenErr = r.listeningCandidates(ctx, history, index, now, &summary, logf)
 		if listenErr != nil {
-			if ctx.Err() != nil || !r.Options.NewReleases.Enabled {
+			if ctx.Err() != nil || (!r.Options.NewReleases.Enabled && !r.Options.NewArtists.Enabled) {
 				return summary, listenErr
 			}
 			logf("listening discovery: %v", listenErr)
@@ -430,14 +465,20 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 	} else {
 		logf("the media server keeps no play history: listening discovery skipped")
 	}
+	if r.Options.NewArtists.Enabled {
+		fresh, err := r.newArtistCandidates(ctx, index, now, logf)
+		if err != nil {
+			if ctx.Err() != nil {
+				return summary, err
+			}
+			logf("new artists: %v", err)
+		}
+		// New artists go first: they share the discovery cap with the similar ones.
+		summary.NewArtists = len(fresh)
+		cands = append(fresh, cands...)
+	}
 	if len(cands) == 0 && !r.Options.NewReleases.Enabled {
 		return summary, listenErr
-	}
-
-	// 4. Dedup against what Tiramisu already filed.
-	committed, err := r.Library.Committed(ctx)
-	if err != nil {
-		return summary, fmt.Errorf("library: %w", err)
 	}
 
 	// 5. New albums of the library's artists: no cap, the window bounds them. The
@@ -459,7 +500,7 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 			if err := ctx.Err(); err != nil {
 				return summary, err
 			}
-			if r.alreadySeen(ctx, cand, own, now) {
+			if r.alreadySeen(ctx, cand, own, now, &summary) {
 				continue
 			}
 			if cand.ReleaseID = r.pickRelease(ctx, cand.RGID, logf); cand.ReleaseID == "" {
@@ -479,12 +520,8 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 	if len(cands) == 0 {
 		return summary, listenErr
 	}
-	index, err := BuildLibraryIndex(ctx, r.Media, r.Options.Sections, r.resolveReleaseGroup, committed, logf)
-	if err != nil {
-		return summary, err
-	}
 
-	// 6. Paced imports of the listening candidates. The pause follows a real import
+	// 6. Paced imports of the discovery candidates. The pause follows a real import
 	// only: a failed attempt downloaded nothing. Attempts are capped so a week of dead
 	// swarms does not search Prowlarr for every candidate; the new albums above do not
 	// count against the cap.
@@ -507,7 +544,7 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		if perArtist[cand.ArtistMBID] >= r.Options.MaxPerArtist {
 			continue
 		}
-		if r.alreadySeen(ctx, cand, index, now) {
+		if r.alreadySeen(ctx, cand, index, now, &summary) {
 			continue
 		}
 		if pauseDue {
@@ -526,9 +563,10 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 	return summary, listenErr
 }
 
-// listeningCandidates turns the play history into album candidates: seeds, their
-// similar artists on ListenBrainz, then the studio albums those recordings sit on.
-func (r *DiscoverRunner) listeningCandidates(ctx context.Context, history historySource, now time.Time, summary *DiscoverSummary, logf func(string, ...any)) ([]candidate, error) {
+// listeningCandidates turns the play history into album candidates: many seeds
+// from the listening, their similar artists on ListenBrainz pooled into one ranking,
+// then the studio albums of the artists the libraries do not hold yet.
+func (r *DiscoverRunner) listeningCandidates(ctx context.Context, history historySource, index *LibraryIndex, now time.Time, summary *DiscoverSummary, logf func(string, ...any)) ([]candidate, error) {
 	// 1. Seeds.
 	seeds, window, err := collectSeeds(ctx, history, r.Brainz, seedSections(r.Options.Section, r.Options.Sections), r.Options.SeedOpts, now, logf)
 	if err != nil {
@@ -540,10 +578,17 @@ func (r *DiscoverRunner) listeningCandidates(ctx context.Context, history histor
 	if len(seeds) == 0 {
 		return nil, nil
 	}
-	// 2. Similar artists and their releases.
+
+	// 2. Similar artists, pooled across the seeds. An artist several of your artists
+	// point at is a stronger suggestion than one a single seed reaches. The seeds and
+	// every artist the libraries hold are dropped: the pass exists to find new ones.
 	// A seed whose radio fails is skipped; only a ListenBrainz that fails every seed
-	// ends the run.
-	var recs []recommendation
+	// ends the pass.
+	isSeed := make(map[string]bool, len(seeds))
+	for _, seed := range seeds {
+		isSeed[seed.MBID] = true
+	}
+	pooled := map[string]*suggestion{}
 	var lastErr error
 	answered := 0
 	for _, seed := range seeds {
@@ -559,38 +604,99 @@ func (r *DiscoverRunner) listeningCandidates(ctx context.Context, history histor
 		answered++
 		kept := 0
 		for _, track := range tracks {
-			if track.ListenCount < r.Options.MinListenCount {
+			if track.ListenCount < r.Options.MinListenCount || isSeed[track.ArtistMBID] {
 				continue
 			}
-			releases, err := r.recordingReleases(ctx, track.RecordingMBID)
+			key := track.ArtistMBID
+			if key == "" {
+				key = "\x00name\x00" + artistIdentity(track.ArtistName)
+			}
+			s := pooled[key]
+			if s == nil {
+				s = &suggestion{name: track.ArtistName, mbid: track.ArtistMBID, seeds: map[string]bool{}, recordings: map[string]int{}}
+				pooled[key] = s
+			}
+			if !s.seeds[seed.MBID] {
+				s.seeds[seed.MBID] = true
+				s.weight += seed.Plays
+			}
+			if _, dup := s.recordings[track.RecordingMBID]; !dup {
+				s.recordings[track.RecordingMBID] = track.ListenCount
+				kept++
+			}
+		}
+		logf("seed %s: %d recordings kept above %d listens", seed.Name, kept, r.Options.MinListenCount)
+	}
+	if answered == 0 {
+		return nil, fmt.Errorf("listenbrainz: every seed failed: %w", lastErr)
+	}
+	ranked := make([]*suggestion, 0, len(pooled))
+	owned := 0
+	for _, s := range pooled {
+		if index.ArtistPresent(s.mbid, s.name) {
+			owned++
+			continue
+		}
+		ranked = append(ranked, s)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if len(ranked[i].seeds) != len(ranked[j].seeds) {
+			return len(ranked[i].seeds) > len(ranked[j].seeds)
+		}
+		if ranked[i].weight != ranked[j].weight {
+			return ranked[i].weight > ranked[j].weight
+		}
+		return ranked[i].name < ranked[j].name
+	})
+	logf("similar artists: %d suggested, %d already in the libraries, %d new", len(pooled), owned, len(ranked))
+
+	// 3. Their albums, strongest suggestion first. Only as many artists as the run can
+	// try are resolved: every recording costs a MusicBrainz call.
+	if limit := r.Options.MaxAlbums * triesPerAlbum; limit > 0 && len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	var recs []recommendation
+	for rank, s := range ranked {
+		recordings := make([]string, 0, len(s.recordings))
+		for recording := range s.recordings {
+			recordings = append(recordings, recording)
+		}
+		sort.Strings(recordings)
+		for _, recording := range recordings {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			releases, err := r.recordingReleases(ctx, recording)
 			if err != nil {
-				logf("recording %s: %v", track.RecordingMBID, err)
+				logf("recording %s: %v", recording, err)
 				continue
 			}
 			if len(releases) == 0 {
 				continue
 			}
 			recs = append(recs, recommendation{
-				ArtistName: track.ArtistName,
-				ArtistMBID: track.ArtistMBID,
-				Recordings: []string{track.RecordingMBID},
+				ArtistName: s.name,
+				ArtistMBID: s.mbid,
+				Recordings: []string{recording},
 				Releases:   releases,
-				Listens:    track.ListenCount,
+				Listens:    s.recordings[recording],
+				Rank:       rank,
 			})
-			kept++
 		}
-		logf("seed %s: %d recordings kept above %d listens", seed.Name, kept, r.Options.MinListenCount)
 	}
-
-	if answered == 0 {
-		return nil, fmt.Errorf("listenbrainz: every seed failed: %w", lastErr)
-	}
-
-	// 3. Album candidates.
 	cands := buildCandidates(recs, allowedTypes(r.Options.AlbumTypes))
 	summary.Candidates = len(cands)
-	logf("candidates: %d albums from %d recordings", len(cands), len(recs))
+	logf("candidates: %d albums from %d new artists", len(cands), len(ranked))
 	return cands, nil
+}
+
+// suggestion is one similar artist pooled across the seeds that reached it.
+type suggestion struct {
+	name       string
+	mbid       string
+	seeds      map[string]bool
+	weight     int            // plays of the seeds that reached it
+	recordings map[string]int // recording mbid -> global listens
 }
 
 // triesPerAlbum bounds the attempts of a run to this many per album of the cap.
@@ -674,8 +780,9 @@ const parkedRetryAfter = 90 * 24 * time.Hour
 
 // alreadySeen decides whether a candidate can be attempted: present in the libraries
 // or in Tiramisu, parked after too many failures (until the retry window passes), or
-// already handled by this run.
-func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index *LibraryIndex, now time.Time) bool {
+// already handled by this run. An album found in the library counts as present in
+// the summary.
+func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index *LibraryIndex, now time.Time, summary *DiscoverSummary) bool {
 	if entry, ok := r.State.Albums[cand.RGID]; ok {
 		switch entry.Status {
 		case discoImported, discoPresent:
@@ -690,6 +797,9 @@ func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index 
 	index.ResolveArtist(ctx, cand.ArtistMBID, cand.Artist)
 	if index.AlbumPresent(cand.RGID, cand.Artist, cand.Title) || index.CommittedAlbum(cand.Artist, cand.Title, cand.RGID) {
 		r.mark(cand, discoPresent, "already in the library")
+		if summary != nil {
+			summary.Present++
+		}
 		return true
 	}
 	return false

@@ -59,6 +59,16 @@ type MusicDiscoveryConfig struct {
 	// NewReleases follows the library's artists: their albums released in the last
 	// WindowDays are imported with no cap, independent of the listening discovery.
 	NewReleases MusicNewReleasesConfig `json:"new_releases"`
+	// NewArtists imports the recent albums of artists you do not have whose nearest
+	// artists you do, debut within DebutYears. Shares max_albums_per_run with the
+	// similar-artist pass, and goes first.
+	NewArtists MusicNewArtistsConfig `json:"new_artists"`
+}
+
+type MusicNewArtistsConfig struct {
+	Enabled    bool `json:"enabled"`
+	WindowDays int  `json:"window_days"` // at most 90
+	DebutYears int  `json:"debut_years"`
 }
 
 type MusicNewReleasesConfig struct {
@@ -382,13 +392,15 @@ func LoadConfig() Config {
 		},
 
 		MusicDiscovery: MusicDiscoveryConfig{
-			Mode: "medium", MaxSimilarArtists: 5, MaxRecordingsPerArtist: 3,
-			PopBegin: 10, PopEnd: 60, MinListenCount: 500,
-			SeedsCount: 5, SeedsMinPlays: 8, SeedsWindowsDays: []int{7, 30, 90, 365, 0},
+			// hard reaches similarity ranks 10-100, past the famous peers every seed shares.
+			Mode: "hard", MaxSimilarArtists: 9, MaxRecordingsPerArtist: 3,
+			PopBegin: 10, PopEnd: 60, MinListenCount: 50,
+			SeedsCount: 20, SeedsMinPlays: 8, SeedsWindowsDays: []int{7, 30, 90, 365, 0},
 			AlbumTypes:      []string{"Album", "EP"},
-			MaxAlbumsPerRun: 10, MaxAlbumsPerArtist: 1,
+			MaxAlbumsPerRun: 20, MaxAlbumsPerArtist: 1,
 			MinSeeders: 5, MaxSizeGB: 3, PaceSeconds: 10, MaxAttempts: 3,
 			NewReleases: MusicNewReleasesConfig{Enabled: true, WindowDays: 30},
+			NewArtists:  MusicNewArtistsConfig{Enabled: true, WindowDays: 30, DebutYears: 3},
 		},
 
 		TorrentioURL:     "https://torrentio.strem.fun",

@@ -186,11 +186,11 @@ func main() {
 			Options: musicimport.DiscoverOptions{
 				Section:  *section,
 				Sections: allSections,
-				SeedOpts: musicimport.SeedOptions{Count: 5, MinPlays: *seedsMinPlays, Windows: []time.Duration{7 * 24 * time.Hour, 30 * 24 * time.Hour, 90 * 24 * time.Hour, 365 * 24 * time.Hour, 0}},
+				SeedOpts: musicimport.SeedOptions{Count: 20, MinPlays: *seedsMinPlays, Windows: []time.Duration{7 * 24 * time.Hour, 30 * 24 * time.Hour, 90 * 24 * time.Hour, 365 * 24 * time.Hour, 0}},
 				Radio: musicimport.RadioOptions{
-					Mode: "medium", MaxSimilarArtists: 5, MaxRecordingsPerArtist: 3, PopBegin: 10, PopEnd: 60,
+					Mode: "hard", MaxSimilarArtists: 9, MaxRecordingsPerArtist: 3, PopBegin: 10, PopEnd: 60,
 				},
-				MinListenCount: 500,
+				MinListenCount: 50,
 				AlbumTypes:     []string{"Album", "EP"},
 				MaxAlbums:      *maxAlbums,
 				MaxPerArtist:   1,
