@@ -56,6 +56,14 @@ type MusicDiscoveryConfig struct {
 	MaxSizeGB              float64  `json:"max_size_gb"`
 	PaceSeconds            int      `json:"pace_seconds"`
 	MaxAttempts            int      `json:"max_attempts"`
+	// NewReleases follows the library's artists: their albums released in the last
+	// WindowDays are imported with no cap, independent of the listening discovery.
+	NewReleases MusicNewReleasesConfig `json:"new_releases"`
+}
+
+type MusicNewReleasesConfig struct {
+	Enabled    bool `json:"enabled"`
+	WindowDays int  `json:"window_days"`
 }
 
 type SchedulerConfig struct {
@@ -380,6 +388,7 @@ func LoadConfig() Config {
 			AlbumTypes:      []string{"Album", "EP"},
 			MaxAlbumsPerRun: 10, MaxAlbumsPerArtist: 1,
 			MinSeeders: 5, MaxSizeGB: 3, PaceSeconds: 10, MaxAttempts: 3,
+			NewReleases: MusicNewReleasesConfig{Enabled: true, WindowDays: 30},
 		},
 
 		TorrentioURL:     "https://torrentio.strem.fun",

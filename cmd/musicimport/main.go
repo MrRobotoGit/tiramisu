@@ -177,7 +177,7 @@ func main() {
 			state.MergeImportState(imports)
 		}
 		discovery := &musicimport.DiscoverRunner{
-			Plex:    plex,
+			Media:   plex,
 			Brainz:  musicimport.NewMusicBrainz(),
 			Listen:  musicimport.NewListenBrainz(),
 			Indexer: prowlarr.NewClient(prowlarr.ConfigProwlarr{Enabled: true, URL: *prowlarrURL, APIKey: *prowlarrKey}),

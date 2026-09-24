@@ -24,6 +24,9 @@ type Album struct {
 	// ReleaseID is the MusicBrainz release id Plex stored for the album, empty
 	// when the album was never matched.
 	ReleaseID string
+	// ReleaseGroupID is the release group when the server stores it (Jellyfin does,
+	// Plex does not): the dedup then needs no MusicBrainz resolution.
+	ReleaseGroupID string
 }
 
 // Artist is one artist as Plex describes it. MBID is empty when the agent never

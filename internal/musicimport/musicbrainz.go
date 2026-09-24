@@ -253,6 +253,105 @@ func (m *MusicBrainz) ReleaseGroupOfRelease(ctx context.Context, releaseID strin
 	return result.ReleaseGroup.ID, result.ReleaseGroup.ID != "", nil
 }
 
+// ArtistReleaseGroup is one album of an artist's discography, with the date of its
+// first edition: a reissue keeps the original date, so it never looks new.
+type ArtistReleaseGroup struct {
+	ID               string
+	Title            string
+	Artist           string   // the credit as MusicBrainz prints it, join phrases included
+	ArtistMBIDs      []string // every artist of the credit
+	PrimaryType      string
+	SecondaryTypes   []string
+	FirstReleaseDate string
+}
+
+// RecentReleaseGroups searches the release groups credited to any of the artists whose
+// first edition falls between from and to, restricted to the given primary types
+// (empty = all). The filter runs on MusicBrainz, so one request covers a batch of
+// artists instead of paging through each discography.
+func (m *MusicBrainz) RecentReleaseGroups(ctx context.Context, artistMBIDs []string, types []string, from, to time.Time) ([]ArtistReleaseGroup, error) {
+	if len(artistMBIDs) == 0 {
+		return nil, nil
+	}
+	query := fmt.Sprintf("arid:(%s) AND firstreleasedate:[%s TO %s]",
+		strings.Join(artistMBIDs, " OR "), from.Format("2006-01-02"), to.Format("2006-01-02"))
+	if len(types) > 0 {
+		clauses := make([]string, len(types))
+		for i, t := range types {
+			clauses[i] = "primarytype:" + strings.ToLower(t)
+		}
+		query += " AND (" + strings.Join(clauses, " OR ") + ")"
+	}
+	var out []ArtistReleaseGroup
+	for {
+		var page struct {
+			Count  int `json:"count"`
+			Groups []struct {
+				ID             string   `json:"id"`
+				Title          string   `json:"title"`
+				PrimaryType    string   `json:"primary-type"`
+				SecondaryTypes []string `json:"secondary-types"`
+				FirstRelease   string   `json:"first-release-date"`
+				Credit         []struct {
+					Name       string `json:"name"`
+					JoinPhrase string `json:"joinphrase"`
+					Artist     struct {
+						ID string `json:"id"`
+					} `json:"artist"`
+				} `json:"artist-credit"`
+			} `json:"release-groups"`
+		}
+		values := url.Values{"query": {query}, "limit": {"100"}, "offset": {fmt.Sprint(len(out))}}
+		if err := m.get(ctx, "/release-group", values, &page); err != nil {
+			return nil, err
+		}
+		for _, g := range page.Groups {
+			var credit strings.Builder
+			group := ArtistReleaseGroup{ID: g.ID, Title: g.Title, PrimaryType: g.PrimaryType, SecondaryTypes: g.SecondaryTypes, FirstReleaseDate: g.FirstRelease}
+			for _, c := range g.Credit {
+				credit.WriteString(c.Name + c.JoinPhrase)
+				if c.Artist.ID != "" {
+					group.ArtistMBIDs = append(group.ArtistMBIDs, c.Artist.ID)
+				}
+			}
+			group.Artist = strings.TrimSpace(credit.String())
+			out = append(out, group)
+		}
+		if len(page.Groups) == 0 || len(out) >= page.Count {
+			return out, nil
+		}
+	}
+}
+
+// GroupReleases lists the official releases of a release group: the editions a
+// tracklist can be read from.
+func (m *MusicBrainz) GroupReleases(ctx context.Context, rgID string) ([]RecordingRelease, error) {
+	if strings.TrimSpace(rgID) == "" {
+		return nil, nil
+	}
+	var result struct {
+		Releases []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Date   string `json:"date"`
+		} `json:"releases"`
+	}
+	err := m.get(ctx, "/release", url.Values{"release-group": {rgID}, "status": {"official"}, "limit": {"100"}}, &result)
+	if errors.Is(err, errMusicBrainzNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RecordingRelease, 0, len(result.Releases))
+	for _, r := range result.Releases {
+		if r.ID != "" {
+			out = append(out, RecordingRelease{ReleaseID: r.ID, ReleaseGroupID: rgID, Status: r.Status, Date: r.Date})
+		}
+	}
+	return out, nil
+}
+
 // SearchArtist resolves an artist name to its MusicBrainz id: the seed fallback for
 // the artists Plex never matched. An exact name beats a higher fuzzy score.
 func (m *MusicBrainz) SearchArtist(ctx context.Context, name string) (string, bool, error) {

@@ -420,6 +420,7 @@ subprocess to babysit.
 | **Movies** | Scheduler / manual | TMDB Discover + Popular → Prowlarr/Torrentio → GoStorm → virtual `.mkv` |
 | **TV Series** | Scheduler / manual | TV series with fullpack-first approach, episode registry |
 | **Watchlist** | Scheduler / manual | Plex cloud watchlist → IMDB → Prowlarr/Torrentio → GoStorm |
+| **Music** | Scheduler / manual | New albums of your artists + listening discovery → MusicBrainz → Prowlarr → FLAC projections |
 
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
 **Minimum seeders**: 15, for the main sync and the watchlist alike (the watchlist uses the movie profile)
@@ -923,7 +924,7 @@ nano /home/pi/Tiramisu/config.json
 | `gostorm_url` | `http://127.0.0.1:8090` | GoStorm internal API URL |
 | `proxy_listen_port` | `8080` | Legacy field kept for config compatibility: no listener uses it today |
 | `metrics_port` | `9080` | Metrics, Control Panel, Webhook port |
-| `media_server_type` | `plex` | `plex` or `jellyfin`; selects how the post-sync library refresh is issued |
+| `media_server_type` | `plex` | `plex` or `jellyfin`; selects how the post-sync library refresh is issued and which API the music sync reads |
 | `torrentio_url` | `https://torrentio.strem.fun` | Torrentio base URL, the fallback when Prowlarr is disabled or finds nothing |
 | `blocklist_enabled` | `false` | Load the peer IP blocklist (not needed behind a VPN) |
 | `blocklist_url` | *(iblocklist Level 1)* | Gzipped blocklist URL, refreshed every 24 h; compression is detected from the content |
@@ -932,6 +933,10 @@ nano /home/pi/Tiramisu/config.json
 | `plex.token` | *(none)* | Plex token, or Jellyfin API key |
 | `plex.library_id` | `0` | Plex movies library section ID (0 = skip the refresh) |
 | `plex.tv_library_id` | `0` | Plex TV series library section ID (0 = skip the refresh) |
+| `plex.music_library_id` | `0` | Plex music library section Tiramisu files into: rescanned after an audio add or removal, and the only library the music sync follows new albums from (0 = both off). Jellyfin setups leave it at 0 |
+| `scheduler.music_sync` | Sunday 15:00 | Weekly music sync slot (`config.json` only: the Sync Scheduler card has no music row) |
+| `music_discovery.new_releases.enabled` | `true` | Follow the new albums of the artists in Tiramisu's music library |
+| `music_discovery.new_releases.window_days` | `30` | How recent an album's first edition must be to count as new |
 | `tmdb_api_key` | *(none)* | TMDB API key |
 | `prowlarr.enabled` | `false` | Use Prowlarr as primary indexer (falls back to Torrentio if disabled) |
 | `prowlarr.api_key` | *(none)* | Prowlarr API key (Settings → General → API Key) |
@@ -1091,6 +1096,34 @@ curl -X POST http://127.0.0.1:9080/api/scheduler/watchlist/run
 
 Reads Plex cloud watchlist → IMDB ID resolution → Prowlarr/Torrentio (min 15 seeders, the movie profile) → GoStorm.
 
+### Music Sync
+
+```bash
+curl -X POST http://127.0.0.1:9080/api/scheduler/music/run
+```
+
+Weekly, Sunday 15:00 by default (`scheduler.music_sync`). Every album is filed
+through the Library API as FLAC projections, one per track. Two passes:
+
+- **New albums of your artists.** Every artist of Tiramisu's music library with a
+  MusicBrainz id is followed: albums and EPs whose first edition came out in the
+  last `window_days` (30) and that the library lacks are imported, with no cap.
+  Live, compilation and remix groups, reissues, undated and future releases never
+  qualify. An album with no torrent yet is retried on every run while it stays in
+  the window. MusicBrainz is asked in batches of 40 artists, so 800 artists cost
+  about 20 requests.
+- **Listening discovery (Plex only).** The artists you play most, from the Plex
+  history, seed ListenBrainz radio; the studio albums of similar artists are
+  imported, capped by `max_albums_per_run` and `max_albums_per_artist`.
+
+The new-album pass reads only Tiramisu's own music library, for the artists and
+for the duplicate check: on Plex the section in `plex.music_library_id` (0 turns
+the pass off), on Jellyfin the music library that holds the albums Tiramisu filed.
+Jellyfin keeps no play history, so there the new-album pass is the only one. It
+reads `/Library/VirtualFolders` and `/Items` with the `Authorization: MediaBrowser`
+header, which Jellyfin 10.x and 12.x both accept, and needs MusicBrainz ids on the
+albums (tagged files, or the bundled MusicBrainz metadata provider).
+
 ---
 
 ## Library API (`:9080`)
@@ -1210,6 +1243,14 @@ Projections are read-only to their clients: files answer `0444`, directories
 `0555`, and the mutations a scanner never needs (write open, truncate, rename,
 mkdir, chmod) are refused with `EROFS`, while a direct unlink gets `EPERM`. Adding,
 re-filing and removing happen only through the API.
+
+Two things worth knowing before scripting against it. The `type` must be exactly
+`music` or `audiobook`: `list` keeps the legacy fallback for unknown values, so the
+plural `audiobooks` answers `200` with the movie library instead of an error. And a
+music add or removal asks the media server to rescan the section in
+`plex.music_library_id` (Jellyfin refreshes every library, audiobooks included).
+On Plex, audiobooks have no library id yet, so the `audiobooks/` section is scanned
+manually, once, when the batch is done.
 
 ### Episode gaps (v1.9.71)
 

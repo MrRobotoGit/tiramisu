@@ -14,12 +14,13 @@ import (
 	"tiramisu/internal/prowlarr"
 )
 
-// MusicSyncConfig holds what the discovery engine needs: the Plex server, the local
-// Library API, Prowlarr, and the discovery knobs.
+// MusicSyncConfig holds what the discovery engine needs: the media server (Plex or
+// Jellyfin, same URL and token fields), the local Library API, Prowlarr, and the
+// discovery knobs.
 type MusicSyncConfig struct {
 	PlexURL      string
 	PlexToken    string
-	PlexMusicLib string // artist section new albums land in
+	PlexMusicLib string // Plex artist section the seed index reads first
 	LibraryURL   string // e.g. http://127.0.0.1:9080
 	StateDir     string
 	LogsDir      string
@@ -59,10 +60,24 @@ func musicSection(configured string, sections []musicimport.Section) string {
 	return sections[0].Key
 }
 
+// musicServer is the slice of the media server the engine reads.
+type musicServer interface {
+	ArtistSections(ctx context.Context) ([]musicimport.Section, error)
+	Artists(ctx context.Context, section string) ([]musicimport.Artist, error)
+	Albums(ctx context.Context, section string) ([]musicimport.Album, error)
+}
+
 // Run is one discovery pass. The scheduler's context cancels the pacing sleeps.
 func (e *MusicSyncEngine) Run(ctx context.Context) error {
-	plex := musicimport.NewPlexClient(e.cfg.PlexURL, e.cfg.PlexToken)
 	library := musicimport.NewTiramisu(e.cfg.LibraryURL)
+	serverType := "plex"
+	if configured, err := library.MediaServerType(ctx); err == nil && configured != "" {
+		serverType = configured
+	}
+	var server musicServer = musicimport.NewPlexClient(e.cfg.PlexURL, e.cfg.PlexToken)
+	if serverType == "jellyfin" {
+		server = musicimport.NewJellyfinClient(e.cfg.PlexURL, e.cfg.PlexToken)
+	}
 	indexer := prowlarr.NewClient(e.cfg.ProwlarrCfg)
 
 	state, err := musicimport.LoadDiscoveryState(e.statePath())
@@ -74,28 +89,45 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 	if imports, err := musicimport.LoadState(filepath.Join(e.cfg.StateDir, "musicimport-state.json")); err == nil {
 		state.MergeImportState(imports)
 	}
-	sections, err := plex.ArtistSections(ctx)
+	sections, err := server.ArtistSections(ctx)
 	if err != nil {
-		return fmt.Errorf("plex sections: %w", err)
+		return fmt.Errorf("%s sections: %w", serverType, err)
 	}
 	if len(sections) == 0 {
-		return fmt.Errorf("plex reports no artist section")
+		return fmt.Errorf("%s reports no music library", serverType)
 	}
-	section := musicSection(e.cfg.PlexMusicLib, sections)
-
-	style := musicimport.IDStyleForPlayer("plex")
-	if serverType, err := library.MediaServerType(ctx); err == nil {
-		style = musicimport.IDStyleForPlayer(serverType)
+	// The configured section is a Plex id; Jellyfin libraries are all read alike.
+	section := ""
+	if serverType != "jellyfin" {
+		section = musicSection(e.cfg.PlexMusicLib, sections)
 	}
+	style := musicimport.IDStyleForPlayer(serverType)
 
 	d := e.cfg.Discovery
+	newReleases := musicimport.NewReleaseOptions{
+		Enabled: d.NewReleases.Enabled && d.NewReleases.WindowDays > 0,
+		Window:  time.Duration(d.NewReleases.WindowDays) * 24 * time.Hour,
+	}
+	if newReleases.Enabled {
+		own, ok, err := e.ownSection(ctx, serverType, server, library, sections)
+		if err != nil {
+			return err
+		}
+		if !ok && serverType == "jellyfin" {
+			e.logger.Printf("new releases off: no Jellyfin music library holds Tiramisu's albums yet")
+		} else if !ok {
+			e.logger.Printf("new releases off: plex.music_library_id %q is not a Plex music section", e.cfg.PlexMusicLib)
+		}
+		newReleases.Enabled, newReleases.Section = ok, own
+	}
+
 	windows := make([]time.Duration, 0, len(d.SeedsWindowsDays))
 	for _, days := range d.SeedsWindowsDays {
 		windows = append(windows, time.Duration(days)*24*time.Hour)
 	}
 
 	runner := &musicimport.DiscoverRunner{
-		Plex:    plex,
+		Media:   server,
 		Brainz:  musicimport.NewMusicBrainz(),
 		Listen:  musicimport.NewListenBrainz(),
 		Indexer: indexer,
@@ -110,6 +142,7 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 				MaxRecordingsPerArtist: d.MaxRecordingsPerArtist, PopBegin: d.PopBegin, PopEnd: d.PopEnd,
 			},
 			MinListenCount: d.MinListenCount,
+			NewReleases:    newReleases,
 			AlbumTypes:     d.AlbumTypes,
 			MaxAlbums:      d.MaxAlbumsPerRun,
 			MaxPerArtist:   d.MaxAlbumsPerArtist,
@@ -125,7 +158,26 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	e.logger.Printf("run done: seeds %d (%s), candidates %d, present %d, imported %d, no-torrent %d, failed %d, parked %d",
-		summary.Seeds, summary.Window, summary.Candidates, summary.Present, summary.Imported, summary.NoTorrent, summary.Failed, summary.Parked)
+	e.logger.Printf("run done: seeds %d (%s), candidates %d, new releases %d, present %d, imported %d, no-torrent %d, failed %d, parked %d",
+		summary.Seeds, summary.Window, summary.Candidates, summary.NewReleases, summary.Present, summary.Imported, summary.NoTorrent, summary.Failed, summary.Parked)
 	return nil
+}
+
+// ownSection is the library Tiramisu files music into, the only one the new-release
+// follow reads: the configured section on Plex, the one holding Tiramisu's albums on
+// Jellyfin (its ids are not numbers the panel can hold).
+func (e *MusicSyncEngine) ownSection(ctx context.Context, serverType string, server musicServer, library *musicimport.Tiramisu, sections []musicimport.Section) (musicimport.Section, bool, error) {
+	if serverType != "jellyfin" {
+		for _, s := range sections {
+			if s.Key == e.cfg.PlexMusicLib {
+				return s, true, nil
+			}
+		}
+		return musicimport.Section{}, false, nil
+	}
+	committed, err := library.Committed(ctx)
+	if err != nil {
+		return musicimport.Section{}, false, fmt.Errorf("library: %w", err)
+	}
+	return musicimport.OwnMusicSection(ctx, server, sections, committed)
 }

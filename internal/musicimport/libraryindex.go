@@ -3,6 +3,7 @@ package musicimport
 import (
 	"context"
 	"fmt"
+	"sort"
 )
 
 // LibraryIndex answers what Plex and Tiramisu already hold, at artist and album
@@ -100,6 +101,17 @@ func (ix *LibraryIndex) ResolveArtist(ctx context.Context, mbid, name string) {
 	}
 }
 
+// ArtistMBIDs lists every artist id the library holds, sorted, so a run walks them in
+// a stable order.
+func (ix *LibraryIndex) ArtistMBIDs() []string {
+	ids := make([]string, 0, len(ix.artistsMBID))
+	for id := range ix.artistsMBID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // CommittedAlbum covers what Tiramisu has filed but Plex has not scanned yet.
 func (ix *LibraryIndex) CommittedAlbum(artist, title, identity string) bool {
 	return ix.committed.HasAlbum(artist, title, identity)
@@ -113,7 +125,7 @@ func albumKey(artist, title string) string {
 	return a + "|" + t
 }
 
-// albumSource is the slice of Plex the index builder walks.
+// albumSource is the slice of the media server the index builder walks.
 type albumSource interface {
 	Artists(ctx context.Context, section string) ([]Artist, error)
 	Albums(ctx context.Context, section string) ([]Album, error)
@@ -139,7 +151,7 @@ func BuildLibraryIndex(ctx context.Context, plex albumSource, sections []Section
 	for _, section := range sections {
 		artists, err := plex.Artists(ctx, section.Key)
 		if err != nil {
-			return nil, fmt.Errorf("plex artists %s: %w", section.Title, err)
+			return nil, fmt.Errorf("library artists %s: %w", section.Title, err)
 		}
 		for _, a := range artists {
 			ix.AddArtist(a.MBID, a.Name)
@@ -150,10 +162,10 @@ func BuildLibraryIndex(ctx context.Context, plex albumSource, sections []Section
 
 		albums, err := plex.Albums(ctx, section.Key)
 		if err != nil {
-			return nil, fmt.Errorf("plex albums %s: %w", section.Title, err)
+			return nil, fmt.Errorf("library albums %s: %w", section.Title, err)
 		}
 		for _, album := range albums {
-			ix.AddAlbum("", album.Artist, album.Title)
+			ix.AddAlbum(album.ReleaseGroupID, album.Artist, album.Title)
 			if key := nameKey(album.Artist); album.ReleaseID != "" && key != "" {
 				ix.releasesByKey[key] = append(ix.releasesByKey[key], album.ReleaseID)
 			}
