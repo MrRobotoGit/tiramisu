@@ -421,8 +421,8 @@ func LoadConfig() Config {
 			MinSeeders: 5, MaxSizeGB: 3, PaceSeconds: 10, MaxAttempts: 3,
 			NewReleases: MusicNewReleasesConfig{Enabled: true, WindowDays: 30},
 			NewArtists:  MusicNewArtistsConfig{Enabled: true, WindowDays: 30, DebutYears: 3},
-			Genres:      MusicGenresConfig{Enabled: true, Count: 8, DebutYears: 10},
-			Similar:     MusicSimilarConfig{MinFans: 10000, MaxFans: 100000, DebutYears: 10},
+			Genres:      MusicGenresConfig{Enabled: true, Count: 8, DebutYears: 15},
+			Similar:     MusicSimilarConfig{MinFans: 10000, MaxFans: 100000, DebutYears: 15},
 		},
 
 		TorrentioURL:     "https://torrentio.strem.fun",
