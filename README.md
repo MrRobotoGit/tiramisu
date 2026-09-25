@@ -946,7 +946,8 @@ nano /home/pi/Tiramisu/config.json
 | `music_discovery.genres.enabled` | `true` | Import niche artists of the genres you listen to now, close to your artists |
 | `music_discovery.genres.count` | `8` | How many of your genres are explored |
 | `music_discovery.genres.debut_years` | `10` | An artist of the genre pass counts as new when its first album or EP is at most this old |
-| `music_discovery.similar.max_fans` | `30000` | Similar artists with more Deezer fans are too known to suggest (0 = no limit) |
+| `music_discovery.similar.min_fans` | `10000` | Similar artists with fewer Deezer fans are too obscure to suggest (0 = no floor) |
+| `music_discovery.similar.max_fans` | `100000` | Similar artists with more Deezer fans are too known to suggest (0 = no limit) |
 | `music_discovery.similar.debut_years` | `10` | A similar artist's first album or EP must be at most this old (0 = any age) |
 | `tmdb_api_key` | *(none)* | TMDB API key |
 | `prowlarr.enabled` | `false` | Use Prowlarr as primary indexer (falls back to Torrentio if disabled) |
@@ -1139,8 +1140,8 @@ through the Library API as FLAC projections, one per track. Three passes:
   studio album already released is imported.
 - **Similar artists (Plex only).** The Deezer related artists of your seed artists
   (public endpoints, no key), pooled and ranked by how many of your seeds point at
-  them. Artists any library already holds, artists with more than `max_fans`
-  (30,000) Deezer fans and artists whose first album or EP is older than
+  them. Artists any library already holds, artists outside `min_fans`-`max_fans`
+  (10,000-100,000) Deezer fans and artists whose first album or EP is older than
   `debut_years` (10) are dropped; the latest studio album comes from MusicBrainz.
 
 The seeds come from your Plex plays of the last 60 days, weighted by age: a play of

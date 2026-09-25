@@ -74,6 +74,7 @@ type MusicDiscoveryConfig struct {
 }
 
 type MusicSimilarConfig struct {
+	MinFans    int `json:"min_fans"`    // 0 = no floor
 	MaxFans    int `json:"max_fans"`    // 0 = no limit
 	DebutYears int `json:"debut_years"` // 0 = any age
 }
@@ -421,7 +422,7 @@ func LoadConfig() Config {
 			NewReleases: MusicNewReleasesConfig{Enabled: true, WindowDays: 30},
 			NewArtists:  MusicNewArtistsConfig{Enabled: true, WindowDays: 30, DebutYears: 3},
 			Genres:      MusicGenresConfig{Enabled: true, Count: 8, DebutYears: 10},
-			Similar:     MusicSimilarConfig{MaxFans: 30000, DebutYears: 10},
+			Similar:     MusicSimilarConfig{MinFans: 10000, MaxFans: 100000, DebutYears: 10},
 		},
 
 		TorrentioURL:     "https://torrentio.strem.fun",

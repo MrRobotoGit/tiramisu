@@ -8,6 +8,7 @@ import (
 
 // SimilarOptions tune the Deezer similarity pass.
 type SimilarOptions struct {
+	MinFans int           // an artist with fewer Deezer fans is too obscure to suggest; 0 = no floor
 	MaxFans int           // an artist with more Deezer fans is too known to suggest; 0 = no limit
 	Debut   time.Duration // the artist's first album or EP at most this old; 0 = any age
 }
@@ -33,7 +34,7 @@ func (r *DiscoverRunner) deezerCandidates(ctx context.Context, seeds []Seed, ind
 		weight float64
 	}
 	pool := map[int]*pooled{}
-	answered, known, owned := 0, 0, 0
+	answered, known, obscure, owned := 0, 0, 0, 0
 	var lastErr error
 	for _, seed := range seeds {
 		found, ok, err := r.Similar.FindArtist(ctx, seed.Name)
@@ -52,6 +53,10 @@ func (r *DiscoverRunner) deezerCandidates(ctx context.Context, seeds []Seed, ind
 					}
 					if r.Options.Similar.MaxFans > 0 && a.Fans > r.Options.Similar.MaxFans {
 						known++
+						continue
+					}
+					if a.Fans < r.Options.Similar.MinFans {
+						obscure++
 						continue
 					}
 					p := pool[a.ID]
@@ -136,7 +141,7 @@ func (r *DiscoverRunner) deezerCandidates(ctx context.Context, seeds []Seed, ind
 		}
 		out = append(out, candidate{Artist: name, ArtistMBID: mbid, Title: latest.Title, RGID: latest.ID, rank: len(out)})
 	}
-	logf("similar artists (deezer): %d suggested, %d already yours, %d above %d fans, %d not on MusicBrainz, %d debuted too early, %d candidates",
-		len(pool)+owned+known, owned, known, r.Options.Similar.MaxFans, unresolved, older, len(out))
+	logf("similar artists (deezer): %d suggested, %d already yours, %d above %d fans, %d below %d fans, %d not on MusicBrainz, %d debuted too early, %d candidates",
+		len(pool)+owned+known+obscure, owned, known, r.Options.Similar.MaxFans, obscure, r.Options.Similar.MinFans, unresolved, older, len(out))
 	return out, nil
 }

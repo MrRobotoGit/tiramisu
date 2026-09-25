@@ -152,6 +152,7 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 			MinListenCount: d.MinListenCount,
 			NewReleases:    newReleases,
 			Similar: musicimport.SimilarOptions{
+				MinFans: d.Similar.MinFans,
 				MaxFans: d.Similar.MaxFans,
 				Debut:   time.Duration(d.Similar.DebutYears) * 365 * 24 * time.Hour,
 			},
