@@ -136,6 +136,7 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 		Brainz:  musicimport.NewMusicBrainz(),
 		Listen:  listenBrainz,
 		Tags:    listenBrainz,
+		Similar: musicimport.NewDeezer(),
 		Indexer: indexer,
 		Library: library,
 		State:   state,
@@ -150,6 +151,10 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 			},
 			MinListenCount: d.MinListenCount,
 			NewReleases:    newReleases,
+			Similar: musicimport.SimilarOptions{
+				MaxFans: d.Similar.MaxFans,
+				Debut:   time.Duration(d.Similar.DebutYears) * 365 * 24 * time.Hour,
+			},
 			Genres: musicimport.GenreOptions{
 				Enabled: d.Genres.Enabled && d.Genres.Count > 0 && d.Genres.DebutYears > 0,
 				Count:   d.Genres.Count,

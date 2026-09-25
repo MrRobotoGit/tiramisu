@@ -356,6 +356,7 @@ type DiscoverOptions struct {
 	NewReleases    NewReleaseOptions
 	NewArtists     NewArtistOptions
 	Genres         GenreOptions
+	Similar        SimilarOptions
 	AlbumTypes     []string
 	MaxAlbums      int
 	MaxPerArtist   int
@@ -379,7 +380,10 @@ type DiscoverRunner struct {
 	Brainz discoverBrainz
 	Listen discoverListen
 	// Tags serves the genre pass; nil turns it off.
-	Tags    genreSource
+	Tags genreSource
+	// Similar serves the similarity pass from Deezer; nil falls back to the
+	// ListenBrainz radio.
+	Similar similarSource
 	Indexer torrentSearcher
 	Library discoverLibrary
 	State   *DiscoveryState
@@ -604,6 +608,11 @@ func (r *DiscoverRunner) listeningCandidates(ctx context.Context, history histor
 	logf("seeds: %d artists (%s)", len(seeds), label)
 	if len(seeds) == 0 {
 		return nil, nil
+	}
+	if r.Similar != nil {
+		cands, err := r.deezerCandidates(ctx, seeds, index, now, logf)
+		summary.Candidates = len(cands)
+		return cands, err
 	}
 
 	// 2. Similar artists, pooled across the seeds. An artist several of your artists

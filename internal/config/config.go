@@ -69,6 +69,13 @@ type MusicDiscoveryConfig struct {
 	// Genres imports niche artists of the genres you listen to now, close to your
 	// artists, debut within DebutYears. Shares max_albums_per_run.
 	Genres MusicGenresConfig `json:"genres"`
+	// Similar tunes the similarity pass, read from Deezer's related artists.
+	Similar MusicSimilarConfig `json:"similar"`
+}
+
+type MusicSimilarConfig struct {
+	MaxFans    int `json:"max_fans"`    // 0 = no limit
+	DebutYears int `json:"debut_years"` // 0 = any age
 }
 
 type MusicGenresConfig struct {
@@ -414,6 +421,7 @@ func LoadConfig() Config {
 			NewReleases: MusicNewReleasesConfig{Enabled: true, WindowDays: 30},
 			NewArtists:  MusicNewArtistsConfig{Enabled: true, WindowDays: 30, DebutYears: 3},
 			Genres:      MusicGenresConfig{Enabled: true, Count: 8, DebutYears: 10},
+			Similar:     MusicSimilarConfig{MaxFans: 30000, DebutYears: 10},
 		},
 
 		TorrentioURL:     "https://torrentio.strem.fun",

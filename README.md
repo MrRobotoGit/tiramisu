@@ -420,7 +420,7 @@ subprocess to babysit.
 | **Movies** | Scheduler / manual | TMDB Discover + Popular → Prowlarr/Torrentio → GoStorm → virtual `.mkv` |
 | **TV Series** | Scheduler / manual | TV series with fullpack-first approach, episode registry |
 | **Watchlist** | Scheduler / manual | Plex cloud watchlist → IMDB → Prowlarr/Torrentio → GoStorm |
-| **Music** | Scheduler / manual | New albums of your artists + new artists close to yours + niche artists of your genres + similar artists → MusicBrainz → Prowlarr → FLAC projections |
+| **Music** | Scheduler / manual | New albums of your artists + new artists close to yours + niche artists of your genres + similar artists (Deezer) → MusicBrainz → Prowlarr → FLAC projections |
 
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
 **Minimum seeders**: 15, for the main sync and the watchlist alike (the watchlist uses the movie profile)
@@ -946,6 +946,8 @@ nano /home/pi/Tiramisu/config.json
 | `music_discovery.genres.enabled` | `true` | Import niche artists of the genres you listen to now, close to your artists |
 | `music_discovery.genres.count` | `8` | How many of your genres are explored |
 | `music_discovery.genres.debut_years` | `10` | An artist of the genre pass counts as new when its first album or EP is at most this old |
+| `music_discovery.similar.max_fans` | `30000` | Similar artists with more Deezer fans are too known to suggest (0 = no limit) |
+| `music_discovery.similar.debut_years` | `10` | A similar artist's first album or EP must be at most this old (0 = any age) |
 | `tmdb_api_key` | *(none)* | TMDB API key |
 | `prowlarr.enabled` | `false` | Use Prowlarr as primary indexer (falls back to Torrentio if disabled) |
 | `prowlarr.api_key` | *(none)* | Prowlarr API key (Settings → General → API Key) |
@@ -1135,9 +1137,11 @@ through the Library API as FLAC projections, one per track. Three passes:
   among its nearest neighbours and its first album or EP is at most `debut_years`
   (10) old; one of your seeds among the neighbours ranks it highest. Its latest
   studio album already released is imported.
-- **Similar artists (Plex only).** Your seed artists seed ListenBrainz radio; their
-  similar artists are pooled and ranked by how many of your artists point at them.
-  Artists any library already holds are never suggested.
+- **Similar artists (Plex only).** The Deezer related artists of your seed artists
+  (public endpoints, no key), pooled and ranked by how many of your seeds point at
+  them. Artists any library already holds, artists with more than `max_fans`
+  (30,000) Deezer fans and artists whose first album or EP is older than
+  `debut_years` (10) are dropped; the latest studio album comes from MusicBrainz.
 
 The seeds come from your Plex plays of the last 60 days, weighted by age: a play of
 the last day counts 1, of the last week 0.5, of the last month 0.25, of the last two
