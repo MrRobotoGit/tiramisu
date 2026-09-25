@@ -134,6 +134,7 @@ body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh
         <option value="movies-sync">movies-sync</option>
         <option value="tv-sync">tv-sync</option>
         <option value="watchlist-sync">watchlist-sync</option>
+        <option value="music-sync">music-sync</option>
       </select>
     </div>
     <div id="logView" class="bg-slate-900/80 rounded-lg p-3 max-h-48 overflow-y-auto text-xs font-mono text-slate-400">
@@ -328,7 +329,9 @@ async function load(){
     const sr=await fetch('/api/scheduler/status');
     if(sr.ok){
       const sched=await sr.json();const el=document.getElementById('scheduler');
-      const jobs=Object.entries(sched).filter(([name])=>name!=='music');
+      const order=['movies','tv','watchlist','music'];
+      const rank=n=>{const i=order.indexOf(n);return i<0?order.length:i;};
+      const jobs=Object.entries(sched).sort(([a],[b])=>rank(a)-rank(b));
       if(!jobs.length){el.innerHTML='<div class="text-slate-500 text-sm">No jobs configured</div>';return;}
       el.innerHTML=jobs.map(([name,st])=>{
         const running=st.running;

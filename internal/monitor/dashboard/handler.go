@@ -78,6 +78,7 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 		"movies-sync":    "movies-sync.log",
 		"tv-sync":        "tv-sync.log",
 		"watchlist-sync": "watchlist-sync.log",
+		"music-sync":     "music-sync.log",
 	}
 
 	file := r.URL.Query().Get("file")
