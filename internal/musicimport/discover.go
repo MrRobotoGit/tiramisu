@@ -355,6 +355,7 @@ type DiscoverOptions struct {
 	MinListenCount int
 	NewReleases    NewReleaseOptions
 	NewArtists     NewArtistOptions
+	Genres         GenreOptions
 	AlbumTypes     []string
 	MaxAlbums      int
 	MaxPerArtist   int
@@ -374,9 +375,11 @@ type DiscoverOptions struct {
 type DiscoverRunner struct {
 	// Media is the media server. The listening discovery runs only when it also keeps
 	// a play history (Plex); the new-release follow needs just its albums.
-	Media   albumSource
-	Brainz  discoverBrainz
-	Listen  discoverListen
+	Media  albumSource
+	Brainz discoverBrainz
+	Listen discoverListen
+	// Tags serves the genre pass; nil turns it off.
+	Tags    genreSource
 	Indexer torrentSearcher
 	Library discoverLibrary
 	State   *DiscoveryState
@@ -392,6 +395,7 @@ type DiscoverSummary struct {
 	Candidates  int
 	NewReleases int
 	NewArtists  int
+	Genres      int
 	Present     int
 	Imported    int
 	Planned     int
@@ -465,6 +469,18 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 	} else {
 		logf("the media server keeps no play history: listening discovery skipped")
 	}
+	// The genre pass reads the seeds the listening pass chose, so it needs a history.
+	if hasHistory && r.Tags != nil && r.Options.Genres.Enabled {
+		byGenre, err := r.genreCandidates(ctx, index, now, logf)
+		if err != nil {
+			if ctx.Err() != nil {
+				return summary, err
+			}
+			logf("genres: %v", err)
+		}
+		summary.Genres = len(byGenre)
+		cands = append(byGenre, cands...)
+	}
 	if r.Options.NewArtists.Enabled {
 		fresh, err := r.newArtistCandidates(ctx, index, now, logf)
 		if err != nil {
@@ -473,7 +489,7 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 			}
 			logf("new artists: %v", err)
 		}
-		// New artists go first: they share the discovery cap with the similar ones.
+		// Order of the shared discovery cap: new artists, genres, similar artists.
 		summary.NewArtists = len(fresh)
 		cands = append(fresh, cands...)
 	}
@@ -547,6 +563,13 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		if r.alreadySeen(ctx, cand, index, now, &summary) {
 			continue
 		}
+		// A genre candidate names its album group only: the edition comes now.
+		if cand.ReleaseID == "" {
+			if cand.ReleaseID = r.pickRelease(ctx, cand.RGID, logf); cand.ReleaseID == "" {
+				logf("%s / %s: no official edition, skipped", cand.Artist, cand.Title)
+				continue
+			}
+		}
 		if pauseDue {
 			if err := sleep(ctx, r.Options.Pace); err != nil {
 				return summary, err
@@ -572,9 +595,13 @@ func (r *DiscoverRunner) listeningCandidates(ctx context.Context, history histor
 	if err != nil {
 		return nil, err
 	}
-	summary.Seeds, summary.Window = len(seeds), windowLabel(window)
-	r.State.Seeds, r.State.Window = seeds, windowLabel(window)
-	logf("seeds: %d artists from the %s window", len(seeds), windowLabel(window))
+	label := windowLabel(window)
+	if len(r.Options.SeedOpts.Recency) > 0 {
+		label += " recency"
+	}
+	summary.Seeds, summary.Window = len(seeds), label
+	r.State.Seeds, r.State.Window = seeds, label
+	logf("seeds: %d artists (%s)", len(seeds), label)
 	if len(seeds) == 0 {
 		return nil, nil
 	}
@@ -618,7 +645,7 @@ func (r *DiscoverRunner) listeningCandidates(ctx context.Context, history histor
 			}
 			if !s.seeds[seed.MBID] {
 				s.seeds[seed.MBID] = true
-				s.weight += seed.Plays
+				s.weight += seed.weight()
 			}
 			if _, dup := s.recordings[track.RecordingMBID]; !dup {
 				s.recordings[track.RecordingMBID] = track.ListenCount
@@ -695,7 +722,7 @@ type suggestion struct {
 	name       string
 	mbid       string
 	seeds      map[string]bool
-	weight     int            // plays of the seeds that reached it
+	weight     float64        // weight of the seeds that reached it
 	recordings map[string]int // recording mbid -> global listens
 }
 

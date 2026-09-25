@@ -123,6 +123,95 @@ func (l *ListenBrainz) FreshReleases(ctx context.Context, days int) ([]LBRelease
 	return result.Payload.Releases, nil
 }
 
+// LBTag is one genre tag of an artist, with how many MusicBrainz users applied it.
+type LBTag struct {
+	Tag   string
+	Count int
+}
+
+// LBArtist is the artist of a recording, with the year it was founded (0 = unknown).
+type LBArtist struct {
+	MBID      string
+	Name      string
+	BeginYear int
+}
+
+// ArtistGenres returns the genre tags of each artist (plain tags that are not genres
+// are left out). The caller keeps batches small: the endpoint times out on long ones.
+func (l *ListenBrainz) ArtistGenres(ctx context.Context, artistMBIDs []string) (map[string][]LBTag, error) {
+	var result []struct {
+		MBID string `json:"artist_mbid"`
+		Tag  struct {
+			Artist []struct {
+				Tag   string `json:"tag"`
+				Count int    `json:"count"`
+				Genre string `json:"genre_mbid"`
+			} `json:"artist"`
+		} `json:"tag"`
+	}
+	query := url.Values{"artist_mbids": {strings.Join(artistMBIDs, ",")}, "inc": {"tag"}}
+	if err := l.get(ctx, "/1/metadata/artist/", query, &result); err != nil {
+		return nil, err
+	}
+	out := map[string][]LBTag{}
+	for _, a := range result {
+		for _, t := range a.Tag.Artist {
+			if t.Genre != "" && t.Count > 0 {
+				out[a.MBID] = append(out[a.MBID], LBTag{Tag: t.Tag, Count: t.Count})
+			}
+		}
+	}
+	return out, nil
+}
+
+// TagRecordings returns recordings carrying a MusicBrainz tag inside a popularity
+// band. The band runs the other way from its name: 0 holds the most played
+// recordings of the tag, 100 the least played.
+func (l *ListenBrainz) TagRecordings(ctx context.Context, tag string, popBegin, popEnd, count int) ([]string, error) {
+	var result []struct {
+		ID string `json:"recording_mbid"`
+	}
+	query := url.Values{"tag": {tag}, "pop_begin": {strconv.Itoa(popBegin)}, "pop_end": {strconv.Itoa(popEnd)}, "count": {strconv.Itoa(count)}}
+	if err := l.get(ctx, "/1/lb-radio/tags", query, &result); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(result))
+	for _, r := range result {
+		if r.ID != "" {
+			out = append(out, r.ID)
+		}
+	}
+	return out, nil
+}
+
+// RecordingArtists returns the first credited artist of each recording. The caller
+// keeps batches small: the endpoint answers 502 on a hundred ids.
+func (l *ListenBrainz) RecordingArtists(ctx context.Context, recordingMBIDs []string) (map[string]LBArtist, error) {
+	var result map[string]json.RawMessage
+	query := url.Values{"recording_mbids": {strings.Join(recordingMBIDs, ",")}, "inc": {"artist"}}
+	if err := l.get(ctx, "/1/metadata/recording/", query, &result); err != nil {
+		return nil, err
+	}
+	out := map[string]LBArtist{}
+	for id, raw := range result {
+		var rec struct {
+			Artist struct {
+				Artists []struct {
+					MBID      string `json:"artist_mbid"`
+					Name      string `json:"name"`
+					BeginYear int    `json:"begin_year"`
+				} `json:"artists"`
+			} `json:"artist"`
+		}
+		if json.Unmarshal(raw, &rec) != nil || len(rec.Artist.Artists) == 0 {
+			continue
+		}
+		a := rec.Artist.Artists[0]
+		out[id] = LBArtist{MBID: a.MBID, Name: a.Name, BeginYear: a.BeginYear}
+	}
+	return out, nil
+}
+
 // listenBrainzRetries is how many times a throttled or busy answer is tried again.
 const listenBrainzRetries = 3
 

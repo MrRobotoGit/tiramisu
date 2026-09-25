@@ -121,28 +121,40 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 		newReleases.Enabled, newReleases.Section = ok, own
 	}
 
+	recency := make([]time.Duration, 0, len(d.SeedsRecencyDays))
+	for _, days := range d.SeedsRecencyDays {
+		recency = append(recency, time.Duration(days)*24*time.Hour)
+	}
 	windows := make([]time.Duration, 0, len(d.SeedsWindowsDays))
 	for _, days := range d.SeedsWindowsDays {
 		windows = append(windows, time.Duration(days)*24*time.Hour)
 	}
 
+	listenBrainz := musicimport.NewListenBrainz()
 	runner := &musicimport.DiscoverRunner{
 		Media:   server,
 		Brainz:  musicimport.NewMusicBrainz(),
-		Listen:  musicimport.NewListenBrainz(),
+		Listen:  listenBrainz,
+		Tags:    listenBrainz,
 		Indexer: indexer,
 		Library: library,
 		State:   state,
 		Options: musicimport.DiscoverOptions{
 			Section:  section,
 			Sections: sections,
-			SeedOpts: musicimport.SeedOptions{Count: d.SeedsCount, MinPlays: d.SeedsMinPlays, Windows: windows},
+			SeedOpts: musicimport.SeedOptions{Count: d.SeedsCount, MinPlays: d.SeedsMinPlays, Windows: windows,
+				Recency: recency},
 			Radio: musicimport.RadioOptions{
 				Mode: d.Mode, MaxSimilarArtists: d.MaxSimilarArtists,
 				MaxRecordingsPerArtist: d.MaxRecordingsPerArtist, PopBegin: d.PopBegin, PopEnd: d.PopEnd,
 			},
 			MinListenCount: d.MinListenCount,
 			NewReleases:    newReleases,
+			Genres: musicimport.GenreOptions{
+				Enabled: d.Genres.Enabled && d.Genres.Count > 0 && d.Genres.DebutYears > 0,
+				Count:   d.Genres.Count,
+				Debut:   time.Duration(d.Genres.DebutYears) * 365 * 24 * time.Hour,
+			},
 			NewArtists: musicimport.NewArtistOptions{
 				Enabled: d.NewArtists.Enabled && d.NewArtists.WindowDays > 0 && d.NewArtists.DebutYears > 0,
 				Window:  time.Duration(d.NewArtists.WindowDays) * 24 * time.Hour,
@@ -163,8 +175,8 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	e.logger.Printf("run done: seeds %d (%s), similar candidates %d, new artists %d, new releases %d, present %d, imported %d, no-torrent %d, failed %d, parked %d",
-		summary.Seeds, summary.Window, summary.Candidates, summary.NewArtists, summary.NewReleases, summary.Present, summary.Imported, summary.NoTorrent, summary.Failed, summary.Parked)
+	e.logger.Printf("run done: seeds %d (%s), similar candidates %d, genre candidates %d, new artists %d, new releases %d, present %d, imported %d, no-torrent %d, failed %d, parked %d",
+		summary.Seeds, summary.Window, summary.Candidates, summary.Genres, summary.NewArtists, summary.NewReleases, summary.Present, summary.Imported, summary.NoTorrent, summary.Failed, summary.Parked)
 	return nil
 }
 

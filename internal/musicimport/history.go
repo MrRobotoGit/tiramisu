@@ -15,6 +15,16 @@ type Seed struct {
 	Name  string `json:"name"`
 	MBID  string `json:"mbid"`
 	Plays int    `json:"plays"`
+	// Score is the plays weighted by recency when the seeds follow a half-life.
+	Score float64 `json:"score,omitempty"`
+}
+
+// weight is what a seed's suggestions are worth: its recency score, or its plays.
+func (s Seed) weight() float64 {
+	if s.Score > 0 {
+		return s.Score
+	}
+	return float64(s.Plays)
 }
 
 // SeedOptions are the knobs of the seed pass.
@@ -22,6 +32,9 @@ type SeedOptions struct {
 	Count    int
 	MinPlays int
 	Windows  []time.Duration // shortest first; zero means all-time
+	// Recency, when set, replaces the windows: ascending age tiers, a play weighing 1
+	// in the first and half as much in each next one, nothing past the last.
+	Recency []time.Duration
 }
 
 // historySource is the slice of Plex the seed pass needs.
@@ -41,6 +54,10 @@ type artistSearcher interface {
 // applies AFTER the resolution, so an unresolvable name never eats the place of the
 // resolvable artists behind it; a name is resolved once across windows.
 func collectSeeds(ctx context.Context, src historySource, brainz artistSearcher, sections []string, opts SeedOptions, now time.Time, logf func(string, ...any)) ([]Seed, time.Duration, error) {
+	if len(opts.Recency) > 0 {
+		seeds, err := recentSeeds(ctx, src, brainz, sections, opts, now, logf)
+		return seeds, opts.Recency[len(opts.Recency)-1], err
+	}
 	if len(opts.Windows) == 0 {
 		return nil, 0, errors.New("seed windows are empty: check the discovery config")
 	}
@@ -253,4 +270,52 @@ func windowLabel(window time.Duration) string {
 		return "all-time"
 	}
 	return fmt.Sprintf("%dd", int(window.Hours()/24))
+}
+
+// recentSeeds ranks the artists by the plays inside the recency tiers: a play in the
+// first tier is worth 1, in the second 0.5, and so on halving; a play older than the
+// last tier does not count, and without plays in the tiers there are no seeds. An
+// artist needs MinPlays plays inside the tiers, so one listen is not a taste.
+func recentSeeds(ctx context.Context, src historySource, brainz artistSearcher, sections []string, opts SeedOptions, now time.Time, logf func(string, ...any)) ([]Seed, error) {
+	last := opts.Recency[len(opts.Recency)-1]
+	plays, err := src.History(ctx, now.Add(-last))
+	if err != nil {
+		return nil, fmt.Errorf("plex history: %w", err)
+	}
+	seeds := topArtists(plays, opts.MinPlays, 0)
+	scores := map[string]float64{}
+	seen := map[string]bool{}
+	for _, p := range plays {
+		row := p.Artist + "\x00" + p.Album + "\x00" + p.Title + "\x00" + strconv.FormatInt(p.ViewedAt.Unix(), 10)
+		if p.Artist == "" || seen[row] {
+			continue
+		}
+		seen[row] = true
+		scores[artistIdentity(p.Artist)] += recencyWeight(now.Sub(p.ViewedAt), opts.Recency)
+	}
+	for i := range seeds {
+		seeds[i].Score = scores[artistIdentity(seeds[i].Name)]
+	}
+	sort.SliceStable(seeds, func(i, j int) bool { return seeds[i].Score > seeds[j].Score })
+	logf("history: %d plays in the last %s, %d artists with at least %d", len(plays), windowLabel(last), len(seeds), opts.MinPlays)
+	if len(seeds) == 0 {
+		return nil, nil
+	}
+	index, err := artistMBIDs(ctx, src, sections)
+	if err != nil {
+		return nil, err
+	}
+	return fillSeedMBIDs(ctx, seeds, index, brainz, map[string]string{}, opts.Count, logf), nil
+}
+
+// recencyWeight is 1 for the first tier, halving for each tier after it, 0 past the last.
+func recencyWeight(age time.Duration, tiers []time.Duration) float64 {
+	weight := 1.0
+	for _, tier := range tiers {
+		if age <= tier {
+			return weight
+		}
+		weight /= 2
+	}
+	return 0
 }

@@ -420,7 +420,7 @@ subprocess to babysit.
 | **Movies** | Scheduler / manual | TMDB Discover + Popular → Prowlarr/Torrentio → GoStorm → virtual `.mkv` |
 | **TV Series** | Scheduler / manual | TV series with fullpack-first approach, episode registry |
 | **Watchlist** | Scheduler / manual | Plex cloud watchlist → IMDB → Prowlarr/Torrentio → GoStorm |
-| **Music** | Scheduler / manual | New albums of your artists + new artists close to yours + similar artists → MusicBrainz → Prowlarr → FLAC projections |
+| **Music** | Scheduler / manual | New albums of your artists + new artists close to yours + niche artists of your genres + similar artists → MusicBrainz → Prowlarr → FLAC projections |
 
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
 **Minimum seeders**: 15, for the main sync and the watchlist alike (the watchlist uses the movie profile)
@@ -940,7 +940,12 @@ nano /home/pi/Tiramisu/config.json
 | `music_discovery.new_artists.enabled` | `true` | Import recent albums of new artists whose nearest artists you own |
 | `music_discovery.new_artists.window_days` | `30` | How far back the fresh-releases feed is read (at most 90) |
 | `music_discovery.new_artists.debut_years` | `3` | An artist counts as new when its first album or EP is at most this old |
-| `music_discovery.max_albums_per_run` | `20` | Cap shared by the new-artist and similar-artist passes (new albums of your own artists are uncapped) |
+| `music_discovery.max_albums_per_run` | `20` | Cap shared by the new-artist, genre and similar-artist passes (new albums of your own artists are uncapped) |
+| `music_discovery.seeds_recency_days` | `[1, 7, 30, 60]` | Age tiers of the plays that pick your seed artists: a play weighs 1 in the first tier and half as much in each next one; older plays do not count, and with no plays in the last tier the genre and similar-artist passes find nothing |
+| `music_discovery.seeds_min_plays` | `3` | Plays an artist needs inside the tiers to become a seed |
+| `music_discovery.genres.enabled` | `true` | Import niche artists of the genres you listen to now, close to your artists |
+| `music_discovery.genres.count` | `8` | How many of your genres are explored |
+| `music_discovery.genres.debut_years` | `10` | An artist of the genre pass counts as new when its first album or EP is at most this old |
 | `tmdb_api_key` | *(none)* | TMDB API key |
 | `prowlarr.enabled` | `false` | Use Prowlarr as primary indexer (falls back to Torrentio if disabled) |
 | `prowlarr.api_key` | *(none)* | Prowlarr API key (Settings → General → API Key) |
@@ -1124,18 +1129,29 @@ through the Library API as FLAC projections, one per track. Three passes:
   looks up every artist of the window (about an hour for 30 days); the answers are
   cached in the discovery state for 30 days, so later runs look up only the week's
   new names.
-- **Similar artists (Plex only).** Your 20 most played artists seed ListenBrainz
-  radio; their similar artists are pooled and ranked by how many of your artists
-  point at them. Artists any library already holds are never suggested.
+- **Niche artists of your genres (Plex only).** The genres of your seed artists
+  (below) pick the pools: the least played recordings of each genre on ListenBrainz,
+  resolved to artists you do not have. An artist is kept when one of your artists is
+  among its nearest neighbours and its first album or EP is at most `debut_years`
+  (10) old; one of your seeds among the neighbours ranks it highest. Its latest
+  studio album already released is imported.
+- **Similar artists (Plex only).** Your seed artists seed ListenBrainz radio; their
+  similar artists are pooled and ranked by how many of your artists point at them.
+  Artists any library already holds are never suggested.
 
-The last two passes share `max_albums_per_run` (20), new artists first, one album
-per artist.
+The seeds come from your Plex plays of the last 60 days, weighted by age: a play of
+the last day counts 1, of the last week 0.5, of the last month 0.25, of the last two
+months 0.125. With no plays in 60 days the genre and similar-artist passes find
+nothing.
+
+The last three passes share `max_albums_per_run` (20), in order new artists, genres,
+similar artists, one album per artist.
 
 The new-album pass reads only Tiramisu's own music library, for the artists and
 for the duplicate check: on Plex the section in `plex.music_library_id` (0 turns
 the pass off), on Jellyfin the music library that holds the albums Tiramisu filed.
-Jellyfin keeps no play history, so there the similar-artist pass is skipped and the
-other two run. It reads `/Library/VirtualFolders` and `/Items` with the `Authorization: MediaBrowser`
+Jellyfin keeps no play history, so there the genre and similar-artist passes are
+skipped and the other two run. It reads `/Library/VirtualFolders` and `/Items` with the `Authorization: MediaBrowser`
 header, which Jellyfin 10.x and 12.x both accept, and needs MusicBrainz ids on the
 albums (tagged files, or the bundled MusicBrainz metadata provider).
 

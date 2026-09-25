@@ -73,14 +73,14 @@ func (r *DiscoverRunner) newArtistCandidates(ctx context.Context, index *Library
 			delete(r.State.Neighbours, mbid)
 		}
 	}
-	seedPlays := map[string]int{}
+	seedWeight := map[string]float64{}
 	for _, seed := range r.State.Seeds {
-		seedPlays[artistIdentity(seed.Name)] = seed.Plays
+		seedWeight[artistIdentity(seed.Name)] = seed.weight()
 	}
 	type match struct {
 		mbid   string
 		owned  int
-		weight int
+		weight float64
 	}
 	var matches []match
 	fetched, failed, known := 0, 0, 0
@@ -113,7 +113,7 @@ func (r *DiscoverRunner) newArtistCandidates(ctx context.Context, index *Library
 		for i, id := range entry.IDs {
 			if index.ArtistPresent(id, entry.Names[i]) {
 				m.owned++
-				m.weight += seedPlays[artistIdentity(entry.Names[i])]
+				m.weight += seedWeight[artistIdentity(entry.Names[i])]
 			}
 		}
 		if m.owned > 0 {
