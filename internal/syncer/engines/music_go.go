@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"tiramisu/internal/config"
 	"tiramisu/internal/musicimport"
@@ -103,12 +102,14 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 	}
 	style := musicimport.IDStyleForPlayer(serverType)
 
-	d := e.cfg.Discovery
-	newReleases := musicimport.NewReleaseOptions{
-		Enabled: d.NewReleases.Enabled && d.NewReleases.WindowDays > 0,
-		Window:  time.Duration(d.NewReleases.WindowDays) * 24 * time.Hour,
+	opts := musicimport.DiscoverOptions{
+		Section:  section,
+		Sections: sections,
+		IDStyle:  style,
+		Logf:     e.logger.Printf,
 	}
-	if newReleases.Enabled {
+	musicimport.ApplyDiscoveryConfig(&opts, e.cfg.Discovery)
+	if opts.NewReleases.Enabled {
 		own, ok, err := e.ownSection(ctx, serverType, server, library, sections)
 		if err != nil {
 			return err
@@ -118,16 +119,7 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 		} else if !ok {
 			e.logger.Printf("new releases off: plex.music_library_id %q is not a Plex music section", e.cfg.PlexMusicLib)
 		}
-		newReleases.Enabled, newReleases.Section = ok, own
-	}
-
-	recency := make([]time.Duration, 0, len(d.SeedsRecencyDays))
-	for _, days := range d.SeedsRecencyDays {
-		recency = append(recency, time.Duration(days)*24*time.Hour)
-	}
-	windows := make([]time.Duration, 0, len(d.SeedsWindowsDays))
-	for _, days := range d.SeedsWindowsDays {
-		windows = append(windows, time.Duration(days)*24*time.Hour)
+		opts.NewReleases.Enabled, opts.NewReleases.Section = ok, own
 	}
 
 	listenBrainz := musicimport.NewListenBrainz()
@@ -140,50 +132,18 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 		Indexer: indexer,
 		Library: library,
 		State:   state,
-		Options: musicimport.DiscoverOptions{
-			Section:  section,
-			Sections: sections,
-			SeedOpts: musicimport.SeedOptions{Count: d.SeedsCount, MinPlays: d.SeedsMinPlays, Windows: windows,
-				Recency: recency},
-			Radio: musicimport.RadioOptions{
-				Mode: d.Mode, MaxSimilarArtists: d.MaxSimilarArtists,
-				MaxRecordingsPerArtist: d.MaxRecordingsPerArtist, PopBegin: d.PopBegin, PopEnd: d.PopEnd,
-			},
-			MinListenCount: d.MinListenCount,
-			NewReleases:    newReleases,
-			Similar: musicimport.SimilarOptions{
-				MinFans: d.Similar.MinFans,
-				MaxFans: d.Similar.MaxFans,
-				Debut:   time.Duration(d.Similar.DebutYears) * 365 * 24 * time.Hour,
-			},
-			Genres: musicimport.GenreOptions{
-				Enabled: d.Genres.Enabled && d.Genres.Count > 0 && d.Genres.DebutYears > 0,
-				Count:   d.Genres.Count,
-				Debut:   time.Duration(d.Genres.DebutYears) * 365 * 24 * time.Hour,
-			},
-			NewArtists: musicimport.NewArtistOptions{
-				Enabled: d.NewArtists.Enabled && d.NewArtists.WindowDays > 0 && d.NewArtists.DebutYears > 0,
-				Window:  time.Duration(d.NewArtists.WindowDays) * 24 * time.Hour,
-				Debut:   time.Duration(d.NewArtists.DebutYears) * 365 * 24 * time.Hour,
-			},
-			AlbumTypes:   d.AlbumTypes,
-			MaxAlbums:    d.MaxAlbumsPerRun,
-			MaxPerArtist: d.MaxAlbumsPerArtist,
-			MaxAttempts:  d.MaxAttempts,
-			MinSeeders:   d.MinSeeders,
-			MaxSizeBytes: int64(d.MaxSizeGB * float64(1<<30)),
-			IDStyle:      style,
-			Pace:         time.Duration(d.PaceSeconds) * time.Second,
-			Logf:         e.logger.Printf,
-		},
+		Options: opts,
 	}
 	summary, err := runner.Run(ctx)
+	// The summary is logged even on error: a failed pass does not undo the imports
+	// the others made.
+	outcome := "run done"
 	if err != nil {
-		return err
+		outcome = fmt.Sprintf("run ended with an error (%v)", err)
 	}
-	e.logger.Printf("run done: seeds %d (%s), similar candidates %d, genre candidates %d, new artists %d, new releases %d, present %d, imported %d, no-torrent %d, failed %d, parked %d",
-		summary.Seeds, summary.Window, summary.Candidates, summary.Genres, summary.NewArtists, summary.NewReleases, summary.Present, summary.Imported, summary.NoTorrent, summary.Failed, summary.Parked)
-	return nil
+	e.logger.Printf("%s: seeds %d (%s), similar candidates %d, genre candidates %d, new artists %d, new releases %d, present %d, imported %d, no-torrent %d, failed %d, parked %d",
+		outcome, summary.Seeds, summary.Window, summary.Candidates, summary.Genres, summary.NewArtists, summary.NewReleases, summary.Present, summary.Imported, summary.NoTorrent, summary.Failed, summary.Parked)
+	return err
 }
 
 // ownSection is the library Tiramisu files music into, the only one the new-release

@@ -96,6 +96,24 @@ type MusicNewReleasesConfig struct {
 	WindowDays int  `json:"window_days"`
 }
 
+// DefaultMusicDiscovery is the music discovery config a fresh install runs with; the
+// preview tool starts from it too, so the two cannot drift.
+func DefaultMusicDiscovery() MusicDiscoveryConfig {
+	return MusicDiscoveryConfig{
+		// hard reaches similarity ranks 10-100, past the famous peers every seed shares.
+		Mode: "hard", MaxSimilarArtists: 9, MaxRecordingsPerArtist: 3,
+		PopBegin: 10, PopEnd: 60, MinListenCount: 50,
+		SeedsCount: 20, SeedsMinPlays: 3, SeedsWindowsDays: []int{7, 30, 90, 365, 0}, SeedsRecencyDays: []int{1, 7, 30, 60},
+		AlbumTypes:      []string{"Album", "EP"},
+		MaxAlbumsPerRun: 20, MaxAlbumsPerArtist: 1,
+		MinSeeders: 5, MaxSizeGB: 3, PaceSeconds: 10, MaxAttempts: 3,
+		NewReleases: MusicNewReleasesConfig{Enabled: true, WindowDays: 30},
+		NewArtists:  MusicNewArtistsConfig{Enabled: true, WindowDays: 30, DebutYears: 3},
+		Genres:      MusicGenresConfig{Enabled: true, Count: 8, DebutYears: 15},
+		Similar:     MusicSimilarConfig{MinFans: 10000, MaxFans: 100000, DebutYears: 15},
+	}
+}
+
 type SchedulerConfig struct {
 	Enabled       bool                `json:"enabled"`
 	MoviesSync    DailyJobConfig      `json:"movies_sync"`
@@ -411,19 +429,7 @@ func LoadConfig() Config {
 			WatchlistSync: WatchlistSyncConfig{Enabled: true, IntervalHours: 1},
 		},
 
-		MusicDiscovery: MusicDiscoveryConfig{
-			// hard reaches similarity ranks 10-100, past the famous peers every seed shares.
-			Mode: "hard", MaxSimilarArtists: 9, MaxRecordingsPerArtist: 3,
-			PopBegin: 10, PopEnd: 60, MinListenCount: 50,
-			SeedsCount: 20, SeedsMinPlays: 3, SeedsWindowsDays: []int{7, 30, 90, 365, 0}, SeedsRecencyDays: []int{1, 7, 30, 60},
-			AlbumTypes:      []string{"Album", "EP"},
-			MaxAlbumsPerRun: 20, MaxAlbumsPerArtist: 1,
-			MinSeeders: 5, MaxSizeGB: 3, PaceSeconds: 10, MaxAttempts: 3,
-			NewReleases: MusicNewReleasesConfig{Enabled: true, WindowDays: 30},
-			NewArtists:  MusicNewArtistsConfig{Enabled: true, WindowDays: 30, DebutYears: 3},
-			Genres:      MusicGenresConfig{Enabled: true, Count: 8, DebutYears: 15},
-			Similar:     MusicSimilarConfig{MinFans: 10000, MaxFans: 100000, DebutYears: 15},
-		},
+		MusicDiscovery: DefaultMusicDiscovery(),
 
 		TorrentioURL:     "https://torrentio.strem.fun",
 		GoStormBaseURL:   "http://127.0.0.1:8090",

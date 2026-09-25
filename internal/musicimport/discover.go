@@ -540,6 +540,7 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 	if len(cands) == 0 {
 		return summary, listenErr
 	}
+	cands = dedupCandidates(cands)
 
 	// 6. Paced imports of the discovery candidates. The pause follows a real import
 	// only: a failed attempt downloaded nothing. Attempts are capped so a week of dead
@@ -733,6 +734,25 @@ type suggestion struct {
 	seeds      map[string]bool
 	weight     float64        // weight of the seeds that reached it
 	recordings map[string]int // recording mbid -> global listens
+}
+
+// dedupCandidates keeps the first candidate of each album: the passes can reach the
+// same one, and trying it twice in a run would park it twice as fast. The order is the
+// priority order, so the stronger pass wins. Several albums of one artist stay: the
+// artist cap counts imports, so a second album is tried when the first finds nothing.
+func dedupCandidates(cands []candidate) []candidate {
+	seen := map[string]bool{}
+	out := cands[:0:0]
+	for _, c := range cands {
+		if c.RGID != "" {
+			if seen[c.RGID] {
+				continue
+			}
+			seen[c.RGID] = true
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // triesPerAlbum bounds the attempts of a run to this many per album of the cap.

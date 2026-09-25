@@ -939,13 +939,13 @@ nano /home/pi/Tiramisu/config.json
 | `music_discovery.new_releases.window_days` | `30` | How recent an album's first edition must be to count as new |
 | `music_discovery.new_artists.enabled` | `true` | Import recent albums of new artists whose nearest artists you own |
 | `music_discovery.new_artists.window_days` | `30` | How far back the fresh-releases feed is read (at most 90) |
-| `music_discovery.new_artists.debut_years` | `3` | An artist counts as new when its first album or EP is at most this old |
+| `music_discovery.new_artists.debut_years` | `3` | An artist counts as new when its first album or EP is at most this old (0 = any age) |
 | `music_discovery.max_albums_per_run` | `20` | Cap shared by the new-artist, genre and similar-artist passes (new albums of your own artists are uncapped) |
 | `music_discovery.seeds_recency_days` | `[1, 7, 30, 60]` | Age tiers of the plays that pick your seed artists: a play weighs 1 in the first tier and half as much in each next one; older plays do not count, and with no plays in the last tier the genre and similar-artist passes find nothing |
 | `music_discovery.seeds_min_plays` | `3` | Plays an artist needs inside the tiers to become a seed |
 | `music_discovery.genres.enabled` | `true` | Import niche artists of the genres you listen to now, close to your artists |
 | `music_discovery.genres.count` | `8` | How many of your genres are explored |
-| `music_discovery.genres.debut_years` | `15` | An artist of the genre pass counts as new when its first album or EP is at most this old |
+| `music_discovery.genres.debut_years` | `15` | An artist of the genre pass counts as new when its first album or EP is at most this old (0 = any age) |
 | `music_discovery.similar.min_fans` | `10000` | Similar artists with fewer Deezer fans are too obscure to suggest (0 = no floor) |
 | `music_discovery.similar.max_fans` | `100000` | Similar artists with more Deezer fans are too known to suggest (0 = no limit) |
 | `music_discovery.similar.debut_years` | `15` | A similar artist's first album or EP must be at most this old (0 = any age) |
@@ -1144,7 +1144,8 @@ through the Library API as FLAC projections, one per track. Three passes:
   (10,000-100,000) Deezer fans and artists whose first album or EP is older than
   `debut_years` (15) are dropped; the latest studio album comes from MusicBrainz.
 
-The seeds come from your Plex plays of the last 60 days, weighted by age: a play of
+The seeds come from the Plex server owner's plays of the last 60 days (the users the
+server is shared with do not count), weighted by age: a play of
 the last day counts 1, of the last week 0.5, of the last month 0.25, of the last two
 months 0.125. With no plays in 60 days the genre and similar-artist passes find
 nothing.

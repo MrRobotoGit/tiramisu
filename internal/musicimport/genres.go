@@ -90,7 +90,7 @@ func (r *DiscoverRunner) genreCandidates(ctx context.Context, index *LibraryInde
 		score  float64
 		seeds  []string
 	}
-	cutoff := now.Add(-r.Options.Genres.Debut)
+	cutoff := debutCutoff(now, r.Options.Genres.Debut)
 	pool := map[string]*pooled{}
 	for _, g := range genres {
 		recordings, err := r.Tags.TagRecordings(ctx, g, 60, 100, genreRecordings)
@@ -115,7 +115,7 @@ func (r *DiscoverRunner) genreCandidates(ctx context.Context, index *LibraryInde
 				if seen[a.MBID] || a.MBID == variousArtistsMBID || !mbidPattern.MatchString(a.MBID) || index.ArtistPresent(a.MBID, a.Name) {
 					continue
 				}
-				if a.BeginYear > 0 && a.BeginYear < cutoff.Year() {
+				if !cutoff.IsZero() && a.BeginYear > 0 && a.BeginYear < cutoff.Year() {
 					continue
 				}
 				seen[a.MBID] = true
@@ -199,7 +199,7 @@ func (r *DiscoverRunner) genreCandidates(ctx context.Context, index *LibraryInde
 			logf("genre artist %s: %v", p.artist.Name, err)
 			continue
 		}
-		if !isNewArtist(groups, "", cutoff) {
+		if !cutoff.IsZero() && !isNewArtist(groups, "", cutoff) {
 			older++
 			continue
 		}
@@ -215,7 +215,7 @@ func (r *DiscoverRunner) genreCandidates(ctx context.Context, index *LibraryInde
 		}
 	}
 	logf("genres: %d artists you do not have, %d close to yours, %d debuted before %s, %d new",
-		len(pool), len(ranked), older, cutoff.Format("2006-01-02"), len(out))
+		len(pool), len(ranked), older, cutoffLabel(cutoff), len(out))
 	return out, nil
 }
 

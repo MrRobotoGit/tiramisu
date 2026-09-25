@@ -101,10 +101,7 @@ func (r *DiscoverRunner) deezerCandidates(ctx context.Context, seeds []Seed, ind
 	})
 
 	limit := r.Options.MaxAlbums * triesPerAlbum
-	var cutoff time.Time
-	if r.Options.Similar.Debut > 0 {
-		cutoff = now.Add(-r.Options.Similar.Debut)
-	}
+	cutoff := debutCutoff(now, r.Options.Similar.Debut)
 	var out []candidate
 	unresolved, older := 0, 0
 	for _, p := range ranked {

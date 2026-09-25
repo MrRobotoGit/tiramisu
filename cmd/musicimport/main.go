@@ -41,10 +41,10 @@ func main() {
 	reap := flag.Bool("reap", false, "remove albums whose swarm has been unreachable, instead of importing")
 	splitImages := flag.Bool("split-images", false, "refile albums filed as one single-file image track by track, cut by their cue sheet")
 	resync := flag.Bool("resync", false, "with --split-images, also refile tracks of albums already split whose matching changed (removes before re-adding)")
-	discover := flag.Bool("discover", false, "weekly-style discovery run: Plex listens -> ListenBrainz -> import, instead of the album walk")
+	discover := flag.Bool("discover", false, "the weekly music sync run (new releases, new artists, genres, similar artists) with the config's settings, instead of the album walk")
 	discoverState := flag.String("discover-state", "music-discovery-state.json", "discovery state file")
-	seedsMinPlays := flag.Int("seeds-min-plays", 8, "plays an artist needs to become a seed")
-	maxAlbums := flag.Int("max-albums", 10, "most albums imported in one discovery run")
+	seedsMinPlays := flag.Int("seeds-min-plays", 3, "plays an artist needs to become a seed (default: the config's)")
+	maxAlbums := flag.Int("max-albums", 20, "most albums the discovery imports in one run (default: the config's)")
 	pace := flag.Duration("pace", 10*time.Second, "wait between two album imports")
 	idStyle := flag.String("id-style", "", "MusicBrainz id to register per file: track (Plex webhooks) or recording (Jellyfin); default follows media_server_type from the panel. It applies to new imports only: existing projections keep the id they were filed with")
 	reapMinFailures := flag.Int("reap-min-failures", 3, "failures needed before an album is condemned")
@@ -176,30 +176,48 @@ func main() {
 		if imports, err := musicimport.LoadState(*statePath); err == nil {
 			state.MergeImportState(imports)
 		}
+		// Same options as the weekly engine, from the same config; a flag given on the
+		// command line overrides its value.
+		opts := musicimport.DiscoverOptions{Section: *section, Sections: allSections, IDStyle: style, Logf: log.Printf}
+		musicimport.ApplyDiscoveryConfig(&opts, cfg.MusicDiscovery)
+		flag.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "seeds-min-plays":
+				opts.SeedOpts.MinPlays = *seedsMinPlays
+			case "max-albums":
+				opts.MaxAlbums = *maxAlbums
+			case "min-seeders":
+				opts.MinSeeders = *minSeeders
+			case "max-size-gb":
+				opts.MaxSizeBytes = int64(*maxSizeGB * float64(1<<30))
+			case "pace":
+				opts.Pace = *pace
+			}
+		})
+		// The new-album follow reads Tiramisu's own library: the configured music
+		// section, or the one picked with --section.
+		own := strconv.Itoa(cfg.Plex.MusicLibraryID)
+		if cfg.Plex.MusicLibraryID <= 0 {
+			own = *section
+		}
+		opts.NewReleases.Enabled = false
+		for _, s := range allSections {
+			if s.Key == own {
+				opts.NewReleases.Section = s
+				opts.NewReleases.Enabled = cfg.MusicDiscovery.NewReleases.Enabled
+			}
+		}
+		listenBrainz := musicimport.NewListenBrainz()
 		discovery := &musicimport.DiscoverRunner{
 			Media:   plex,
 			Brainz:  musicimport.NewMusicBrainz(),
-			Listen:  musicimport.NewListenBrainz(),
+			Listen:  listenBrainz,
+			Tags:    listenBrainz,
+			Similar: musicimport.NewDeezer(),
 			Indexer: prowlarr.NewClient(prowlarr.ConfigProwlarr{Enabled: true, URL: *prowlarrURL, APIKey: *prowlarrKey}),
 			Library: library,
 			State:   state,
-			Options: musicimport.DiscoverOptions{
-				Section:  *section,
-				Sections: allSections,
-				SeedOpts: musicimport.SeedOptions{Count: 20, MinPlays: *seedsMinPlays, Windows: []time.Duration{7 * 24 * time.Hour, 30 * 24 * time.Hour, 90 * 24 * time.Hour, 365 * 24 * time.Hour, 0}},
-				Radio: musicimport.RadioOptions{
-					Mode: "hard", MaxSimilarArtists: 9, MaxRecordingsPerArtist: 3, PopBegin: 10, PopEnd: 60,
-				},
-				MinListenCount: 50,
-				AlbumTypes:     []string{"Album", "EP"},
-				MaxAlbums:      *maxAlbums,
-				MaxPerArtist:   1,
-				MinSeeders:     *minSeeders,
-				MaxSizeBytes:   int64(*maxSizeGB * float64(1<<30)),
-				IDStyle:        style,
-				Pace:           *pace,
-				Logf:           log.Printf,
-			},
+			Options: opts,
 		}
 		// The dry run is safe by construction: it reads Plex, ListenBrainz and Prowlarr
 		// (to show the torrent it would pick) and stops before the Library API write.
@@ -210,9 +228,9 @@ func main() {
 		if err != nil {
 			log.Fatalf("musicimport: %v", err)
 		}
-		fmt.Printf("\n%s: seeds %d (%s), candidates %d, present %d, planned %d, imported %d, no-torrent %d, failed %d\n",
+		fmt.Printf("\n%s: seeds %d (%s), similar %d, genres %d, new artists %d, new releases %d, present %d, planned %d, imported %d, no-torrent %d, failed %d\n",
 			modeLabel(*apply, "discover dry run", "discovered"),
-			summary.Seeds, summary.Window, summary.Candidates, summary.Present, summary.Planned, summary.Imported, summary.NoTorrent, summary.Failed)
+			summary.Seeds, summary.Window, summary.Candidates, summary.Genres, summary.NewArtists, summary.NewReleases, summary.Present, summary.Planned, summary.Imported, summary.NoTorrent, summary.Failed)
 		for _, note := range summary.Notes {
 			fmt.Println(" -", note)
 		}

@@ -177,11 +177,15 @@ func (p *PlexClient) Artists(ctx context.Context, section string) ([]Artist, err
 	return artists, nil
 }
 
-// History lists the music plays that started after the given time; a zero time means
-// all of them. The seed pass reads this once per window.
+// plexOwnerAccount is the server owner's account id: the seeds follow the owner's
+// taste, not the plays of the users the server is shared with.
+const plexOwnerAccount = "1"
+
+// History lists the owner's music plays that started after the given time; a zero
+// time means all of them. The seed pass reads this once per window.
 func (p *PlexClient) History(ctx context.Context, after time.Time) ([]Play, error) {
 	var container plexHistoryContainer
-	query := url.Values{"sort": {"viewedAt:desc"}}
+	query := url.Values{"sort": {"viewedAt:desc"}, "accountID": {plexOwnerAccount}}
 	if !after.IsZero() {
 		query.Set("viewedAt>", strconv.FormatInt(after.Unix(), 10))
 	}

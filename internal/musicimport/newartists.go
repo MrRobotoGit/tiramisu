@@ -133,9 +133,10 @@ func (r *DiscoverRunner) newArtistCandidates(ctx context.Context, index *Library
 	// 3. New means a debut inside the window, checked only for the matches the run can
 	// try: one MusicBrainz search per artist.
 	limit := r.Options.MaxAlbums * triesPerAlbum
-	cutoff := now.Add(-r.Options.NewArtists.Debut)
+	cutoff := debutCutoff(now, r.Options.NewArtists.Debut)
+	from := now.Add(-r.Options.NewArtists.Window)
 	var out []candidate
-	older := 0
+	older, liveOnly := 0, 0
 	for _, m := range matches {
 		if limit > 0 && len(out) >= limit {
 			break
@@ -149,17 +150,29 @@ func (r *DiscoverRunner) newArtistCandidates(ctx context.Context, index *Library
 			logf("new artist %s: %v", rel.ArtistCredit, err)
 			continue
 		}
-		if !isNewArtist(groups, rel.ReleaseGroupMBID, cutoff) {
+		cand := candidate{
+			Artist: rel.ArtistCredit, ArtistMBID: m.mbid, Title: rel.ReleaseName,
+			RGID: rel.ReleaseGroupMBID, ReleaseID: rel.ReleaseMBID, rank: len(out),
+		}
+		// A live or compilation release does not disqualify a new artist: its studio
+		// album or EP from the same window is offered instead.
+		if isSecondaryGroup(groups, cand.RGID) {
+			studio, ok := latestStudioAlbum(groups, now)
+			date, _ := parsePartialDate(studio.FirstReleaseDate)
+			if !ok || date.Before(from) {
+				liveOnly++
+				continue
+			}
+			cand.RGID, cand.Title, cand.ReleaseID = studio.ID, studio.Title, ""
+		}
+		if !cutoff.IsZero() && !isNewArtist(groups, cand.RGID, cutoff) {
 			older++
 			continue
 		}
-		out = append(out, candidate{
-			Artist: rel.ArtistCredit, ArtistMBID: m.mbid, Title: rel.ReleaseName,
-			RGID: rel.ReleaseGroupMBID, ReleaseID: rel.ReleaseMBID, rank: len(out),
-		})
+		out = append(out, cand)
 	}
-	logf("new artists: %d releases of the last %d days, %d artists you do not have (%d known to ListenBrainz, %d lookups failed), %d close to yours, %d debuted before %s, %d new",
-		len(releases), days, len(artists), known, failed, len(matches), older, cutoff.Format("2006-01-02"), len(out))
+	logf("new artists: %d releases of the last %d days, %d artists you do not have (%d known to ListenBrainz, %d lookups failed), %d close to yours, %d with only a live or compilation, %d debuted before %s, %d new",
+		len(releases), days, len(artists), known, failed, len(matches), liveOnly, older, cutoffLabel(cutoff), len(out))
 	return out, nil
 }
 
@@ -199,6 +212,32 @@ func isNewArtist(groups []ArtistReleaseGroup, rgID string, cutoff time.Time) boo
 		}
 	}
 	return true
+}
+
+// isSecondaryGroup reports whether the release group is a live, compilation or other
+// non-studio group.
+func isSecondaryGroup(groups []ArtistReleaseGroup, rgID string) bool {
+	for _, g := range groups {
+		if g.ID == rgID {
+			return len(g.SecondaryTypes) > 0
+		}
+	}
+	return false
+}
+
+// debutCutoff is the earliest accepted debut; zero (no filter) when debut is 0.
+func debutCutoff(now time.Time, debut time.Duration) time.Time {
+	if debut <= 0 {
+		return time.Time{}
+	}
+	return now.Add(-debut)
+}
+
+func cutoffLabel(cutoff time.Time) string {
+	if cutoff.IsZero() {
+		return "any date"
+	}
+	return cutoff.Format("2006-01-02")
 }
 
 func parsePartialDate(value string) (time.Time, bool) {

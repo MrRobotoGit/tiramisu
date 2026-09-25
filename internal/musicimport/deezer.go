@@ -110,7 +110,11 @@ func (d *Deezer) getOnce(ctx context.Context, path string, query url.Values, out
 		return err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
+	switch response.StatusCode {
+	case http.StatusOK:
+	case http.StatusTooManyRequests, http.StatusForbidden:
+		return fmt.Errorf("deezer %s: status %d: %w", path, response.StatusCode, errDeezerQuota)
+	default:
 		return fmt.Errorf("deezer %s: status %d", path, response.StatusCode)
 	}
 	var raw json.RawMessage
