@@ -32,7 +32,10 @@ type discoveryAlbum struct {
 	Attempts    int             `json:"attempts,omitempty"`
 	Reason      string          `json:"reason,omitempty"`
 	TorrentHash string          `json:"torrent_hash,omitempty"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	// Source is the pass that proposed the album (empty in states written before it
+	// was recorded), so the yield of each pass can be measured.
+	Source    string    `json:"source,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // DiscoveryState is the run's durable memory: the seeds of the last run, the
@@ -144,9 +147,12 @@ func lockDiscoveryState(path string) (func(), error) {
 
 // setAlbumStatus records an outcome. A failure parks the album once the attempts
 // reach parkedAt, so the run stops retrying it.
-func (s *DiscoveryState) setAlbumStatus(rgID, artist, title string, status discoveryStatus, attempts, parkedAt int, reason string) {
+func (s *DiscoveryState) setAlbumStatus(rgID, artist, title, source string, status discoveryStatus, attempts, parkedAt int, reason string) {
 	entry := s.Albums[rgID]
 	entry.Artist, entry.Title = artist, title
+	if source != "" {
+		entry.Source = source
+	}
 	entry.Attempts = attempts
 	if status == discoFailed || status == discoNoTorrent {
 		if parkedAt <= 0 {
@@ -225,6 +231,8 @@ type candidate struct {
 	Recordings []string
 	Listens    int
 	rank       int
+	// Source is the pass that proposed the candidate: one of the Source* names.
+	Source string
 	// fresh marks a new release: the date window retires it, so it is never parked.
 	fresh    bool
 	released time.Time
@@ -407,6 +415,66 @@ type DiscoverSummary struct {
 	Failed      int
 	Parked      int
 	Notes       []string
+	// Pass holds the outcome of each pass, attributed to the pass that proposed the
+	// album (after the dedup, the stronger one).
+	Pass map[string]*PassStats
+}
+
+// The passes a candidate can come from, in the order the summary lists them.
+const (
+	SourceNewReleases = "new_releases"
+	SourceNewArtists  = "new_artists"
+	SourceGenres      = "genres"
+	SourceSimilar     = "similar"
+)
+
+var passOrder = []string{SourceNewReleases, SourceNewArtists, SourceGenres, SourceSimilar}
+
+// PassStats is one pass's yield in a run. Candidates are counted before the dedup;
+// NoTorrent counts attempts, FirstNoTorrent counts albums that had never been tried.
+type PassStats struct {
+	Candidates     int
+	Tried          int
+	Imported       int
+	Planned        int
+	Present        int
+	NoTorrent      int
+	FirstNoTorrent int
+	Failed         int
+}
+
+// pass returns the stats of a source, creating them on first use.
+func (s *DiscoverSummary) pass(source string) *PassStats {
+	if s.Pass == nil {
+		s.Pass = map[string]*PassStats{}
+	}
+	if s.Pass[source] == nil {
+		s.Pass[source] = &PassStats{}
+	}
+	return s.Pass[source]
+}
+
+// logPasses writes one line per pass that did anything.
+func (s *DiscoverSummary) logPasses(logf func(string, ...any)) {
+	for _, name := range passOrder {
+		p := s.Pass[name]
+		if p == nil || *p == (PassStats{}) {
+			continue
+		}
+		logf("pass %s: candidates %d, tried %d, imported %d, planned %d, present %d, no-torrent %d (%d albums never tried before), failed %d",
+			name, p.Candidates, p.Tried, p.Imported, p.Planned, p.Present, p.NoTorrent, p.FirstNoTorrent, p.Failed)
+	}
+}
+
+// stamp sets the source of the candidates a pass produced and counts them.
+func stamp(cands []candidate, source string, summary *DiscoverSummary) []candidate {
+	for i := range cands {
+		cands[i].Source = source
+	}
+	if len(cands) > 0 {
+		summary.pass(source).Candidates += len(cands)
+	}
+	return cands
 }
 
 // Run executes one discovery pass: seeds, similar artists, album candidates, dedup,
@@ -431,6 +499,8 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		logf = func(string, ...any) {}
 	}
 	r.logf = logf
+	// One line per pass on every exit, so each run shows what each pass yielded.
+	defer func() { summary.logPasses(logf) }()
 	sleep := r.Options.Sleep
 	if sleep == nil {
 		sleep = sleepCtx
@@ -464,6 +534,7 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 	}
 	if hasHistory {
 		cands, listenErr = r.listeningCandidates(ctx, history, index, now, &summary, logf)
+		cands = stamp(cands, SourceSimilar, &summary)
 		if listenErr != nil {
 			if ctx.Err() != nil || (!r.Options.NewReleases.Enabled && !r.Options.NewArtists.Enabled) {
 				return summary, listenErr
@@ -483,6 +554,7 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 			logf("genres: %v", err)
 		}
 		summary.Genres = len(byGenre)
+		byGenre = stamp(byGenre, SourceGenres, &summary)
 		cands = append(byGenre, cands...)
 	}
 	if r.Options.NewArtists.Enabled {
@@ -495,6 +567,7 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		}
 		// Order of the shared discovery cap: new artists, genres, similar artists.
 		summary.NewArtists = len(fresh)
+		fresh = stamp(fresh, SourceNewArtists, &summary)
 		cands = append(fresh, cands...)
 	}
 	if len(cands) == 0 && !r.Options.NewReleases.Enabled {
@@ -516,6 +589,7 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 			return summary, err
 		}
 		summary.NewReleases = len(fresh)
+		fresh = stamp(fresh, SourceNewReleases, &summary)
 		for _, cand := range fresh {
 			if err := ctx.Err(); err != nil {
 				return summary, err
@@ -855,6 +929,7 @@ func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index 
 		r.mark(cand, discoPresent, "already in the library")
 		if summary != nil {
 			summary.Present++
+			summary.pass(cand.Source).Present++
 		}
 		return true
 	}
@@ -865,9 +940,15 @@ func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index 
 // inspect, file. Failures are recorded, never fatal. In dry-run the search still runs
 // (the plan must name the torrent) but nothing is written.
 func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, summary *DiscoverSummary, logf func(string, ...any)) {
+	stats := summary.pass(cand.Source)
+	stats.Tried++
 	torrent, ok := selectAlbumTorrent(ctx, r.Indexer, r.Options.IndexerIDs, cand.Artist, cand.Title, r.Options.MinSeeders, r.Options.MaxSizeBytes, logf)
 	if !ok {
 		summary.NoTorrent++
+		stats.NoTorrent++
+		if r.State.Albums[cand.RGID].Attempts == 0 {
+			stats.FirstNoTorrent++
+		}
 		if r.markAttempt(cand, discoNoTorrent, "no lossless torrent above the seeder floor") {
 			summary.Parked++
 		}
@@ -876,6 +957,7 @@ func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, su
 	}
 	if r.Options.DryRun {
 		summary.Planned++
+		stats.Planned++
 		summary.Notes = append(summary.Notes, fmt.Sprintf("would import %s / %s: %s (%d seeders)", cand.Artist, cand.Title, torrent.Title, torrent.Seeders))
 		logf("would import %s / %s: %s", cand.Artist, cand.Title, torrent.Title)
 		return
@@ -891,6 +973,7 @@ func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, su
 	result, err := applyFiles(ctx, r.Library, cand.Artist, cand.Title, group, tracks, torrent, r.Options.IDStyle)
 	if err != nil {
 		summary.Failed++
+		stats.Failed++
 		if r.markAttempt(cand, discoFailed, err.Error()) {
 			summary.Parked++
 		}
@@ -899,17 +982,19 @@ func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, su
 	}
 	if result.AlreadyPresent {
 		summary.Present++
+		stats.Present++
 		r.mark(cand, discoPresent, "already in the library")
 		return
 	}
 	summary.Imported++
+	stats.Imported++
 	r.mark(cand, discoImported, "imported "+torrent.Title)
 	logf("imported %s / %s: %s", cand.Artist, cand.Title, torrent.Title)
 }
 
 // mark records a non-failure outcome (no attempt counted).
 func (r *DiscoverRunner) mark(cand candidate, status discoveryStatus, reason string) {
-	r.State.setAlbumStatus(cand.RGID, cand.Artist, cand.Title, status, r.State.Albums[cand.RGID].Attempts, r.Options.MaxAttempts, reason)
+	r.State.setAlbumStatus(cand.RGID, cand.Artist, cand.Title, cand.Source, status, r.State.Albums[cand.RGID].Attempts, r.Options.MaxAttempts, reason)
 }
 
 // markAttempt counts one attempt and lets the state park the album at the cap; it
@@ -920,7 +1005,7 @@ func (r *DiscoverRunner) markAttempt(cand candidate, status discoveryStatus, rea
 	if cand.fresh {
 		parkAt = math.MaxInt
 	}
-	r.State.setAlbumStatus(cand.RGID, cand.Artist, cand.Title, status, attempts, parkAt, reason)
+	r.State.setAlbumStatus(cand.RGID, cand.Artist, cand.Title, cand.Source, status, attempts, parkAt, reason)
 	return r.State.Albums[cand.RGID].Status == discoParked
 }
 
