@@ -233,6 +233,9 @@ type candidate struct {
 	rank       int
 	// Source is the pass that proposed the candidate: one of the Source* names.
 	Source string
+	// retried marks a candidate whose stale park was dropped to try it again: the
+	// attempt is not a first sighting.
+	retried bool
 	// fresh marks a new release: the date window retires it, so it is never parked.
 	fresh    bool
 	released time.Time
@@ -431,7 +434,8 @@ const (
 var passOrder = []string{SourceNewReleases, SourceNewArtists, SourceGenres, SourceSimilar}
 
 // PassStats is one pass's yield in a run. Candidates are counted before the dedup;
-// NoTorrent counts attempts, FirstNoTorrent counts albums that had never been tried.
+// NoTorrent counts attempts, FirstNoTorrent counts albums that had never been tried
+// (an attempt after the park window expired does not count as a first sighting).
 type PassStats struct {
 	Candidates     int
 	Tried          int
@@ -594,9 +598,11 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 			if err := ctx.Err(); err != nil {
 				return summary, err
 			}
-			if r.alreadySeen(ctx, cand, own, now, &summary) {
+			seen, retried := r.alreadySeen(ctx, cand, own, now, &summary)
+			if seen {
 				continue
 			}
+			cand.retried = retried
 			if cand.ReleaseID = r.pickRelease(ctx, cand.RGID, logf); cand.ReleaseID == "" {
 				logf("new release %s / %s: no official edition yet, retried next run", cand.Artist, cand.Title)
 				continue
@@ -639,9 +645,11 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		if perArtist[cand.ArtistMBID] >= r.Options.MaxPerArtist {
 			continue
 		}
-		if r.alreadySeen(ctx, cand, index, now, &summary) {
+		seen, retried := r.alreadySeen(ctx, cand, index, now, &summary)
+		if seen {
 			continue
 		}
+		cand.retried = retried
 		// A genre candidate names its album group only: the edition comes now.
 		if cand.ReleaseID == "" {
 			if cand.ReleaseID = r.pickRelease(ctx, cand.RGID, logf); cand.ReleaseID == "" {
@@ -911,17 +919,19 @@ const parkedRetryAfter = 90 * 24 * time.Hour
 // alreadySeen decides whether a candidate can be attempted: present in the libraries
 // or in Tiramisu, parked after too many failures (until the retry window passes), or
 // already handled by this run. An album found in the library counts as present in
-// the summary.
-func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index *LibraryIndex, now time.Time, summary *DiscoverSummary) bool {
+// the summary. retried reports that the stale park of the album was dropped to try it
+// again, so the caller does not mistake the retry for a first sighting.
+func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index *LibraryIndex, now time.Time, summary *DiscoverSummary) (skip bool, retried bool) {
 	if entry, ok := r.State.Albums[cand.RGID]; ok {
 		switch entry.Status {
 		case discoImported, discoPresent:
-			return true
+			return true, false
 		case discoParked:
 			if now.Sub(entry.UpdatedAt) < parkedRetryAfter {
-				return true
+				return true, false
 			}
 			delete(r.State.Albums, cand.RGID)
+			retried = true
 		}
 	}
 	index.ResolveArtist(ctx, cand.ArtistMBID, cand.Artist)
@@ -931,9 +941,9 @@ func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index 
 			summary.Present++
 			summary.pass(cand.Source).Present++
 		}
-		return true
+		return true, false
 	}
-	return false
+	return false, retried
 }
 
 // importCandidate runs the mouth of the pipeline for one album: search, tracklist,
@@ -946,10 +956,11 @@ func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, su
 	if !ok {
 		summary.NoTorrent++
 		stats.NoTorrent++
-		if r.State.Albums[cand.RGID].Attempts == 0 {
+		if !cand.retried && r.State.Albums[cand.RGID].Attempts == 0 {
 			stats.FirstNoTorrent++
 		}
-		if r.markAttempt(cand, discoNoTorrent, "no lossless torrent above the seeder floor") {
+		// A dry run only reports: it must not count attempts nor park anything.
+		if !r.Options.DryRun && r.markAttempt(cand, discoNoTorrent, "no lossless torrent above the seeder floor") {
 			summary.Parked++
 		}
 		logf("no torrent for %s / %s", cand.Artist, cand.Title)
