@@ -294,19 +294,11 @@ type PrefixRemoveResult struct {
 	TorrentDropped    bool `json:"torrent_dropped"`
 }
 
-// RemovePrefix removes every projection under an album prefix, keeping the torrent.
-func (t *Tiramisu) RemovePrefix(ctx context.Context, prefix string) (PrefixRemoveResult, error) {
-	return t.removePrefix(ctx, map[string]any{"type": "music", "prefix": prefix})
-}
-
 // RemoveDeadPrefix removes an album and, once nothing references it, its torrent and
 // failure counter: a dead release must not come back already condemned.
 func (t *Tiramisu) RemoveDeadPrefix(ctx context.Context, prefix string) (PrefixRemoveResult, error) {
-	return t.removePrefix(ctx, map[string]any{"type": "music", "prefix": prefix, "drop_torrent": true})
-}
-
-func (t *Tiramisu) removePrefix(ctx context.Context, payload map[string]any) (PrefixRemoveResult, error) {
 	var result PrefixRemoveResult
+	payload := map[string]any{"type": "music", "prefix": prefix, "drop_torrent": true}
 	if err := t.do(ctx, http.MethodPost, "/api/library/remove", payload, &result); err != nil {
 		return PrefixRemoveResult{}, err
 	}

@@ -266,11 +266,13 @@ func cleanupCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
 
-func (m *Manager) dropTorrent(ctx context.Context, hash string) {
+// dropTorrent reports whether the engine removed the torrent.
+func (m *Manager) dropTorrent(ctx context.Context, hash string) bool {
 	cctx, cancel := cleanupCtx(ctx)
 	defer cancel()
-	if err := m.cfg.GoStorm.RemoveTorrent(cctx, hash); err != nil {
-		m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove torrent %s: %v", hash, err)
+	removeErr := m.cfg.GoStorm.RemoveTorrent(cctx, hash)
+	if removeErr != nil {
+		m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot remove torrent %s: %v", hash, removeErr)
 	}
 	// The failure counter outlives the torrent otherwise: the same release added again
 	// later would arrive already condemned, and the reaper would drop it on sight.
@@ -279,6 +281,7 @@ func (m *Manager) dropTorrent(ctx context.Context, hash string) {
 			m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot clear the failure counter for %s: %v", hash, err)
 		}
 	}
+	return removeErr == nil
 }
 
 // Add registers the torrent with GoStorm, waits for its file list, and writes the stub
@@ -755,8 +758,7 @@ func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) bool {
 			return false
 		}
 	}
-	m.dropTorrent(ctx, hash)
-	return true
+	return m.dropTorrent(ctx, hash)
 }
 
 // pickFileForEpisode prefers the file whose name carries the requested episode number;

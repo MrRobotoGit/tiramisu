@@ -25,10 +25,16 @@ type ReapSummary struct {
 	Files         int
 	SkippedActive int
 	Dropped       int
-	// Hashes are the torrents of the albums removed, so a caller can keep them out
-	// of its next selections.
-	Hashes []string
+	// Reaped are the albums removed, so a caller can replace them and keep their
+	// torrents out of its next selections.
+	Reaped []ReapedTorrent
 	Notes  []string
+}
+
+// ReapedTorrent is one removed album: its torrent and the directory it lived in.
+type ReapedTorrent struct {
+	Hash   string
+	Prefix string
 }
 
 // reapLibrary is the slice of the Library API a reap pass needs.
@@ -106,7 +112,7 @@ func reapAlbums(ctx context.Context, library reapLibrary, opts ReapOptions) (Rea
 		if result.TorrentDropped {
 			summary.Dropped++
 		}
-		summary.Hashes = append(summary.Hashes, strings.ToLower(candidate.hash))
+		summary.Reaped = append(summary.Reaped, ReapedTorrent{Hash: strings.ToLower(candidate.hash), Prefix: candidate.prefix})
 		summary.Notes = append(summary.Notes, fmt.Sprintf("reaped %s (%d projections, torrent referenced: %t, dropped: %t)",
 			candidate.prefix, result.Removed, result.TorrentReferenced, result.TorrentDropped))
 	}

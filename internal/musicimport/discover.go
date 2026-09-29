@@ -601,15 +601,26 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		}
 		// Identities first: forgetting the dead torrents drops the entries they come from.
 		var lost []reapedAlbum
+		var hashes []string
 		unknown := 0
-		for _, hash := range reaped.Hashes {
-			if album, ok := r.State.reapedIdentity(hash); ok {
-				lost = append(lost, album)
-			} else {
+		queued := map[string]bool{}
+		for _, dead := range reaped.Reaped {
+			hashes = append(hashes, dead.Hash)
+			album, ok := r.State.reapedIdentity(dead.Hash)
+			if !ok {
+				album, ok = r.identityFromPath(ctx, dead.Prefix, logf)
+			}
+			if !ok {
 				unknown++
+				logf("reap: %s has no identity, not replaced", dead.Prefix)
+				continue
+			}
+			if !queued[album.rgID] {
+				queued[album.rgID] = true
+				lost = append(lost, album)
 			}
 		}
-		r.State.markDeadTorrents(reaped.Hashes, now)
+		r.State.markDeadTorrents(hashes, now)
 		for _, note := range reaped.Notes {
 			logf("reap: %s", note)
 		}
@@ -777,6 +788,31 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		}
 	}
 	return summary, listenErr
+}
+
+// releaseGroupSearcher is the MusicBrainz lookup by name, for albums no state knows.
+type releaseGroupSearcher interface {
+	SearchReleaseGroup(ctx context.Context, artist, title string) (ReleaseGroup, bool, error)
+}
+
+// identityFromPath names a reaped album after its Artist/Album directory, the layout
+// every import writes, and resolves it on MusicBrainz. A single-folder release added by
+// hand has no such pair and is not replaced.
+func (r *DiscoverRunner) identityFromPath(ctx context.Context, prefix string, logf func(string, ...any)) (reapedAlbum, bool) {
+	search, ok := r.Brainz.(releaseGroupSearcher)
+	parts := strings.Split(prefix, "/")
+	if !ok || len(parts) < 2 {
+		return reapedAlbum{}, false
+	}
+	group, found, err := search.SearchReleaseGroup(ctx, parts[0], parts[1])
+	if err != nil {
+		logf("reap: release group of %s: %v", prefix, err)
+		return reapedAlbum{}, false
+	}
+	if !found || group.ID == "" {
+		return reapedAlbum{}, false
+	}
+	return reapedAlbum{artist: parts[0], title: parts[1], rgID: group.ID}, true
 }
 
 // replaceReaped searches a live release for every album the reaper removed, in the same
