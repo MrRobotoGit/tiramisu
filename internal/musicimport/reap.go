@@ -24,6 +24,7 @@ type ReapSummary struct {
 	Removed       int
 	Files         int
 	SkippedActive int
+	Dropped       int
 	// Hashes are the torrents of the albums removed, so a caller can keep them out
 	// of its next selections.
 	Hashes []string
@@ -33,7 +34,7 @@ type ReapSummary struct {
 // reapLibrary is the slice of the Library API a reap pass needs.
 type reapLibrary interface {
 	AudioRows(ctx context.Context) ([]AudioRow, error)
-	RemovePrefix(ctx context.Context, prefix string) (PrefixRemoveResult, error)
+	RemoveDeadPrefix(ctx context.Context, prefix string) (PrefixRemoveResult, error)
 }
 
 // Reap removes albums whose swarm has been unreachable for long enough. An album is
@@ -95,16 +96,19 @@ func reapAlbums(ctx context.Context, library reapLibrary, opts ReapOptions) (Rea
 		if ctx.Err() != nil {
 			return summary, ctx.Err()
 		}
-		result, err := library.RemovePrefix(ctx, candidate.prefix)
+		result, err := library.RemoveDeadPrefix(ctx, candidate.prefix)
 		if err != nil {
 			summary.Notes = append(summary.Notes, fmt.Sprintf("reap %s: %v", candidate.prefix, err))
 			continue
 		}
 		summary.Removed++
 		summary.Files += result.Removed
+		if result.TorrentDropped {
+			summary.Dropped++
+		}
 		summary.Hashes = append(summary.Hashes, strings.ToLower(candidate.hash))
-		summary.Notes = append(summary.Notes, fmt.Sprintf("reaped %s (%d projections, torrent referenced: %t)",
-			candidate.prefix, result.Removed, result.TorrentReferenced))
+		summary.Notes = append(summary.Notes, fmt.Sprintf("reaped %s (%d projections, torrent referenced: %t, dropped: %t)",
+			candidate.prefix, result.Removed, result.TorrentReferenced, result.TorrentDropped))
 	}
 	return summary, nil
 }

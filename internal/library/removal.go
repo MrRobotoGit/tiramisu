@@ -37,6 +37,7 @@ type AudioPrefixRemoveResponse struct {
 	Prefix            string `json:"prefix"`
 	Removed           int    `json:"removed"`
 	TorrentReferenced bool   `json:"torrent_referenced"`
+	TorrentDropped    bool   `json:"torrent_dropped,omitempty"`
 }
 
 // AudioRemoveResponse reports an exact-path audio removal. Removed is false with State
@@ -47,6 +48,7 @@ type AudioRemoveResponse struct {
 	Removed           bool   `json:"removed"`
 	State             string `json:"state,omitempty"`
 	TorrentReferenced bool   `json:"torrent_referenced"`
+	TorrentDropped    bool   `json:"torrent_dropped,omitempty"`
 }
 
 // RemoveAudio removes exactly one audio projection by its section-relative path. Phase 1
@@ -173,6 +175,7 @@ func (m *Manager) RemoveAudio(ctx context.Context, req RemoveRequest) (*AudioRem
 		Path:              virtualPath,
 		Removed:           true,
 		TorrentReferenced: len(rows) > 0,
+		TorrentDropped:    req.DropTorrent && len(rows) == 0 && m.dropTorrentIfUnused(ctx, row.Hash),
 	}, nil
 }
 
@@ -288,5 +291,6 @@ func (m *Manager) RemoveAudioPrefix(ctx context.Context, req RemoveRequest) (*Au
 		Prefix:            prefix,
 		Removed:           len(rows),
 		TorrentReferenced: len(remaining) > 0,
+		TorrentDropped:    req.DropTorrent && len(remaining) == 0 && m.dropTorrentIfUnused(ctx, hash),
 	}, nil
 }

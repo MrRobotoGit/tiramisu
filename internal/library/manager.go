@@ -190,6 +190,9 @@ type RemoveRequest struct {
 	// title back on their next run, which is what you want when removing to upgrade
 	// and not what you want when removing for good.
 	Blacklist bool `json:"blacklist"`
+	// DropTorrent (audio only) also removes the torrent and its failure counter once
+	// no projection or stub references it; audio removal otherwise leaves it in place.
+	DropTorrent bool `json:"drop_torrent"`
 }
 
 // Gap is an episode removed because its release died and nothing live replaced it.
@@ -713,17 +716,18 @@ func (m *Manager) deleteStub(_ context.Context, path string) error {
 // which holds that lock across the whole metadata wait with its stub not yet written,
 // would look absent here and end up registered against a torrent this call had just
 // removed; two concurrent Removes would both see the last stub gone and drop twice.
-func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) {
+// It reports whether the torrent was dropped.
+func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) bool {
 	// A stub that carries no hash identifies no torrent: findByHash would match on a
 	// bare "_.mkv" suffix and the engine would be asked to remove the empty hash.
 	if hash == "" {
-		return
+		return false
 	}
 	// Never wait: whoever holds this hash is adding that same release right now, so
 	// either it needs the torrent or its own cleanup will drop it.
 	unlock, ok := m.hashLocks.TryLock(hash)
 	if !ok {
-		return
+		return false
 	}
 	defer unlock()
 
@@ -731,10 +735,10 @@ func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) {
 		found, err := m.findByHash(kind, hash)
 		if err != nil {
 			m.cfg.Logger.Printf("[LibraryAPI] WARNING: keeping torrent %s, cannot check its stubs: %v", hash, err)
-			return
+			return false
 		}
 		if len(found) > 0 {
-			return
+			return false
 		}
 	}
 	// Audio lives in the projection registry, not as a stub under the media
@@ -745,13 +749,14 @@ func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) {
 		referenced, err := m.cfg.AudioRegistry.AudioHashReferenced(hash)
 		if err != nil {
 			m.cfg.Logger.Printf("[LibraryAPI] WARNING: keeping torrent %s, cannot check its audio projections: %v", hash, err)
-			return
+			return false
 		}
 		if referenced {
-			return
+			return false
 		}
 	}
 	m.dropTorrent(ctx, hash)
+	return true
 }
 
 // pickFileForEpisode prefers the file whose name carries the requested episode number;

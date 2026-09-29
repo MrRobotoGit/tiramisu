@@ -57,7 +57,9 @@ type DiscoveryState struct {
 	// removed: the selection skips them until parkedRetryAfter has passed.
 	DeadTorrents map[string]time.Time `json:"dead_torrents,omitempty"`
 
-	path string
+	// importedByHash indexes the import tool's albums by torrent, for the reaper.
+	importedByHash map[string]reapedAlbum
+	path           string
 }
 
 // loadedStateVersion is the schema this binary writes and understands.
@@ -172,10 +174,28 @@ func (s *DiscoveryState) setAlbumStatus(rgID, artist, title, source string, stat
 	s.Albums[rgID] = entry
 }
 
-// markDeadTorrents records the torrents the reaper removed and parks the albums the
-// discovery imported from them, so the park window governs when they are retried.
-// It returns how many albums it parked.
-func (s *DiscoveryState) markDeadTorrents(hashes []string, now time.Time) int {
+// reapedAlbum is what the states know about the album of a reaped torrent.
+type reapedAlbum struct {
+	artist, title, rgID, releaseID string
+}
+
+// reapedIdentity finds the album a reaped torrent carried: in the discovery entries
+// first, then in the import tool's state. Albums added by hand have neither.
+func (s *DiscoveryState) reapedIdentity(hash string) (reapedAlbum, bool) {
+	hash = strings.ToLower(hash)
+	for rgID, entry := range s.Albums {
+		if entry.Status == discoImported && strings.ToLower(entry.TorrentHash) == hash {
+			return reapedAlbum{artist: entry.Artist, title: entry.Title, rgID: rgID}, true
+		}
+	}
+	album, ok := s.importedByHash[hash]
+	return album, ok && album.rgID != ""
+}
+
+// markDeadTorrents records the torrents the reaper removed and forgets the discovery
+// entries imported from them: an entry left "imported" would keep the album out of
+// every later pass.
+func (s *DiscoveryState) markDeadTorrents(hashes []string, now time.Time) {
 	if s.DeadTorrents == nil {
 		s.DeadTorrents = map[string]time.Time{}
 	}
@@ -190,16 +210,11 @@ func (s *DiscoveryState) markDeadTorrents(hashes []string, now time.Time) int {
 		s.DeadTorrents[hash] = now
 		dead[hash] = true
 	}
-	parked := 0
 	for rgID, entry := range s.Albums {
-		if entry.Status != discoImported || !dead[strings.ToLower(entry.TorrentHash)] {
-			continue
+		if entry.Status == discoImported && dead[strings.ToLower(entry.TorrentHash)] {
+			delete(s.Albums, rgID)
 		}
-		entry.Status, entry.Reason, entry.UpdatedAt = discoParked, "dead swarm, reaped", now
-		s.Albums[rgID] = entry
-		parked++
 	}
-	return parked
 }
 
 // deadTorrent reports whether the reaper removed this torrent inside the park window.
@@ -215,7 +230,15 @@ func (s *DiscoveryState) MergeImportState(imports *State) {
 	if imports == nil {
 		return
 	}
+	if s.importedByHash == nil {
+		s.importedByHash = map[string]reapedAlbum{}
+	}
 	for _, entry := range imports.Albums {
+		if entry.TorrentHash != "" {
+			s.importedByHash[strings.ToLower(entry.TorrentHash)] = reapedAlbum{
+				artist: entry.Artist, title: entry.Title, rgID: entry.ReleaseGroupID, releaseID: entry.ReleaseID,
+			}
+		}
 		if entry.ReleaseID != "" && entry.ReleaseGroupID != "" {
 			if _, ok := s.Releases[entry.ReleaseID]; !ok {
 				s.Releases[entry.ReleaseID] = entry.ReleaseGroupID
@@ -476,9 +499,11 @@ const (
 	SourceNewArtists  = "new_artists"
 	SourceGenres      = "genres"
 	SourceSimilar     = "similar"
+	// SourceReplacement is the album of a reaped torrent, searched again at once.
+	SourceReplacement = "replacement"
 )
 
-var passOrder = []string{SourceNewReleases, SourceNewArtists, SourceGenres, SourceSimilar}
+var passOrder = []string{SourceReplacement, SourceNewReleases, SourceNewArtists, SourceGenres, SourceSimilar}
 
 // PassStats is one pass's yield in a run. Candidates are counted before the dedup;
 // NoTorrent counts attempts, FirstNoTorrent counts albums that had never been tried
@@ -574,14 +599,27 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		if err != nil {
 			logf("reap: %v", err)
 		}
-		parked := r.State.markDeadTorrents(reaped.Hashes, now)
+		// Identities first: forgetting the dead torrents drops the entries they come from.
+		var lost []reapedAlbum
+		unknown := 0
+		for _, hash := range reaped.Hashes {
+			if album, ok := r.State.reapedIdentity(hash); ok {
+				lost = append(lost, album)
+			} else {
+				unknown++
+			}
+		}
+		r.State.markDeadTorrents(reaped.Hashes, now)
 		for _, note := range reaped.Notes {
 			logf("reap: %s", note)
 		}
-		logf("reap: albums %d, condemned %d, removed %d, projections %d, skipped for an active session %d, discovery albums parked %d",
-			reaped.Albums, reaped.Candidates, reaped.Removed, reaped.Files, reaped.SkippedActive, parked)
+		logf("reap: albums %d, condemned %d, removed %d, projections %d, torrents dropped %d, skipped for an active session %d, to replace %d, without identity %d",
+			reaped.Albums, reaped.Candidates, reaped.Removed, reaped.Files, reaped.Dropped, reaped.SkippedActive, len(lost), unknown)
 		if ctx.Err() != nil {
 			return summary, ctx.Err()
+		}
+		if err := r.replaceReaped(ctx, lost, &summary, sleep, logf); err != nil {
+			return summary, err
 		}
 	}
 
@@ -739,6 +777,35 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 		}
 	}
 	return summary, listenErr
+}
+
+// replaceReaped searches a live release for every album the reaper removed, in the same
+// run as the film reaper does; the selection skips the dead torrent itself. An album
+// with no live release is left out, and a later pass may propose it again.
+func (r *DiscoverRunner) replaceReaped(ctx context.Context, albums []reapedAlbum, summary *DiscoverSummary, sleep func(context.Context, time.Duration) error, logf func(string, ...any)) error {
+	pauseDue := false
+	for _, album := range albums {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		summary.pass(SourceReplacement).Candidates++
+		cand := candidate{Artist: album.artist, Title: album.title, RGID: album.rgID, ReleaseID: album.releaseID, Source: SourceReplacement}
+		if cand.ReleaseID == "" {
+			if cand.ReleaseID = r.pickRelease(ctx, cand.RGID, logf); cand.ReleaseID == "" {
+				logf("replacement %s / %s: no official edition, not replaced", cand.Artist, cand.Title)
+				continue
+			}
+		}
+		if pauseDue {
+			if err := sleep(ctx, r.Options.Pace); err != nil {
+				return err
+			}
+		}
+		imported := summary.Imported
+		r.importCandidate(ctx, cand, summary, logf)
+		pauseDue = summary.Imported > imported
+	}
+	return nil
 }
 
 // listeningCandidates turns the play history into album candidates: many seeds
