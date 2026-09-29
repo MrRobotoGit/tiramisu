@@ -53,6 +53,9 @@ type DiscoveryState struct {
 	// empty when ListenBrainz knows none: the fresh-releases pool is scanned weekly
 	// and most of it is the same as last week.
 	Neighbours map[string]artistNeighbours `json:"neighbours,omitempty"`
+	// DeadTorrents holds the torrents the reaper removed, by the time they were
+	// removed: the selection skips them until parkedRetryAfter has passed.
+	DeadTorrents map[string]time.Time `json:"dead_torrents,omitempty"`
 
 	path string
 }
@@ -119,6 +122,9 @@ func LoadDiscoveryState(path string) (*DiscoveryState, error) {
 	if state.Neighbours == nil {
 		state.Neighbours = map[string]artistNeighbours{}
 	}
+	if state.DeadTorrents == nil {
+		state.DeadTorrents = map[string]time.Time{}
+	}
 	state.path = path
 	return state, nil
 }
@@ -164,6 +170,42 @@ func (s *DiscoveryState) setAlbumStatus(rgID, artist, title, source string, stat
 	}
 	entry.Status, entry.Reason, entry.UpdatedAt = status, reason, time.Now()
 	s.Albums[rgID] = entry
+}
+
+// markDeadTorrents records the torrents the reaper removed and parks the albums the
+// discovery imported from them, so the park window governs when they are retried.
+// It returns how many albums it parked.
+func (s *DiscoveryState) markDeadTorrents(hashes []string, now time.Time) int {
+	if s.DeadTorrents == nil {
+		s.DeadTorrents = map[string]time.Time{}
+	}
+	for hash, at := range s.DeadTorrents {
+		if now.Sub(at) >= parkedRetryAfter {
+			delete(s.DeadTorrents, hash)
+		}
+	}
+	dead := make(map[string]bool, len(hashes))
+	for _, hash := range hashes {
+		hash = strings.ToLower(hash)
+		s.DeadTorrents[hash] = now
+		dead[hash] = true
+	}
+	parked := 0
+	for rgID, entry := range s.Albums {
+		if entry.Status != discoImported || !dead[strings.ToLower(entry.TorrentHash)] {
+			continue
+		}
+		entry.Status, entry.Reason, entry.UpdatedAt = discoParked, "dead swarm, reaped", now
+		s.Albums[rgID] = entry
+		parked++
+	}
+	return parked
+}
+
+// deadTorrent reports whether the reaper removed this torrent inside the park window.
+func (s *DiscoveryState) deadTorrent(hash string, now time.Time) bool {
+	at, ok := s.DeadTorrents[strings.ToLower(hash)]
+	return ok && now.Sub(at) < parkedRetryAfter
 }
 
 // MergeImportState warms the release cache with the answers the import tool already
@@ -377,6 +419,7 @@ type DiscoverOptions struct {
 	IndexerIDs     []int
 	IDStyle        string
 	Pace           time.Duration
+	Reap           ReapOptions
 	DryRun         bool
 	Logf           func(string, ...any)
 	Now            func() time.Time
@@ -397,10 +440,14 @@ type DiscoverRunner struct {
 	Similar similarSource
 	Indexer torrentSearcher
 	Library discoverLibrary
+	// Reaper removes the albums whose swarm stayed unreachable before the passes
+	// run; nil turns it off.
+	Reaper  reapLibrary
 	State   *DiscoveryState
 	Options DiscoverOptions
 
 	logf func(string, ...any)
+	now  time.Time
 }
 
 // DiscoverSummary is what a run did, for the log and the job status.
@@ -515,6 +562,27 @@ func (r *DiscoverRunner) Run(ctx context.Context) (summary DiscoverSummary, err 
 	}
 	if r.Options.MaxAttempts <= 0 {
 		r.Options.MaxAttempts = 3
+	}
+	r.now = now
+
+	// 0. Dead albums go first: they hold slots, and the dedup below must not count
+	// them as present.
+	if r.Reaper != nil && r.Options.Reap.MinFailures > 0 {
+		reapOpts := r.Options.Reap
+		reapOpts.Apply = !r.Options.DryRun
+		reaped, err := reapAlbums(ctx, r.Reaper, reapOpts)
+		if err != nil {
+			logf("reap: %v", err)
+		}
+		parked := r.State.markDeadTorrents(reaped.Hashes, now)
+		for _, note := range reaped.Notes {
+			logf("reap: %s", note)
+		}
+		logf("reap: albums %d, condemned %d, removed %d, projections %d, skipped for an active session %d, discovery albums parked %d",
+			reaped.Albums, reaped.Candidates, reaped.Removed, reaped.Files, reaped.SkippedActive, parked)
+		if ctx.Err() != nil {
+			return summary, ctx.Err()
+		}
 	}
 
 	// 1. What Tiramisu already filed, for every dedup below.
@@ -952,7 +1020,8 @@ func (r *DiscoverRunner) alreadySeen(ctx context.Context, cand candidate, index 
 func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, summary *DiscoverSummary, logf func(string, ...any)) {
 	stats := summary.pass(cand.Source)
 	stats.Tried++
-	torrent, ok := selectAlbumTorrent(ctx, r.Indexer, r.Options.IndexerIDs, cand.Artist, cand.Title, r.Options.MinSeeders, r.Options.MaxSizeBytes, logf)
+	dead := func(hash string) bool { return r.State.deadTorrent(hash, r.now) }
+	torrent, ok := selectAlbumTorrent(ctx, r.Indexer, r.Options.IndexerIDs, cand.Artist, cand.Title, r.Options.MinSeeders, r.Options.MaxSizeBytes, dead, logf)
 	if !ok {
 		summary.NoTorrent++
 		stats.NoTorrent++
@@ -1000,6 +1069,10 @@ func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, su
 	summary.Imported++
 	stats.Imported++
 	r.mark(cand, discoImported, "imported "+torrent.Title)
+	// The hash lets a later reap park the album instead of leaving it "imported".
+	entry := r.State.Albums[cand.RGID]
+	entry.TorrentHash = torrent.Hash
+	r.State.Albums[cand.RGID] = entry
 	logf("imported %s / %s: %s", cand.Artist, cand.Title, torrent.Title)
 }
 

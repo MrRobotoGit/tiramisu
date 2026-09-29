@@ -27,6 +27,9 @@ type MusicSyncConfig struct {
 	Discovery    config.MusicDiscoveryConfig
 }
 
+// musicReapLimit is the most dead albums one run removes.
+const musicReapLimit = 25
+
 // MusicSyncEngine is the weekly discovery syncer. It works silently: no dashboard
 // card, but the scheduler status and the trigger/stop API see it like the others.
 type MusicSyncEngine struct {
@@ -109,6 +112,9 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 		Logf:     e.logger.Printf,
 	}
 	musicimport.ApplyDiscoveryConfig(&opts, e.cfg.Discovery)
+	// Same threshold as the film and TV reapers; the cap bounds a run that meets a
+	// burst of failures from a tracker outage.
+	opts.Reap = musicimport.ReapOptions{MinFailures: deadReleaseFailures, MinSpan: deadReleaseSpan, Limit: musicReapLimit}
 	if opts.NewReleases.Enabled {
 		own, ok, err := e.ownSection(ctx, serverType, server, library, sections)
 		if err != nil {
@@ -131,6 +137,7 @@ func (e *MusicSyncEngine) Run(ctx context.Context) error {
 		Similar: musicimport.NewDeezer(),
 		Indexer: indexer,
 		Library: library,
+		Reaper:  library,
 		State:   state,
 		Options: opts,
 	}

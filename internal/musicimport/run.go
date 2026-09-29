@@ -241,7 +241,7 @@ func releaseRef(c Candidate) string {
 	return c.Hash
 }
 
-func selectAlbumTorrent(ctx context.Context, indexer torrentSearcher, indexerIDs []int, artist, title string, minSeeders int, maxSizeBytes int64, logf func(string, ...any)) (Candidate, bool) {
+func selectAlbumTorrent(ctx context.Context, indexer torrentSearcher, indexerIDs []int, artist, title string, minSeeders int, maxSizeBytes int64, skip func(hash string) bool, logf func(string, ...any)) (Candidate, bool) {
 	artist, title = asciiPunctuation(artist), asciiPunctuation(title)
 	for _, query := range []string{
 		strings.TrimSpace(artist + " " + title + " FLAC"),
@@ -260,6 +260,10 @@ func selectAlbumTorrent(ctx context.Context, indexer torrentSearcher, indexerIDs
 					continue
 				}
 				candidate.Hash = strings.ToLower(hash)
+			}
+			if skip != nil && skip(candidate.Hash) {
+				logf("skipping %q: its swarm was reaped as dead", candidate.Title)
+				continue
 			}
 			return withRelease(ctx, indexer, candidate, logf), true
 		}
@@ -287,7 +291,7 @@ func (r *Runner) selectTorrent(ctx context.Context, album Album, group ReleaseGr
 	if title == "" {
 		title = group.Title
 	}
-	return selectAlbumTorrent(ctx, r.Indexer, r.Options.IndexerIDs, artist, title, r.Options.MinSeeders, r.Options.MaxSizeBytes, r.logf)
+	return selectAlbumTorrent(ctx, r.Indexer, r.Options.IndexerIDs, artist, title, r.Options.MinSeeders, r.Options.MaxSizeBytes, nil, r.logf)
 }
 
 // libraryWriter is what applyFiles needs from the Library API client.

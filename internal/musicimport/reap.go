@@ -24,7 +24,16 @@ type ReapSummary struct {
 	Removed       int
 	Files         int
 	SkippedActive int
-	Notes         []string
+	// Hashes are the torrents of the albums removed, so a caller can keep them out
+	// of its next selections.
+	Hashes []string
+	Notes  []string
+}
+
+// reapLibrary is the slice of the Library API a reap pass needs.
+type reapLibrary interface {
+	AudioRows(ctx context.Context) ([]AudioRow, error)
+	RemovePrefix(ctx context.Context, prefix string) (PrefixRemoveResult, error)
 }
 
 // Reap removes albums whose swarm has been unreachable for long enough. An album is
@@ -33,8 +42,12 @@ type ReapSummary struct {
 // an album that revives restarts its own window from zero and cannot be condemned by
 // failures accumulated across separate outages.
 func (r *Runner) Reap(ctx context.Context, opts ReapOptions) (ReapSummary, error) {
+	return reapAlbums(ctx, r.Library, opts)
+}
+
+func reapAlbums(ctx context.Context, library reapLibrary, opts ReapOptions) (ReapSummary, error) {
 	var summary ReapSummary
-	rows, err := r.Library.AudioRows(ctx)
+	rows, err := library.AudioRows(ctx)
 	if err != nil {
 		return summary, fmt.Errorf("read the library: %w", err)
 	}
@@ -43,6 +56,7 @@ func (r *Runner) Reap(ctx context.Context, opts ReapOptions) (ReapSummary, error
 
 	type candidate struct {
 		prefix string
+		hash   string
 		count  int64
 	}
 	var candidates []candidate
@@ -60,7 +74,7 @@ func (r *Runner) Reap(ctx context.Context, opts ReapOptions) (ReapSummary, error
 		if album.failCount < int64(opts.MinFailures) || span < opts.MinSpan {
 			continue
 		}
-		candidates = append(candidates, candidate{prefix: album.prefix, count: album.failCount})
+		candidates = append(candidates, candidate{prefix: album.prefix, hash: album.hash, count: album.failCount})
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].count != candidates[j].count {
@@ -78,13 +92,17 @@ func (r *Runner) Reap(ctx context.Context, opts ReapOptions) (ReapSummary, error
 			summary.Notes = append(summary.Notes, fmt.Sprintf("would reap %s (%d failures)", candidate.prefix, candidate.count))
 			continue
 		}
-		result, err := r.Library.RemovePrefix(ctx, candidate.prefix)
+		if ctx.Err() != nil {
+			return summary, ctx.Err()
+		}
+		result, err := library.RemovePrefix(ctx, candidate.prefix)
 		if err != nil {
 			summary.Notes = append(summary.Notes, fmt.Sprintf("reap %s: %v", candidate.prefix, err))
 			continue
 		}
 		summary.Removed++
 		summary.Files += result.Removed
+		summary.Hashes = append(summary.Hashes, strings.ToLower(candidate.hash))
 		summary.Notes = append(summary.Notes, fmt.Sprintf("reaped %s (%d projections, torrent referenced: %t)",
 			candidate.prefix, result.Removed, result.TorrentReferenced))
 	}
