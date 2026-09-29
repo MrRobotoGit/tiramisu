@@ -812,7 +812,36 @@ func (r *DiscoverRunner) identityFromPath(ctx context.Context, prefix string, lo
 	if !found || group.ID == "" {
 		return reapedAlbum{}, false
 	}
+	// The search returns its best guess whatever the score: a wrong group would file the
+	// replacement under another album's ids.
+	if !namesAgree(parts[0], group.Artist) || !namesAgree(parts[1], group.Title) {
+		logf("reap: %s resolves to %s / %s on MusicBrainz, names disagree", prefix, group.Artist, group.Title)
+		return reapedAlbum{}, false
+	}
 	return reapedAlbum{artist: parts[0], title: parts[1], rgID: group.ID}, true
+}
+
+// namesAgree accepts a MusicBrainz name for a directory name when every token of the
+// shorter is in the longer, so an added subtitle passes and a fuzzy neighbour does not.
+// Names with no comparable token (U2, AC-DC) compare whole.
+func namesAgree(dir, found string) bool {
+	short, long := normalizeTokens(dir), normalizeTokens(found)
+	if len(short) == 0 || len(long) == 0 {
+		return normalizeTitle(dir) == normalizeTitle(found)
+	}
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	have := make(map[string]bool, len(long))
+	for _, token := range long {
+		have[token] = true
+	}
+	for _, token := range short {
+		if !have[token] {
+			return false
+		}
+	}
+	return true
 }
 
 // replaceReaped searches a live release for every album the reaper removed, in the same
