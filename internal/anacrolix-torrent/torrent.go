@@ -3856,13 +3856,14 @@ func (t *Torrent) Announce() {
 // AnnounceTracked forces a tracker announce for all trackers and reports the aggregate
 // result once every announce has returned: peers is the sum of the tracker responses, errs
 // counts the announces that failed, total is the number of trackers announced to, and
-// failures carries one "url: error" entry per failed announce. onDone runs on a separate
-// goroutine and may be nil.
+// failures carries one "url: error" entry per failed announce. Trackers still backing off a
+// failure are skipped and not counted. onDone runs on a separate goroutine and may be nil.
 func (t *Torrent) AnnounceTracked(onDone func(peers, errs, total int, failures []string)) {
 	t.cl.lock()
+	now := time.Now()
 	scrapers := make([]*trackerScraper, 0, len(t.trackerAnnouncers))
 	for _, ta := range t.trackerAnnouncers {
-		if ts, ok := ta.(*trackerScraper); ok {
+		if ts, ok := ta.(*trackerScraper); ok && ts.retryDue(now) {
 			scrapers = append(scrapers, ts)
 		}
 	}

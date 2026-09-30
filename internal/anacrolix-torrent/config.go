@@ -61,10 +61,11 @@ func (cfg *ClientTrackerConfig) failedAnnounceInterval(consecutiveFailures int) 
 		maxInterval = d
 	}
 	for i := 1; i < consecutiveFailures; i++ {
-		d *= 2
-		if d >= maxInterval {
+		// Checked before doubling, so a huge configured max cannot overflow into a negative wait.
+		if d >= maxInterval/2 {
 			return maxInterval
 		}
+		d *= 2
 	}
 	return d
 }

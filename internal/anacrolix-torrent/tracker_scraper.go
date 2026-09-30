@@ -217,6 +217,13 @@ func (me *trackerScraper) afterAnnounce(ar trackerAnnounceResult) (interval time
 	return interval, true
 }
 
+// retryDue reports whether a forced announce may go to this tracker now: not while a failed
+// announce is still waiting out its backoff. Must be called with the client lock held.
+func (me *trackerScraper) retryDue(now time.Time) bool {
+	last := me.lastAnnounce
+	return last.Err == nil || !now.Before(last.Completed.Add(last.Interval))
+}
+
 func (me *trackerScraper) Run() {
 	defer me.announceStopped()
 
