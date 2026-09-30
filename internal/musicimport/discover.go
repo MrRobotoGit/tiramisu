@@ -1271,8 +1271,9 @@ func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, su
 // mark records a non-failure outcome (no attempt counted).
 func (r *DiscoverRunner) mark(cand candidate, status discoveryStatus, reason string) {
 	r.State.setAlbumStatus(cand.RGID, cand.Artist, cand.Title, cand.Source, status, r.State.Albums[cand.RGID].Attempts, r.Options.MaxAttempts, reason)
-	// Any pass that files the album, or finds it filed, settles its pending replacement.
-	if (status == discoImported || status == discoPresent) && !r.Options.DryRun {
+	// A real import settles the pending replacement. "Present" does not: the media
+	// server's index still lists a reaped album until its next rescan.
+	if status == discoImported && !r.Options.DryRun {
 		delete(r.State.Replacements, cand.RGID)
 	}
 }
