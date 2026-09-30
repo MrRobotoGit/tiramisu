@@ -2549,10 +2549,10 @@ func (t *Torrent) startScrapingTracker(_url string) {
 		return
 	}
 	if u.Scheme == "udp" {
-		u.Scheme = "udp4"
-		t.startScrapingTracker(u.String())
-		u.Scheme = "udp6"
-		t.startScrapingTracker(u.String())
+		for _, scheme := range udpTrackerSchemes(u.Hostname()) {
+			u.Scheme = scheme
+			t.startScrapingTracker(u.String())
+		}
 		return
 	}
 	if _, ok := t.trackerAnnouncers[_url]; ok {
@@ -2589,6 +2589,21 @@ func (t *Torrent) startScrapingTracker(_url string) {
 		t.trackerAnnouncers = make(map[string]torrentTrackerAnnouncer)
 	}
 	t.trackerAnnouncers[_url] = sl
+}
+
+// udpTrackerSchemes lists the address families a udp tracker is announced over. A host name
+// may resolve to either family, so it gets both; an IP literal belongs to one, and an announcer
+// for the other would fail on every attempt with "no acceptable ips".
+func udpTrackerSchemes(host string) []string {
+	ip := net.ParseIP(host)
+	switch {
+	case ip == nil:
+		return []string{"udp4", "udp6"}
+	case ip.To4() != nil:
+		return []string{"udp4"}
+	default:
+		return []string{"udp6"}
+	}
 }
 
 // Adds and starts tracker scrapers for tracker URLs that aren't already
