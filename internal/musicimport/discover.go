@@ -56,6 +56,9 @@ type DiscoveryState struct {
 	// DeadTorrents holds the torrents the reaper removed, by the time they were
 	// removed: the selection skips them until parkedRetryAfter has passed.
 	DeadTorrents map[string]time.Time `json:"dead_torrents,omitempty"`
+	// Replacements are the reaped albums still waiting for a live release, by release
+	// group: each run tries them again until the attempt cap.
+	Replacements map[string]pendingReplacement `json:"replacements,omitempty"`
 
 	// importedByHash indexes the import tool's albums by torrent, for the reaper.
 	importedByHash map[string]reapedAlbum
@@ -77,12 +80,14 @@ func LoadDiscoveryState(path string) (*DiscoveryState, error) {
 	}
 	path = abs
 	state := &DiscoveryState{
-		Version:    loadedStateVersion,
-		Releases:   map[string]string{},
-		Recordings: map[string][]RecordingRelease{},
-		Albums:     map[string]discoveryAlbum{},
-		Neighbours: map[string]artistNeighbours{},
-		path:       path,
+		Version:      loadedStateVersion,
+		Releases:     map[string]string{},
+		Recordings:   map[string][]RecordingRelease{},
+		Albums:       map[string]discoveryAlbum{},
+		Neighbours:   map[string]artistNeighbours{},
+		DeadTorrents: map[string]time.Time{},
+		Replacements: map[string]pendingReplacement{},
+		path:         path,
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -97,12 +102,14 @@ func LoadDiscoveryState(path string) (*DiscoveryState, error) {
 			return nil, fmt.Errorf("state %s is corrupt and cannot be quarantined: %w", path, err)
 		}
 		fresh := &DiscoveryState{
-			Version:    loadedStateVersion,
-			Releases:   map[string]string{},
-			Recordings: map[string][]RecordingRelease{},
-			Albums:     map[string]discoveryAlbum{},
-			Neighbours: map[string]artistNeighbours{},
-			path:       path,
+			Version:      loadedStateVersion,
+			Releases:     map[string]string{},
+			Recordings:   map[string][]RecordingRelease{},
+			Albums:       map[string]discoveryAlbum{},
+			Neighbours:   map[string]artistNeighbours{},
+			DeadTorrents: map[string]time.Time{},
+			Replacements: map[string]pendingReplacement{},
+			path:         path,
 		}
 		return fresh, nil
 	}
@@ -126,6 +133,9 @@ func LoadDiscoveryState(path string) (*DiscoveryState, error) {
 	}
 	if state.DeadTorrents == nil {
 		state.DeadTorrents = map[string]time.Time{}
+	}
+	if state.Replacements == nil {
+		state.Replacements = map[string]pendingReplacement{}
 	}
 	state.path = path
 	return state, nil
@@ -846,18 +856,35 @@ func namesAgree(dir, found string) bool {
 
 // replaceReaped searches a live release for every album the reaper removed, in the same
 // run as the film reaper does; the selection skips the dead torrent itself. An album
-// with no live release is left out, and a later pass may propose it again.
+// still without one stays queued and is tried again by the next runs, up to the
+// attempt cap.
 func (r *DiscoverRunner) replaceReaped(ctx context.Context, albums []reapedAlbum, summary *DiscoverSummary, sleep func(context.Context, time.Duration) error, logf func(string, ...any)) error {
+	if r.State.Replacements == nil {
+		r.State.Replacements = map[string]pendingReplacement{}
+	}
+	if !r.Options.DryRun {
+		for _, album := range albums {
+			if _, ok := r.State.Replacements[album.rgID]; !ok {
+				r.State.Replacements[album.rgID] = pendingReplacement{Artist: album.artist, Title: album.title, ReleaseID: album.releaseID}
+			}
+		}
+	}
+	queue := make([]string, 0, len(r.State.Replacements))
+	for rgID := range r.State.Replacements {
+		queue = append(queue, rgID)
+	}
+	sort.Strings(queue) // deterministic order, so a run is reproducible from the log
 	pauseDue := false
-	for _, album := range albums {
+	for _, rgID := range queue {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		pending := r.State.Replacements[rgID]
 		summary.pass(SourceReplacement).Candidates++
-		cand := candidate{Artist: album.artist, Title: album.title, RGID: album.rgID, ReleaseID: album.releaseID, Source: SourceReplacement}
+		cand := candidate{Artist: pending.Artist, Title: pending.Title, RGID: rgID, ReleaseID: pending.ReleaseID, Source: SourceReplacement}
 		if cand.ReleaseID == "" {
 			if cand.ReleaseID = r.pickRelease(ctx, cand.RGID, logf); cand.ReleaseID == "" {
-				logf("replacement %s / %s: no official edition, not replaced", cand.Artist, cand.Title)
+				r.replacementFailed(rgID, "no official edition", logf)
 				continue
 			}
 		}
@@ -866,11 +893,45 @@ func (r *DiscoverRunner) replaceReaped(ctx context.Context, albums []reapedAlbum
 				return err
 			}
 		}
-		imported := summary.Imported
+		imported, present := summary.Imported, summary.Present
 		r.importCandidate(ctx, cand, summary, logf)
 		pauseDue = summary.Imported > imported
+		switch {
+		case r.Options.DryRun:
+		case summary.Imported > imported || summary.Present > present:
+			delete(r.State.Replacements, rgID)
+		default:
+			r.replacementFailed(rgID, "no live release", logf)
+		}
 	}
 	return nil
+}
+
+// pendingReplacement is a reaped album still waiting for a live release.
+type pendingReplacement struct {
+	Artist    string    `json:"artist"`
+	Title     string    `json:"title"`
+	ReleaseID string    `json:"release_id,omitempty"`
+	Attempts  int       `json:"attempts,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// replacementFailed counts one failed replacement and drops the album at the attempt
+// cap. A dry run counts nothing.
+func (r *DiscoverRunner) replacementFailed(rgID, reason string, logf func(string, ...any)) {
+	if r.Options.DryRun {
+		return
+	}
+	pending := r.State.Replacements[rgID]
+	pending.Attempts++
+	pending.UpdatedAt = r.now
+	if pending.Attempts >= r.Options.MaxAttempts {
+		delete(r.State.Replacements, rgID)
+		logf("replacement %s / %s: %s, given up after %d attempts", pending.Artist, pending.Title, reason, pending.Attempts)
+		return
+	}
+	r.State.Replacements[rgID] = pending
+	logf("replacement %s / %s: %s, retried next run (%d/%d)", pending.Artist, pending.Title, reason, pending.Attempts, r.Options.MaxAttempts)
 }
 
 // listeningCandidates turns the play history into album candidates: many seeds

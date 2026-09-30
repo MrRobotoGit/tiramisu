@@ -126,10 +126,12 @@ func (m *MusicBrainz) SearchReleaseGroup(ctx context.Context, artist, title stri
 	}
 	var result struct {
 		ReleaseGroups []struct {
-			ID    string `json:"id"`
-			Title string `json:"title"`
-			Score int    `json:"score"`
-			AC    []struct {
+			ID             string   `json:"id"`
+			Title          string   `json:"title"`
+			Score          int      `json:"score"`
+			PrimaryType    string   `json:"primary-type"`
+			SecondaryTypes []string `json:"secondary-types"`
+			AC             []struct {
 				Name string `json:"name"`
 			} `json:"artist-credit"`
 		} `json:"release-groups"`
@@ -138,7 +140,7 @@ func (m *MusicBrainz) SearchReleaseGroup(ctx context.Context, artist, title stri
 		return ReleaseGroup{}, false, err
 	}
 	best := ReleaseGroup{}
-	bestScore := 0
+	bestScore, bestKind := 0, 0
 	for _, rg := range result.ReleaseGroups {
 		if rg.ID == "" {
 			continue
@@ -148,8 +150,17 @@ func (m *MusicBrainz) SearchReleaseGroup(ctx context.Context, artist, title stri
 		if strings.EqualFold(strings.TrimSpace(rg.Title), strings.TrimSpace(title)) {
 			score += 100
 		}
-		if score > bestScore {
-			bestScore = score
+		// On a tie a studio album wins, then any album: an interview or a single sharing
+		// the title has no edition to take a tracklist from.
+		kind := 0
+		if strings.EqualFold(rg.PrimaryType, "Album") {
+			kind = 1
+			if len(rg.SecondaryTypes) == 0 {
+				kind = 2
+			}
+		}
+		if score > bestScore || (score == bestScore && kind > bestKind) {
+			bestScore, bestKind = score, kind
 			best = ReleaseGroup{
 				ID:     rg.ID,
 				Title:  rg.Title,
