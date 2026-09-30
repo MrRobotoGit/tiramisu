@@ -118,6 +118,11 @@ type ClientConfig struct {
 	DownloadRateLimiter *rate.Limiter
 	// Maximum unverified bytes across all torrents. Not used if zero.
 	MaxUnverifiedBytes int64
+	// Minimum age an outstanding request must reach before another peer may steal it; zero or
+	// negative disables the check. A steal is a Cancel on the wire, and a Cancel that reaches the
+	// holder after it served the block does nothing: the block arrives twice and one copy is
+	// counted as ConnStats.ChunksReadWasted. Backported from upstream 23d8abf90 (#1095).
+	StealRequestGrace time.Duration
 
 	// User-provided Client peer ID. If not present, one is generated automatically.
 	PeerID string
@@ -274,6 +279,7 @@ func NewDefaultClientConfig() *ClientConfig {
 		Extensions:             defaultPeerExtensionBytes(),
 		AcceptPeerConnections:  true,
 		MaxUnverifiedBytes:     64 << 20,
+		StealRequestGrace:      stealRequestGraceFromEnv(),
 		DialRateLimiter:        rate.NewLimiter(10, 10),
 		PieceHashersPerTorrent: 2,
 	}

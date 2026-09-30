@@ -314,15 +314,19 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		if cap(next.Requests.requestIndexes) != cap(orig) {
 			panic("changed")
 		}
+		// Don't add requests on receipt of a reject: it requests back to a peer that may stay
+		// unresponsive. A peer able to serve more sends Unchoke, which updates requests again.
+		if p.needRequestUpdate == "Peer.remoteRejectedRequest" {
+			continue
+		}
 		existing := t.requestingPeer(req)
 		if existing != nil && existing != p {
-			// Don't steal from the poor.
 			diff := int64(current.Requests.GetCardinality()) + 1 - (int64(existing.uncancelledRequests()) - 1)
-			// Steal a request that leaves us with one more request than the existing peer
-			// connection if the stealer more recently received a chunk.
-			if diff > 1 || (diff == 1 && p.lastUsefulChunkReceived.Before(existing.lastUsefulChunkReceived)) {
+			if !stealPermitted(p.needRequestUpdate, diff, p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived,
+				t.stealRequestGraceElapsed(req)) {
 				continue
 			}
+			torrent.Add("requests stolen", 1)
 			t.cancelRequest(req)
 		}
 		// V255: Use request() directly instead of mustRequest() to handle BDP drift gracefully.
