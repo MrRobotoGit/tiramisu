@@ -12,20 +12,24 @@ import (
 // swept across runs without rebuilding. Same key as upstream.
 const stealRequestGraceEnvKey = "TORRENT_STEAL_REQUEST_GRACE"
 
+// defaultStealRequestGrace is measured, not argued: on the Pi, 250ms cut duplicate blocks from
+// 28% to 8% and stalls from 35 to 24 on the same 6GB of a 4K stream. Upstream defaults to 0.
+const defaultStealRequestGrace = 250 * time.Millisecond
+
 // stealRequestGraceEffective publishes the grace the client runs with, so a sweep reads the arm
 // it measured from /debug/vars instead of trusting the value it meant to set.
 var stealRequestGraceEffective = expvar.NewString("stealRequestGrace")
 
-// stealRequestGraceFromEnv returns the grace from the environment, 0 (disabled, the historical
-// behaviour) when unset. Upstream panics on a malformed value; a 24/7 service would crash-loop
-// on a typo instead, so it logs loudly and runs the default, which /debug/vars then shows.
+// stealRequestGraceFromEnv returns the grace from the environment ("0" disables the check), the
+// default when unset. Upstream panics on a malformed value; a 24/7 service would crash-loop on a
+// typo instead, so it logs loudly and runs the default, which /debug/vars then shows.
 func stealRequestGraceFromEnv() time.Duration {
 	value, set := os.LookupEnv(stealRequestGraceEnvKey)
-	var d time.Duration
+	d := defaultStealRequestGrace
 	if set {
 		parsed, err := time.ParseDuration(value)
 		if err != nil {
-			log.Printf("ERROR: %s=%q is not a duration (e.g. 250ms): request stealing runs without a grace", stealRequestGraceEnvKey, value)
+			log.Printf("ERROR: %s=%q is not a duration (e.g. 250ms): request stealing runs with the default grace %v", stealRequestGraceEnvKey, value, defaultStealRequestGrace)
 		} else {
 			d = parsed
 		}
