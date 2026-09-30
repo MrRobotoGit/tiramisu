@@ -151,7 +151,7 @@ func (m *MusicBrainz) SearchReleaseGroup(ctx context.Context, artist, title stri
 			score += 100
 		}
 		// On a tie a studio album wins, then any album: an interview or a single sharing
-		// the title has no edition to take a tracklist from.
+		// the title is the wrong record. A zero score never wins on its type alone.
 		kind := 0
 		if strings.EqualFold(rg.PrimaryType, "Album") {
 			kind = 1
@@ -159,7 +159,7 @@ func (m *MusicBrainz) SearchReleaseGroup(ctx context.Context, artist, title stri
 				kind = 2
 			}
 		}
-		if score > bestScore || (score == bestScore && kind > bestKind) {
+		if score > bestScore || (score > 0 && score == bestScore && kind > bestKind) {
 			bestScore, bestKind = score, kind
 			best = ReleaseGroup{
 				ID:     rg.ID,

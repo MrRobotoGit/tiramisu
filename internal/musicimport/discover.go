@@ -864,9 +864,8 @@ func (r *DiscoverRunner) replaceReaped(ctx context.Context, albums []reapedAlbum
 	}
 	if !r.Options.DryRun {
 		for _, album := range albums {
-			if _, ok := r.State.Replacements[album.rgID]; !ok {
-				r.State.Replacements[album.rgID] = pendingReplacement{Artist: album.artist, Title: album.title, ReleaseID: album.releaseID}
-			}
+			// A fresh reap restarts the count: the attempts belonged to the previous loss.
+			r.State.Replacements[album.rgID] = pendingReplacement{Artist: album.artist, Title: album.title, ReleaseID: album.releaseID}
 		}
 	}
 	queue := make([]string, 0, len(r.State.Replacements))
@@ -1272,6 +1271,10 @@ func (r *DiscoverRunner) importCandidate(ctx context.Context, cand candidate, su
 // mark records a non-failure outcome (no attempt counted).
 func (r *DiscoverRunner) mark(cand candidate, status discoveryStatus, reason string) {
 	r.State.setAlbumStatus(cand.RGID, cand.Artist, cand.Title, cand.Source, status, r.State.Albums[cand.RGID].Attempts, r.Options.MaxAttempts, reason)
+	// Any pass that files the album, or finds it filed, settles its pending replacement.
+	if (status == discoImported || status == discoPresent) && !r.Options.DryRun {
+		delete(r.State.Replacements, cand.RGID)
+	}
 }
 
 // markAttempt counts one attempt and lets the state park the album at the cap; it
