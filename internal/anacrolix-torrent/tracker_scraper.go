@@ -22,6 +22,8 @@ type trackerScraper struct {
 	t               *Torrent
 	lastAnnounce    trackerAnnounceResult
 	lookupTrackerIp func(*url.URL) ([]net.IP, error)
+	// Announces that failed in a row; only the Run goroutine touches it.
+	consecutiveFailures int
 }
 
 type torrentTrackerAnnouncer interface {
@@ -198,6 +200,23 @@ func (me *trackerScraper) canIgnoreInterval(notify *<-chan struct{}) bool {
 	}
 }
 
+// afterAnnounce records an announce outcome and returns the wait before the next one, and
+// whether wanting peers may shorten it. A failure's wait never is: a dead tracker would be hit
+// every minute by every torrent that lists it, exactly while the torrent is streaming.
+func (me *trackerScraper) afterAnnounce(ar trackerAnnounceResult) (interval time.Duration, shortenable bool) {
+	if ar.Err != nil {
+		me.consecutiveFailures++
+		return me.t.cl.config.failedAnnounceInterval(me.consecutiveFailures), false
+	}
+	me.consecutiveFailures = 0
+	// Make sure we don't announce for at least a minute since the last one.
+	interval = ar.Interval
+	if interval < time.Minute {
+		interval = time.Minute
+	}
+	return interval, true
+}
+
 func (me *trackerScraper) Run() {
 	defer me.announceStopped()
 
@@ -214,16 +233,14 @@ func (me *trackerScraper) Run() {
 		ar := me.announce(ctx, e)
 		// after first announce, get back to regular "none"
 		e = tracker.None
+		baseInterval, shortenable := me.afterAnnounce(ar)
+		ar.Interval = baseInterval // statusLine reports the real next announce
 		me.t.cl.lock()
 		me.lastAnnounce = ar
 		me.t.cl.unlock()
 
 	recalculate:
-		// Make sure we don't announce for at least a minute since the last one.
-		interval := ar.Interval
-		if interval < time.Minute {
-			interval = time.Minute
-		}
+		interval := baseInterval
 
 		me.t.cl.lock()
 		wantPeers := me.t.wantPeersEvent.C()
@@ -236,7 +253,7 @@ func (me *trackerScraper) Run() {
 		var reconsider <-chan struct{}
 		select {
 		case <-wantPeers:
-			if interval > time.Minute && me.canIgnoreInterval(&reconsider) {
+			if shortenable && interval > time.Minute && me.canIgnoreInterval(&reconsider) {
 				interval = time.Minute
 			}
 		default:
