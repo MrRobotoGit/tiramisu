@@ -323,7 +323,7 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		if existing != nil && existing != p {
 			diff := int64(current.Requests.GetCardinality()) + 1 - (int64(existing.uncancelledRequests()) - 1)
 			if !stealPermitted(p.needRequestUpdate, diff, p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived,
-				t.stealRequestGraceElapsed(req)) {
+				func() bool { return t.stealRequestGraceElapsed(req) }) {
 				continue
 			}
 			torrent.Add("requests stolen", 1)
