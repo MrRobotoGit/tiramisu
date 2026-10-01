@@ -302,15 +302,31 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 	// in the same loop can return decreasing values, causing mustRequest to panic
 	// with "too many outstanding requests".
 	maxReq := p.nominalMaxRequests()
+	// With the reserve, a full queue still takes requests due soon, up to urgentCap.
+	reserve := t.cl.config.RequestReserve
+	urgentCap := maxReq
+	if reserve {
+		urgentCap = maxRequests(urgentRequestCap(int(maxReq), int64(p.PeerMaxRequests)))
+	}
+	now := time.Now()
 	for {
 		if requestHeap.Len() == 0 {
 			break
 		}
 		numPending := maxRequests(current.Requests.GetCardinality() + current.Cancelled.GetCardinality())
-		if numPending >= maxReq {
+		if numPending >= urgentCap || (numPending >= maxReq && !reserve) {
 			break
 		}
 		req := heap.Pop(requestHeap)
+		limit := maxReq
+		if numPending >= maxReq {
+			// The heap orders by piece priority, not deadline: an urgent request can follow a
+			// non-urgent one, so a full queue skips the rest instead of stopping.
+			if !requestIsUrgent(t.pieceDeadlines[t.pieceIndexOfRequestIndex(req)], now) {
+				continue
+			}
+			limit = urgentCap
+		}
 		if cap(next.Requests.requestIndexes) != cap(orig) {
 			panic("changed")
 		}
@@ -326,6 +342,16 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 				func() bool { return t.stealRequestGraceElapsed(req) }) {
 				continue
 			}
+			if t.cl.config.PeakEwma {
+				now := time.Now()
+				stealerPeak, stealerOK := p.requestPeak.get(now)
+				holderPeak, holderOK := existing.requestPeak.get(now)
+				if !peakEwmaPermits(stealerPeak, stealerOK, int64(current.Requests.GetCardinality()),
+					holderPeak, holderOK, int64(existing.uncancelledRequests())) {
+					torrent.Add("steals vetoed by peak latency", 1)
+					continue
+				}
+			}
 			torrent.Add("requests stolen", 1)
 			t.cancelRequest(req)
 		}
@@ -334,10 +360,13 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		// request()), we just stop instead of panicking.
 		var reqMore bool
 		var reqErr error
-		reqMore, reqErr = p.request(req)
+		reqMore, reqErr = p.request(req, limit)
 		if reqErr != nil {
 			// nominalMaxRequests decreased — stop gracefully
 			break
+		}
+		if limit > maxReq {
+			torrent.Add("urgent requests over the limit", 1)
 		}
 		more = reqMore
 		if !more {

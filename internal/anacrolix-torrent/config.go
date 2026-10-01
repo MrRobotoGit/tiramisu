@@ -124,6 +124,26 @@ type ClientConfig struct {
 	// holder after it served the block does nothing: the block arrives twice and one copy is
 	// counted as ConnStats.ChunksReadWasted. Backported from upstream 23d8abf90 (#1095).
 	StealRequestGrace time.Duration
+	// AdaptivePipeline sizes each peer's request queue on its minimum request latency instead of
+	// a fixed 2s of data. On by default; TORRENT_ADAPTIVE_PIPELINE=0 disables it for a
+	// comparison run.
+	AdaptivePipeline bool
+	// PeakEwma vetoes a steal when the stealer, at its recent peak request-to-chunk latency and
+	// queue, would not finish the block sooner than the holder (peak-EWMA placement). Off by
+	// default until measured; TORRENT_PEAK_EWMA=1 enables it.
+	PeakEwma bool
+	// Gradient2 sizes each peer's request queue with Netflix's closed-loop Gradient2 limiter
+	// (average-RTT gradient, app-limited aware) instead of the fixed/adaptive target. On by
+	// default; TORRENT_GRADIENT2=0 disables it. It takes precedence over AdaptivePipeline.
+	Gradient2 bool
+	// Gradient2AIMD backs the Gradient2 limit off on a peer Reject of a request it held
+	// (TORRENT_GRADIENT2_AIMD=1). Gradient2Windowed feeds Gradient2 one median per ~1s window
+	// instead of every chunk (TORRENT_GRADIENT2_WINDOWED=1). Both act only with Gradient2 on.
+	Gradient2AIMD     bool
+	Gradient2Windowed bool
+	// RequestReserve lets a request due within 2s exceed a full queue by a reserved quarter of
+	// the limit (TORRENT_REQUEST_RESERVE=1).
+	RequestReserve bool
 
 	// User-provided Client peer ID. If not present, one is generated automatically.
 	PeerID string
@@ -281,6 +301,12 @@ func NewDefaultClientConfig() *ClientConfig {
 		AcceptPeerConnections:  true,
 		MaxUnverifiedBytes:     64 << 20,
 		StealRequestGrace:      stealRequestGraceFromEnv(),
+		AdaptivePipeline:       adaptivePipelineFromEnv(),
+		PeakEwma:               peakEwmaFromEnv(),
+		Gradient2:              gradient2FromEnv(),
+		Gradient2AIMD:          envFlag(gradient2AIMDEnvKey, gradient2AIMDEffective),
+		Gradient2Windowed:      envFlag(gradient2WindowedEnvKey, gradient2WindowedEffective),
+		RequestReserve:         envFlag(requestReserveEnvKey, requestReserveEffective),
 		DialRateLimiter:        rate.NewLimiter(10, 10),
 		PieceHashersPerTorrent: 2,
 	}
@@ -288,6 +314,11 @@ func NewDefaultClientConfig() *ClientConfig {
 		return func() ([]dht.Addr, error) { return dht.GlobalBootstrapAddrs(network) }
 	}
 	cc.PeriodicallyAnnounceTorrentsToDht = true
+	// Gradient2 takes precedence in nominalMaxRequests: report the adaptive pipeline as the
+	// fallback it then is, not as an active lever.
+	if cc.Gradient2 && cc.AdaptivePipeline {
+		adaptivePipelineEffective.Set("superseded by gradient2")
+	}
 	return cc
 }
 

@@ -61,6 +61,17 @@ type (
 		lastUsefulChunkReceived time.Time
 		lastChunkSent           time.Time
 
+		// requestLatency is the windowed minimum time from request to chunk, for the adaptive
+		// pipeline target. Guarded by t.cl's lock.
+		requestLatency windowedMin
+		// requestPeak is the decayed-maximum of the same latency, for the peak-EWMA steal veto.
+		// Guarded by t.cl's lock.
+		requestPeak peakLatency
+		// gradient2Limit, when Gradient2 is on, sizes the request queue from the closed-loop
+		// Netflix Gradient2 limiter. Lazily created. Guarded by t.cl's lock.
+		gradient2Limit *gradient2
+		// gradient2Window wraps gradient2Limit when Gradient2Windowed is on. Guarded by t.cl's lock.
+		gradient2Window *windowedGradient2
 		// Recent-throughput EWMA for outlier ejection (see maybeEjectOutlierPeer); unlike
 		// downloadRate()'s lifetime average, this reflects current behavior. Guarded by t.cl's lock.
 		ewmaRate         float64
@@ -392,7 +403,43 @@ var (
 
 // The actual value to use as the maximum outbound requests.
 // HACKER MODE V234: Smart Adaptive Pipeline (v1.22 "Brain")
+// gradient2State returns the peer's Gradient2 limit state, creating it on first use. Call under
+// t.cl's lock.
+func (cn *Peer) gradient2State() *gradient2 {
+	if cn.gradient2Limit == nil {
+		cn.gradient2Limit = newGradient2(gradient2EngineInitial, gradient2EngineMin, gradient2EngineMax)
+	}
+	return cn.gradient2Limit
+}
+
+// gradient2Windowed returns the windowed wrapper around the peer's Gradient2 state. Call under
+// t.cl's lock.
+func (cn *Peer) gradient2Windowed() *windowedGradient2 {
+	if cn.gradient2Window == nil {
+		cn.gradient2Window = newWindowedGradient2(cn.gradient2State())
+	}
+	return cn.gradient2Window
+}
+
+// gradient2Drop applies an AIMD back-off for a Reject, through the window when windowed. Call
+// under t.cl's lock.
+func (cn *Peer) gradient2Drop(now time.Time) {
+	cfg := cn.t.cl.config
+	if !cfg.Gradient2 || !cfg.Gradient2AIMD {
+		return
+	}
+	if cfg.Gradient2Windowed {
+		cn.gradient2Windowed().onDrop(now)
+	} else {
+		cn.gradient2State().onDrop()
+	}
+}
+
 func (cn *Peer) nominalMaxRequests() maxRequests {
+	// Gradient2 (closed loop, app-limited aware) takes precedence over the fixed/adaptive target.
+	if cn.t != nil && cn.t.cl.config.Gradient2 {
+		return maxRequests(clampGradient2Limit(cn.gradient2State().limit(), int64(cn.PeerMaxRequests)))
+	}
 	// 1. Calculate the Bandwidth-Delay Product (BDP) based on observed speed
 	expectingTime := int64(cn.totalExpectingTime())
 	if expectingTime == 0 {
@@ -402,8 +449,12 @@ func (cn *Peer) nominalMaxRequests() maxRequests {
 	}
 
 	// 2. Target Pipeline = (Chunks / Time) * LatencyTarget
-	// We use 2.0s as the target latency (aggressive streaming request timeout)
-	const targetLatency = 2 * time.Second
+	// We use 2.0s as the target latency (aggressive streaming request timeout), or with the
+	// adaptive pipeline twice the peer's minimum request latency.
+	targetLatency := fixedPipelineTarget
+	if cn.t != nil && cn.t.cl.config.AdaptivePipeline {
+		targetLatency = adaptiveTargetLatency(cn.requestLatency.get(time.Now()))
+	}
 	pipeline := cn._chunksReceivedWhileExpecting * int64(targetLatency) / expectingTime
 
 	// 3. Safety Cleanups (Min 2, Max 100 or PeerLimit)
@@ -487,14 +538,16 @@ func (cn *Peer) shouldRequest(r RequestIndex) error {
 	return nil
 }
 
-func (cn *Peer) request(r RequestIndex) (more bool, err error) {
+// request issues r unless the peer already holds limit requests. The caller passes the limit:
+// nominalMaxRequests, or the urgent reserve's cap.
+func (cn *Peer) request(r RequestIndex, limit maxRequests) (more bool, err error) {
 	if err := cn.shouldRequest(r); err != nil {
 		panic(err)
 	}
 	if cn.requestState.Requests.Contains(r) {
 		return true, nil
 	}
-	if maxRequests(cn.requestState.Requests.GetCardinality()) >= cn.nominalMaxRequests() {
+	if maxRequests(cn.requestState.Requests.GetCardinality()) >= limit {
 		return true, errors.New("too many outstanding requests")
 	}
 	cn.requestState.Requests.Add(r)
@@ -593,6 +646,9 @@ func runSafeExtraneous(f func()) {
 func (c *Peer) remoteRejectedRequest(r RequestIndex) bool {
 	if c.deleteRequest(r) {
 		c.decPeakRequests()
+		// Only a request the peer held counts as a drop: a Reject that acknowledges our own
+		// cancel (a steal, a seek) says nothing about the peer.
+		c.gradient2Drop(time.Now())
 	} else if !c.requestState.Cancelled.CheckedRemove(r) {
 		return false
 	}
@@ -676,6 +732,26 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 			if rs, ok := t.requestState[req]; ok {
 				warmupReqSentAt = rs.when
 				recordWarmupLatencySample = true
+			}
+		}
+		if (t.cl.config.AdaptivePipeline || t.cl.config.PeakEwma || t.cl.config.Gradient2) && c.requestState.Requests.Contains(req) {
+			if rs, ok := t.requestState[req]; ok {
+				now := time.Now()
+				d := now.Sub(rs.when)
+				if t.cl.config.AdaptivePipeline {
+					c.requestLatency.add(now, d)
+				}
+				if t.cl.config.PeakEwma {
+					c.requestPeak.add(now, d)
+				}
+				if cfg := t.cl.config; cfg.Gradient2 {
+					inflight := int(c.requestState.Requests.GetCardinality())
+					if cfg.Gradient2Windowed {
+						c.gradient2Windowed().onSample(now, d, inflight, false)
+					} else {
+						c.gradient2State().onSample(float64(d), inflight)
+					}
+				}
 			}
 		}
 		// Request has been satisfied.
