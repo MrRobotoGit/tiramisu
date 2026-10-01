@@ -67,6 +67,11 @@ type (
 		// requestPeak is the decayed-maximum of the same latency, for the peak-EWMA steal veto.
 		// Guarded by t.cl's lock.
 		requestPeak peakLatency
+		// requestMeanLatency is the mean (expAvgMeasurement) request-to-chunk latency, the peer's
+		// typical delivery time, sampled on every satisfied request regardless of which
+		// controller sizes the queue. The per-peer steal grace reads it. Lazily created. Guarded
+		// by t.cl's lock.
+		requestMeanLatency *expAvgMeasurement
 		// gradient2Limit, when Gradient2 is on, sizes the request queue from the closed-loop
 		// Netflix Gradient2 limiter. Lazily created. Guarded by t.cl's lock.
 		gradient2Limit *gradient2
@@ -734,10 +739,13 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 				recordWarmupLatencySample = true
 			}
 		}
-		if (t.cl.config.AdaptivePipeline || t.cl.config.PeakEwma || t.cl.config.Gradient2) && c.requestState.Requests.Contains(req) {
+		// The per-peer mean delivery latency is sampled on every satisfied request, whatever
+		// sizes the queue, so the per-peer steal grace works with Gradient2 off too.
+		if c.requestState.Requests.Contains(req) {
 			if rs, ok := t.requestState[req]; ok {
 				now := time.Now()
 				d := now.Sub(rs.when)
+				c.recordMeanLatency(d)
 				if t.cl.config.AdaptivePipeline {
 					c.requestLatency.add(now, d)
 				}

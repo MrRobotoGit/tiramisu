@@ -4,6 +4,7 @@ import (
 	"expvar"
 	"math"
 	"os"
+	"time"
 )
 
 // gradient2EnvKey overrides ClientConfig.Gradient2 for clients built from NewDefaultClientConfig.
@@ -116,6 +117,65 @@ func (g *gradient2) onSample(rtt float64, inflight int) int {
 	return g.limit()
 }
 
+// Gradient2PeerSnapshot is one peer's Gradient2 closed-loop state, for the dry run that has to
+// show the loop reacts to queueing before its ceiling is raised.
+type Gradient2PeerSnapshot struct {
+	Limit    int           `json:"limit"`
+	ShortRTT time.Duration `json:"short_rtt"`
+	LongRTT  time.Duration `json:"long_rtt"`
+	// Gradient is rttTolerance*longRTT/shortRTT clamped to [0.5,1]: below 1 the queue is building
+	// latency, at 1 the peer answers as fast as its baseline. It is the signal the dry run reads.
+	Gradient float64 `json:"gradient"`
+}
+
+// snapshot reports the peer's limiter state. Call under the client lock.
+func (g *gradient2) snapshot() Gradient2PeerSnapshot {
+	s := Gradient2PeerSnapshot{
+		Limit:    g.limit(),
+		ShortRTT: time.Duration(g.shortRTT),
+		LongRTT:  time.Duration(g.longRTT.get()),
+		Gradient: 1,
+	}
+	if g.shortRTT > 0 {
+		s.Gradient = math.Max(0.5, math.Min(1.0, gradient2RTTTolerance*g.longRTT.get()/g.shortRTT))
+	}
+	return s
+}
+
+// Gradient2Stats summarizes the connected peers' Gradient2 limiters for /metrics: how many run the
+// loop, how many are backing off (gradient < 1, i.e. the loop reacting to rising latency), and the
+// spread of limits. A dry run reads BackingOff and LimitMax to see the loop react before the
+// ceiling is raised.
+type Gradient2Stats struct {
+	Peers      int `json:"peers"`
+	BackingOff int `json:"backing_off"`
+	LimitMin   int `json:"limit_min"`
+	LimitMax   int `json:"limit_max"`
+}
+
+// Gradient2Stats snapshots the Gradient2 limiters of the current connections.
+func (t *Torrent) Gradient2Stats() (s Gradient2Stats) {
+	t.cl.rLock()
+	defer t.cl.rUnlock()
+	for c := range t.conns {
+		if c.gradient2Limit == nil {
+			continue
+		}
+		snap := c.gradient2Limit.snapshot()
+		if s.Peers == 0 || snap.Limit < s.LimitMin {
+			s.LimitMin = snap.Limit
+		}
+		if snap.Limit > s.LimitMax {
+			s.LimitMax = snap.Limit
+		}
+		if snap.Gradient < 1 {
+			s.BackingOff++
+		}
+		s.Peers++
+	}
+	return
+}
+
 // clampGradient2Limit caps the estimated limit by what the peer and the write buffer can hold,
 // and floors it at the engine minimum. PeerMaxRequests is the peer-advertised limit.
 func clampGradient2Limit(limit int, peerMax int64) int {
@@ -162,5 +222,9 @@ func (m *expAvgMeasurement) add(sample float64) float64 {
 }
 
 func (m *expAvgMeasurement) get() float64 { return m.value }
+
+// ready reports whether the measurement has seen its whole warmup window, so a consumer can tell
+// a representative average from a few samples.
+func (m *expAvgMeasurement) ready() bool { return m.count >= m.warmupWindow }
 
 func (m *expAvgMeasurement) update(f func(float64) float64) { m.value = f(m.value) }

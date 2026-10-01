@@ -38,11 +38,56 @@ func stealRequestGraceFromEnv() time.Duration {
 	return d
 }
 
+// peerGraceMin is both the floor of the per-peer grace and the ceiling for an urgent request: the
+// fixed value the Pi run measured as good. The per-peer grace may only extend it for a slow
+// holder, never shorten it, so a fast holder is not robbed any earlier than today. An urgent
+// request near the playhead must not wait a slow holder's full mean, but must not lose the grace
+// either: a zero grace would re-open the duplicate window the fixed value closed.
+const (
+	peerGraceMin = defaultStealRequestGrace
+	peerGraceMax = time.Second
+)
+
+// clampPeerGrace bounds a per-peer grace to [peerGraceMin, peerGraceMax].
+func clampPeerGrace(d time.Duration) time.Duration {
+	if d < peerGraceMin {
+		return peerGraceMin
+	}
+	if d > peerGraceMax {
+		return peerGraceMax
+	}
+	return d
+}
+
+// peerStealGrace returns how long req must stay outstanding with holder before another peer may
+// take it. It is the holder's own mean delivery latency, clamped: the grace may only grow past the
+// measured fixed value, for a slow holder, so a peer delivering on its normal schedule is not
+// robbed mid-delivery and its block is not duplicated. An urgent request is capped at that fixed
+// value instead. With no warmed estimate the configured fixed grace applies; a configured grace
+// <= 0 disables the check entirely (the upstream-comparator arm).
+func (t *Torrent) peerStealGrace(holder *Peer, urgent bool) time.Duration {
+	base := t.cl.config.StealRequestGrace
+	if base <= 0 {
+		return 0
+	}
+	grace := base
+	if holder != nil {
+		if d, ok := holder.meanLatency(); ok {
+			grace = clampPeerGrace(d)
+		}
+	}
+	if urgent && grace > peerGraceMin {
+		grace = peerGraceMin
+	}
+	return grace
+}
+
 // stealRequestGraceElapsed reports whether req has been outstanding with its current holder long
 // enough for another peer to take it. requestState.when is rewritten on every issue, so the grace
-// is per holder: each peer gets one uninterrupted attempt.
-func (t *Torrent) stealRequestGraceElapsed(req RequestIndex) bool {
-	grace := t.cl.config.StealRequestGrace
+// is per holder: each peer gets one uninterrupted attempt. holder is the peer currently holding
+// req; urgent marks a request whose piece carries a near playout deadline.
+func (t *Torrent) stealRequestGraceElapsed(req RequestIndex, holder *Peer, urgent bool) bool {
+	grace := t.peerStealGrace(holder, urgent)
 	if grace <= 0 {
 		return true
 	}

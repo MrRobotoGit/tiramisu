@@ -120,9 +120,12 @@ type ClientConfig struct {
 	MaxUnverifiedBytes int64
 	// Minimum age an outstanding request must reach before another peer may steal it; zero or
 	// negative disables the check. NewDefaultClientConfig sets 250ms (TORRENT_STEAL_REQUEST_GRACE
-	// overrides it). A steal is a Cancel on the wire, and a Cancel that reaches the
-	// holder after it served the block does nothing: the block arrives twice and one copy is
-	// counted as ConnStats.ChunksReadWasted. Backported from upstream 23d8abf90 (#1095).
+	// overrides it). When the holder has a warmed mean request-to-chunk latency, the grace is
+	// that mean clamped to [250ms, 1s] instead of this fixed value (peerStealGrace), so it can
+	// only extend for a slow holder; an urgent request is capped back at the fixed value, never
+	// exempted (a zero grace would re-open the duplicate window). A steal is a Cancel on the wire, and a Cancel that
+	// reaches the holder after it served the block does nothing: the block arrives twice and one
+	// copy is counted as ConnStats.ChunksReadWasted. Backported from upstream 23d8abf90 (#1095).
 	StealRequestGrace time.Duration
 	// AdaptivePipeline sizes each peer's request queue on its minimum request latency instead of
 	// a fixed 2s of data. On by default; TORRENT_ADAPTIVE_PIPELINE=0 disables it for a

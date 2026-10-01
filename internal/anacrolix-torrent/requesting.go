@@ -338,8 +338,9 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		existing := t.requestingPeer(req)
 		if existing != nil && existing != p {
 			diff := int64(current.Requests.GetCardinality()) + 1 - (int64(existing.uncancelledRequests()) - 1)
+			urgent := requestIsUrgent(t.pieceDeadlines[t.pieceIndexOfRequestIndex(req)], now)
 			if !stealPermitted(p.needRequestUpdate, diff, p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived,
-				func() bool { return t.stealRequestGraceElapsed(req) }) {
+				func() bool { return t.stealRequestGraceElapsed(req, existing, urgent) }) {
 				continue
 			}
 			if t.cl.config.PeakEwma {
@@ -353,6 +354,13 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 				}
 			}
 			torrent.Add("requests stolen", 1)
+			// Split by urgency so the dry run can see where steals land before judging whether
+			// the per-peer grace helps or hurts.
+			if urgent {
+				torrent.Add("requests stolen urgent", 1)
+			} else {
+				torrent.Add("requests stolen non-urgent", 1)
+			}
 			t.cancelRequest(req)
 		}
 		// V255: Use request() directly instead of mustRequest() to handle BDP drift gracefully.

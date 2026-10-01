@@ -21,6 +21,38 @@ type PeerTransportStats struct {
 	ChurnUTP   int64 `json:"churn_utp"`
 }
 
+// Gradient2Stats aggregates the closed-loop limiters across active torrents. The dry run that
+// has to show the loop reacts to queueing before its ceiling is raised reads BackingOff (peers
+// whose latency gradient has fallen below 1) and LimitMax (whether peers still pin the ceiling).
+type Gradient2Stats struct {
+	Peers      int `json:"peers"`
+	BackingOff int `json:"backing_off"`
+	LimitMin   int `json:"limit_min"`
+	LimitMax   int `json:"limit_max"`
+}
+
+// CollectGradient2Stats sums the per-torrent Gradient2 view over every active torrent.
+func CollectGradient2Stats() (s Gradient2Stats) {
+	for _, tr := range ListActiveTorrent() {
+		if tr == nil || tr.Torrent == nil {
+			continue
+		}
+		snap := tr.Torrent.Gradient2Stats()
+		if snap.Peers == 0 {
+			continue
+		}
+		if s.Peers == 0 || snap.LimitMin < s.LimitMin {
+			s.LimitMin = snap.LimitMin
+		}
+		if snap.LimitMax > s.LimitMax {
+			s.LimitMax = snap.LimitMax
+		}
+		s.Peers += snap.Peers
+		s.BackingOff += snap.BackingOff
+	}
+	return
+}
+
 // CollectPeerTransportStats sums the per-transport peer view over every active torrent.
 func CollectPeerTransportStats() (s PeerTransportStats) {
 	for _, tr := range ListActiveTorrent() {
