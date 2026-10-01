@@ -1241,6 +1241,15 @@ const (
 	hedgeNoBaselineCeiling = 4 * time.Second
 )
 
+// hedgeThreshold is how long a request may stay unanswered before it is hedged: the measured p95
+// when there is one, even above the ceiling (spec §3 decision 1), otherwise the stateless ceiling.
+func hedgeThreshold(p95 time.Duration, ok bool) (time.Duration, string) {
+	if ok {
+		return p95, "p95"
+	}
+	return hedgeNoBaselineCeiling, "ceiling"
+}
+
 // hedgeWatchdog periodically scans in-flight requests within whichever region is currently
 // active (warmup, or playback pressure - see SetWarmupActive/SetPlaybackPressure) and fires a
 // duplicate request to a next-best peer for any exceeding the observed p95 for its size (or the
@@ -1344,16 +1353,8 @@ func (t *Torrent) checkAndFireHedges() {
 		if pieceIdx < begin || pieceIdx >= end {
 			continue // outside the warmed file's piece range - not a warmup-region request
 		}
-		threshold, ok := t.warmupP95(int64(req.Length))
-		trigger := "p95"
-		if !ok {
-			// No trustworthy latency baseline (dead-swarm cold start, or resumed torrent
-			// whose warmup never ran): fall back to the stateless absolute ceiling.
-			// Deliberately NOT a clamp - when p95 exists it always wins, even above the
-			// ceiling (see spec §3 decision 1).
-			threshold = hedgeNoBaselineCeiling
-			trigger = "ceiling"
-		}
+		p95, ok := t.warmupP95(int64(req.Length))
+		threshold, trigger := hedgeThreshold(p95, ok)
 		if now.Sub(rs.when) < threshold {
 			continue
 		}

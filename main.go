@@ -1228,6 +1228,10 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	// puts nothing in its place: demand fetch plus the existing read-ahead is the
 	// whole policy. Decided once here rather than special-cased at each warmup site.
 	usesWarmup := pathUsesSSDWarmup(n.vMeta.Path)
+	// isAudio: audio projections resolve their identity from the registry, which needs no
+	// torrent, so the pump can start while the wake runs behind it instead of serializing
+	// activation before the first read (see the wake branch).
+	isAudio := isAudioSectionPath(n.vMeta.Path)
 
 	headReady := false
 	tailReady := false
@@ -1240,7 +1244,9 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		magnetCandidate = "magnet:?xt=urn:btih:" + hashStr
 	}
 
-	// Async Wake when head warmup is ready (Open returns instantly); sync Wake otherwise.
+	// Async Wake when head warmup is ready (Open returns instantly), and for audio, whose
+	// identity comes from the registry and whose pump can start while the wake runs behind it;
+	// sync Wake otherwise.
 	wake := n.wake
 	if wake == nil && nativeBridge != nil {
 		wake = nativeBridge.Wake
@@ -1252,8 +1258,20 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 			// a background context lets the wake finish for the reader that is about
 			// to open the same path.
 			safeGo(func() {
-				_ = wake(context.Background(), magnetCandidate, urlFileIdx)
+				if err := wake(context.Background(), magnetCandidate, urlFileIdx); err != nil {
+					logger.Printf("[VFS] background activation failed for %s: %v", n.vMeta.Path, err)
+				}
 			})
+		} else if isAudio {
+			// Audio has no SSD head to serve the first reads, so an activation that fails at
+			// once (semaphore exhausted mid-scan) must fail Open as the synchronous path does;
+			// a slower one keeps running behind the pump.
+			if err := vfs.StartWake(func(c context.Context) error {
+				return wake(c, magnetCandidate, urlFileIdx)
+			}, audioWakeGrace, logger.Printf); err != nil {
+				logger.Printf("[VFS] activation failed for %s: %v", n.vMeta.Path, err)
+				return nil, 0, syscall.EIO
+			}
 		} else {
 			if ctx.Err() != nil {
 				return nil, 0, syscall.EINTR
@@ -2316,6 +2334,10 @@ func forceTorrentWarmupActive(hash string, fileID int) {
 }
 
 // safeGo runs a function in a new goroutine with panic recovery.
+// audioWakeGrace is how long Open waits for an audio activation before letting it run behind
+// the pump: long enough to catch an immediate failure, short enough to keep the start fast.
+const audioWakeGrace = 300 * time.Millisecond
+
 func safeGo(fn func()) {
 	go func() {
 		defer func() {
