@@ -102,7 +102,30 @@ func Do(ctx context.Context, client *http.Client, req *http.Request) (*http.Resp
 			attemptReq.Body = body
 		}
 
+		st := hostStatFor(req.URL.Host)
+		st.requests.Add(1)
+		if attempt > 0 {
+			st.retries.Add(1)
+		}
+		st.observeInflight(st.inflight.Add(1))
+
 		resp, err := client.Do(attemptReq)
+		st.inflight.Add(-1)
+		if err != nil {
+			st.failures.Add(1)
+		} else {
+			switch {
+			case resp.StatusCode == http.StatusTooManyRequests:
+				st.err429.Add(1)
+			case resp.StatusCode >= 500:
+				st.err5xx.Add(1)
+			case resp.StatusCode >= 400:
+				st.err4xx.Add(1)
+			default:
+				st.ok2xx.Add(1)
+			}
+		}
+
 		if err != nil {
 			lastErr = err
 			continue
