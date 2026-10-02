@@ -1,6 +1,7 @@
 package torrstor
 
 import (
+	"sync/atomic"
 	"time"
 )
 
@@ -64,7 +65,7 @@ func (r *Reader) sampleConsumption(n int) {
 	rate := r.deadlineRate
 	due := now.Sub(r.deadlineSetAt) >= deadlineUpdateInterval
 	offset := r.offset
-	readahead := r.readahead
+	readahead := atomic.LoadInt64(&r.readahead)
 	r.mu.Unlock()
 
 	if !due {
@@ -99,8 +100,23 @@ func (r *Reader) pushDeadlines(offset, readahead int64, rate float64, now time.T
 	if window := int(readahead/pieceLen) + 2; window < n {
 		n = window
 	}
+	// The schedule stays inside this file: clearDeadlines only clears the file's own range, so a
+	// window spilling into the next file of a pack would leave deadlines nobody removes.
+	fileFirst, fileCount := r.filePieceRange()
+	if last := fileFirst + fileCount - 1; first+n-1 > last {
+		n = last - first + 1
+	}
 	if n <= 0 {
 		return false
+	}
+	// Outside the window, deadlines from older schedules would otherwise remain: behind the playhead,
+	// or ahead when the window shrinks. Earlier than the current ones, they rank first in the request
+	// order and use up the storage capacity before the pieces ahead are reached.
+	if first > fileFirst {
+		t.ClearStreamDeadlinesRange(fileFirst, first-fileFirst)
+	}
+	if end := first + n; end < fileFirst+fileCount {
+		t.ClearStreamDeadlinesRange(end, fileFirst+fileCount-end)
 	}
 	t.SetStreamDeadlines(first, n, firstDue, interval)
 	return true
