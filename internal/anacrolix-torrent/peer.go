@@ -591,6 +591,9 @@ func (me *Peer) cancel(r RequestIndex) {
 // Sets a reason to update requests, and if there wasn't already one, handle it.
 func (cn *Peer) updateRequests(reason string) {
 	if cn.needRequestUpdate != "" {
+		// An update left pending by the rebuild debounce runs only when the writer wakes: without
+		// this nudge nothing wakes it until the keepalive, and the peer sits idle for 30s.
+		cn.handleUpdateRequests()
 		return
 	}
 	cn.needRequestUpdate = reason
@@ -649,16 +652,23 @@ func runSafeExtraneous(f func()) {
 
 // Returns true if it was valid to reject the request.
 func (c *Peer) remoteRejectedRequest(r RequestIndex) bool {
+	// The update after a refusal must not add requests to this peer; after the ack of our own
+	// cancel (a steal, a seek) it must.
+	reason := "Peer.remoteRejectedRequest"
 	if c.deleteRequest(r) {
 		c.decPeakRequests()
 		// Only a request the peer held counts as a drop: a Reject that acknowledges our own
 		// cancel (a steal, a seek) says nothing about the peer.
 		c.gradient2Drop(time.Now())
-	} else if !c.requestState.Cancelled.CheckedRemove(r) {
+	} else if c.requestState.Cancelled.CheckedRemove(r) {
+		reason = "Peer.cancel"
+	} else {
 		return false
 	}
-	if c.isLowOnRequests() {
-		c.updateRequests("Peer.remoteRejectedRequest")
+	// An acked cancel frees a slot even while another request is still in flight; waiting for the
+	// queue to empty would hold the new requests until that chunk arrives.
+	if c.isLowOnRequests() || reason == "Peer.cancel" {
+		c.updateRequests(reason)
 	}
 	c.decExpectedChunkReceive(r)
 	return true
