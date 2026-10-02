@@ -23,11 +23,18 @@ type (
 )
 
 func (t *Torrent) requestStrategyPieceOrderState(i int) requestStrategy.PieceRequestOrderState {
+	prio := t.piece(i).purePriority()
+	// A deadline ranks a piece first, and with a storage cap every piece scanned uses up capacity:
+	// on a piece not wanted or already complete it can only starve the pieces actually needed.
+	var deadline int64
+	if prio != PiecePriorityNone && !t.pieceComplete(i) {
+		deadline = t.pieceDeadlines[i]
+	}
 	return requestStrategy.PieceRequestOrderState{
-		Priority:     t.piece(i).purePriority(),
+		Priority:     prio,
 		Partial:      t.piecePartiallyDownloaded(i),
 		Availability: t.piece(i).availability(),
-		Deadline:     t.pieceDeadlines[i],
+		Deadline:     deadline,
 	}
 }
 
