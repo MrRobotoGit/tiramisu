@@ -1834,8 +1834,8 @@ func (t *Torrent) AvailableRange(off, max int64, responsive bool) (avail int64) 
 		}
 
 		pieceIdx := pieceIndex(req.Index)
-		pieceOffset := t.requestOffset(req)
-		pieceLen := t.info.PieceLength
+		pieceOffset := int64(pieceIdx) * t.info.PieceLength
+		pieceLen := int64(t.pieceLength(pieceIdx))
 
 		// If piece is complete, we can serve the rest of it (or up to max)
 		if t.pieceComplete(pieceIdx) {
