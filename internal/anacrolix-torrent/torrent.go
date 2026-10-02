@@ -2073,7 +2073,13 @@ func (t *Torrent) updatePiecePriorityNoTriggers(piece pieceIndex) (pendingChange
 }
 
 func (t *Torrent) updatePiecePriority(piece pieceIndex, reason string) {
-	if t.updatePiecePriorityNoTriggers(piece) && !t.disableTriggers {
+	changed := t.updatePiecePriorityNoTriggers(piece)
+	if changed && !t._pendingPieces.Contains(uint32(piece)) {
+		// Nothing wants the piece any more (the reader moved away): its outstanding requests only
+		// fill the peers' pipelines, delaying the pieces now wanted by a whole queue drain.
+		t.cancelRequestsForPiece(piece)
+	}
+	if changed && !t.disableTriggers {
 		t.onPiecePendingTriggers(piece, reason)
 	}
 	t.updatePieceRequestOrderPiece(piece)
