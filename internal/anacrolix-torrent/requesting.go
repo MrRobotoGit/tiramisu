@@ -85,6 +85,42 @@ type desiredPeerRequests struct {
 	requestIndexes []RequestIndex
 	peer           *Peer
 	pieceStates    []requestStrategy.PieceRequestOrderState
+	// Chunk under each reader's position, by piece; set once per request update.
+	readerCursors map[pieceIndex]RequestIndex
+}
+
+// readerCursors maps each piece holding a reader position to the chunk at that position. Call
+// with the client lock held: it guards the readers' positions.
+func (t *Torrent) readerCursors() map[pieceIndex]RequestIndex {
+	if len(t.readers) == 0 || !t.haveInfo() {
+		return nil
+	}
+	m := make(map[pieceIndex]RequestIndex, len(t.readers))
+	for r := range t.readers {
+		abs := r.offset + r.pos
+		if abs < 0 || abs >= t.length() {
+			continue
+		}
+		req, ok := t.offsetRequest(abs)
+		if !ok {
+			continue
+		}
+		ri := t.requestIndexFromRequest(req)
+		piece := pieceIndex(req.Index)
+		if cur, ok := m[piece]; !ok || ri < cur {
+			m[piece] = ri
+		}
+	}
+	return m
+}
+
+// chunkRank orders chunks of one piece for a streaming reader: from the reader's position onwards
+// first, then the chunks before it.
+func (p *desiredPeerRequests) chunkRank(piece pieceIndex, r RequestIndex) uint64 {
+	if cur, ok := p.readerCursors[piece]; ok && r < cur {
+		return 1<<32 + uint64(r)
+	}
+	return uint64(r)
 }
 
 func (p *desiredPeerRequests) lessByValue(leftRequest, rightRequest RequestIndex) bool {
@@ -164,6 +200,10 @@ func (p *desiredPeerRequests) lessByValue(leftRequest, rightRequest RequestIndex
 	} else {
 		ml = ml.Int(t.pieceRequestOrder[leftPieceIndex], t.pieceRequestOrder[rightPieceIndex])
 	}
+	// Within a piece, chunks in order from the reader's position: a streaming reader can only use
+	// a contiguous run from there, so a piece filled in arbitrary order serves its first bytes
+	// only when nearly all of it has arrived.
+	ml = ml.Uint64(p.chunkRank(leftPieceIndex, leftRequest), p.chunkRank(rightPieceIndex, rightRequest))
 	return ml.Less()
 }
 
@@ -188,6 +228,7 @@ func (p *Peer) getDesiredRequestState() (desired desiredRequestState) {
 		peer:           p,
 		pieceStates:    t.requestPieceStates,
 		requestIndexes: t.requestIndexes,
+		readerCursors:  t.readerCursors(),
 	}
 	// Caller-provided allocation for roaring bitmap iteration.
 	var it typedRoaring.Iterator[RequestIndex]
