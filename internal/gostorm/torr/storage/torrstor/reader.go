@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -152,7 +153,7 @@ func (r *Reader) SetReadahead(length int64) {
 	if r.isUse {
 		r.Reader.SetReadahead(length)
 	}
-	r.readahead = length
+	atomic.StoreInt64(&r.readahead, length) // AdjustRA writes it without mu
 }
 
 func (r *Reader) Offset() int64 {
@@ -162,7 +163,7 @@ func (r *Reader) Offset() int64 {
 }
 
 func (r *Reader) Readahead() int64 {
-	return r.readahead
+	return atomic.LoadInt64(&r.readahead)
 }
 
 func (r *Reader) Close() {
@@ -183,6 +184,9 @@ func (r *Reader) Close() {
 		r.Reader.Close()
 	}
 	safeGo(func() {
+		// Serialised with cleanPieces: both rebuild the shared pieceInRange bitmap.
+		r.cache.muRemove.Lock()
+		defer r.cache.muRemove.Unlock()
 		r.cache.getRemPieces()
 	})
 }
@@ -201,7 +205,7 @@ func (r *Reader) getReaderPiece() int {
 func (r *Reader) getReaderRAHPiece() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.getPieceNum(r.offset + r.readahead)
+	return r.getPieceNum(r.offset + atomic.LoadInt64(&r.readahead))
 }
 
 func (r *Reader) getPieceNum(offset int64) int {
@@ -283,7 +287,7 @@ func (r *Reader) resume() {
 		// Mark in use before restoring readahead: SetReadahead only propagates while in use, so
 		// restoring it in the other order leaves the underlying reader parked at zero.
 		r.isUse = true
-		r.SetReadahead(r.readahead)
+		r.SetReadahead(atomic.LoadInt64(&r.readahead))
 		r.cache.activeReaders.Add(1)
 	}
 }
