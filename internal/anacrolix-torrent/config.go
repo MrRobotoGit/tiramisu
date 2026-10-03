@@ -136,12 +136,13 @@ type ClientConfig struct {
 	// default until measured; TORRENT_PEAK_EWMA=1 enables it.
 	PeakEwma bool
 	// Gradient2 sizes each peer's request queue with Netflix's closed-loop Gradient2 limiter
-	// (average-RTT gradient, app-limited aware) instead of the fixed/adaptive target. On by
-	// default; TORRENT_GRADIENT2=0 disables it. It takes precedence over AdaptivePipeline.
+	// (average-RTT gradient, app-limited aware) instead of the fixed/adaptive target. Off by
+	// default; TORRENT_GRADIENT2=1 enables it. When on it takes precedence over AdaptivePipeline.
 	Gradient2 bool
 	// Gradient2AIMD backs the Gradient2 limit off on a peer Reject of a request it held
-	// (TORRENT_GRADIENT2_AIMD=1). Gradient2Windowed feeds Gradient2 one median per ~1s window
-	// instead of every chunk (TORRENT_GRADIENT2_WINDOWED=1). Both act only with Gradient2 on.
+	// (TORRENT_GRADIENT2_AIMD=1; off by default). Gradient2Windowed feeds Gradient2 one median per
+	// ~1s window instead of every chunk; it is on by default and TORRENT_GRADIENT2_WINDOWED=0
+	// restores the per-chunk sampler. Both act only with Gradient2 on.
 	Gradient2AIMD     bool
 	Gradient2Windowed bool
 	// RequestReserve lets a request due within 2s exceed a full queue by a reserved quarter of
@@ -308,7 +309,7 @@ func NewDefaultClientConfig() *ClientConfig {
 		PeakEwma:               peakEwmaFromEnv(),
 		Gradient2:              gradient2FromEnv(),
 		Gradient2AIMD:          envFlag(gradient2AIMDEnvKey, gradient2AIMDEffective),
-		Gradient2Windowed:      envFlag(gradient2WindowedEnvKey, gradient2WindowedEffective),
+		Gradient2Windowed:      gradient2WindowedFromEnv(),
 		RequestReserve:         envFlag(requestReserveEnvKey, requestReserveEffective),
 		DialRateLimiter:        rate.NewLimiter(10, 10),
 		PieceHashersPerTorrent: 2,

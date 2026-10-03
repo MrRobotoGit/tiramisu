@@ -8,15 +8,18 @@ import (
 	"time"
 )
 
-// Opt-in scheduling levers adapted from Netflix concurrency-limits, each behind its own variable
-// so it can be measured on its own. All are off by default.
+// Scheduling levers adapted from Netflix concurrency-limits, each behind its own variable so it
+// can be measured on its own. Gradient2Windowed is on by default: the windowed sampler is the mode
+// the reference uses, and the per-chunk sampler does not control a shared bottleneck (measured on
+// the local simulator 2026-10-02). AIMD and the request reserve remain opt-in.
 const (
 	// TORRENT_GRADIENT2_AIMD: a peer Reject of a request it held backs the Gradient2 limit off
 	// (AIMDLimit's drop rule; Gradient2Limit ignores didDrop). AIMD's timeout is not ported: a
 	// chunk that arrives late is a slow success, and Gradient2's gradient already answers latency.
 	gradient2AIMDEnvKey = "TORRENT_GRADIENT2_AIMD"
 	// TORRENT_GRADIENT2_WINDOWED: Gradient2 is fed one percentile per window (WindowedLimit with a
-	// PercentileSampleWindow) instead of every 16KB chunk.
+	// PercentileSampleWindow) instead of every 16KB chunk. On by default; set it to "0" to go back
+	// to the per-chunk sampler for a comparison run.
 	gradient2WindowedEnvKey = "TORRENT_GRADIENT2_WINDOWED"
 	// TORRENT_REQUEST_RESERVE: requests due soon may exceed a full queue by a reserved share
 	// (AbstractPartitionedLimiter's guaranteed partition).
@@ -28,6 +31,29 @@ var (
 	gradient2WindowedEffective = expvar.NewString("gradient2Windowed")
 	requestReserveEffective    = expvar.NewString("requestReserve")
 )
+
+// defaultGradient2Windowed is on by decision from the 2026-10-02 simulator run: the per-chunk
+// sampler left a shared 10MB/s tunnel with 604 losses and a 3.3MB queue; the windowed sampler with
+// 0 losses and a 0.9MB queue, and faster. The reference Gradient2Limit is window-driven.
+const defaultGradient2Windowed = true
+
+// gradient2WindowedFromEnv overrides the default for clients built from NewDefaultClientConfig.
+// TORRENT_GRADIENT2_WINDOWED=0 restores the per-chunk sampler for a comparison run.
+func gradient2WindowedFromEnv() bool {
+	on := defaultGradient2Windowed
+	switch os.Getenv(gradient2WindowedEnvKey) {
+	case "0", "false":
+		on = false
+	case "1", "true":
+		on = true
+	}
+	if on {
+		gradient2WindowedEffective.Set("on")
+	} else {
+		gradient2WindowedEffective.Set("off")
+	}
+	return on
+}
 
 // envFlag reads an opt-in "1"/"true" variable and publishes its effective state.
 func envFlag(key string, effective *expvar.String) bool {

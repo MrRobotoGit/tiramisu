@@ -8,14 +8,15 @@ import (
 )
 
 // gradient2EnvKey overrides ClientConfig.Gradient2 for clients built from NewDefaultClientConfig.
-// On by default; TORRENT_GRADIENT2=0 switches it off for a comparison run.
+// Off by default; TORRENT_GRADIENT2=1 switches it on for a comparison run.
 const gradient2EnvKey = "TORRENT_GRADIENT2"
 
-// defaultGradient2 is on by decision, not by a paired measurement: it gave the lowest duplicate
-// blocks in the sessions run (4.2-4.4%), its stalls were not conclusive (one session worse than
-// the alternatives), and the peak rate observed stayed near 32 MB/s, attributed to the
-// 32-request cap per peer.
-const defaultGradient2 = true
+// defaultGradient2 is off by decision after the 2026-10-02 local-simulator run: against the
+// adaptive BDP pipeline, G2 (windowed or per-chunk, any cap) produced ~0.3 stalls >1s per mixed
+// swarm run, doubled the worst read, and 3-6x the cancellations, with no throughput win; the
+// lossy-tunnel behaviour was not fixed by the Netflix minLimit either. Off until the per-peer
+// choke/queue mechanism is understood and measured.
+const defaultGradient2 = false
 
 var gradient2Effective = expvar.NewString("gradient2")
 
@@ -56,13 +57,12 @@ const (
 	gradient2Warmup       = 10
 	gradient2RTTTolerance = 1.5
 
-	// Engine bounds: start where the current pipeline starts, allow shallow peers to be shallow,
-	// and keep the ceiling near the depth the queue actually lives at. Netflix's 200 is a server
-	// concurrency bound; here a high ceiling lets Gradient2 grow the pipeline on a low-latency
-	// swarm, which measured as more overlap and more steals/cancels than the adaptive target.
+	// Engine bounds: start where the current pipeline starts, allow shallow peers to be shallow.
+	// The ceiling must cover a distant peer's bandwidth-delay product: at 32, a fast peer 200ms
+	// away was held to half its speed. Below every common client's reqq (250-512).
 	gradient2EngineInitial = 16
 	gradient2EngineMin     = 2
-	gradient2EngineMax     = 32
+	gradient2EngineMax     = 128
 )
 
 // gradient2 is the per-peer limit state. Not safe for concurrent use: call under t.cl's lock.
