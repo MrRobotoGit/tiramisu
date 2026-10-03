@@ -521,10 +521,13 @@ func streamRange(ctx context.Context, hash string, fileID int, offset, length in
 	return nil
 }
 
-// fetchFillStep is how much the background fill gathers before reporting progress. Sized around
-// a torrent piece: smaller steps report nothing earlier (data lands piece by piece) and only
-// multiply the caller's re-cache work.
-var fetchFillStep = 4 << 20
+// The background fill reports progress in steps that start at fetchFillFirstStep and double up to
+// fetchFillStep. Chunks now arrive in order from the read position, so the reads right after a
+// miss (a seek) need small first steps; later steps grow to bound the caller's re-cache copies.
+var (
+	fetchFillFirstStep = 256 << 10
+	fetchFillStep      = 4 << 20
+)
 
 // FetchAhead fills buf with [offset, offset+len(buf)) but returns as soon as the first
 // len(dest) bytes are copied into dest. A blocking FUSE read needs one FUSE block, not the
@@ -603,11 +606,13 @@ func (c *NativeClient) FetchAhead(hash string, fileID int, offset int64, buf, de
 		}
 
 		total := n
+		step := min(fetchFillFirstStep, fetchFillStep)
 		for total < len(buf) {
-			end := total + fetchFillStep
+			end := total + step
 			if end > len(buf) {
 				end = len(buf)
 			}
+			step = min(step*2, fetchFillStep)
 			m, stepErr := io.ReadFull(pr, buf[total:end])
 			total += m
 			if stepErr != nil {
