@@ -1282,7 +1282,16 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 			// return (and release its semaphore token) instead of running to the
 			// metadata timeout detached.
 			activated := make(chan error, 1)
-			go func() { activated <- wake(ctx, magnetCandidate, urlFileIdx) }()
+			go func() {
+				// A panicking activation must fail the Open, not take the process down.
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Printf("[PANIC] wake goroutine recovered for %s: %v\n%s", magnetCandidate, r, debug.Stack())
+						activated <- fmt.Errorf("activation panicked: %v", r)
+					}
+				}()
+				activated <- wake(ctx, magnetCandidate, urlFileIdx)
+			}()
 			select {
 			case err := <-activated:
 				if err != nil {

@@ -126,19 +126,26 @@ func (c *NativeClient) Wake(ctx context.Context, magnetUrl string, fileIdx int) 
 
 	// Wait for metadata
 	if t != nil {
-		if t.Torrent != nil && t.Torrent.Info() == nil {
+		// One synchronised snapshot: the wrapper nils its torrent on drop, so reading the
+		// field repeatedly around a wait of up to 45s races with Close().
+		tor := t.UnderlyingTorrent()
+		if tor != nil && tor.Info() == nil {
 			// Metadata NOT ready yet - wait with 45s timeout (Resilience)
 			timer := time.NewTimer(45 * time.Second)
 			defer timer.Stop()
 
 			select {
-			case <-t.Torrent.GotInfo():
+			case <-tor.GotInfo():
 				// Reported only here, where the metainfo demonstrably came from the swarm.
 				// Below it may just as well have been injected from the DB, which says
 				// nothing about whether anybody is still sharing the release.
 				if ReachabilityOutcome != nil {
 					ReachabilityOutcome(hash, true)
 				}
+			case <-tor.Closed():
+				// Dropped while waiting: metadata will never arrive, so stop early
+				// instead of holding the semaphore token for the full 45s.
+				return fmt.Errorf("torrent closed while waiting for metadata: %s", hash)
 			case <-timer.C:
 				// Not reported: the FUSE Open that called this registered a session
 				// first, and that session condemns once when it closes. Reporting here
@@ -154,8 +161,8 @@ func (c *NativeClient) Wake(ctx context.Context, magnetUrl string, fileIdx int) 
 			}
 		}
 		pieceLenKB := 0
-		if t.Torrent != nil {
-			if info := t.Torrent.Info(); info != nil {
+		if tor != nil {
+			if info := tor.Info(); info != nil {
 				pieceLenKB = int(info.PieceLength) / 1024
 			}
 		}

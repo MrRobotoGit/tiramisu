@@ -109,7 +109,13 @@ func NewTorrent(spec *torrent.TorrentSpec, bt *BTServer) (*Torrent, error) {
 }
 
 func (t *Torrent) WaitInfo() bool {
-	if t == nil || t.Torrent == nil {
+	if t == nil {
+		return false
+	}
+	// Snapshot the anacrolix torrent once: drop() nils t.Torrent under muTorrent, so
+	// rereading the field inside the select below can dereference nil.
+	tor := t.UnderlyingTorrent()
+	if tor == nil {
 		return false
 	}
 
@@ -118,17 +124,44 @@ func (t *Torrent) WaitInfo() bool {
 	defer tm.Stop()
 
 	select {
-	case <-t.Torrent.GotInfo():
-		if t.bt != nil && t.bt.storage != nil {
-			t.cache = t.bt.storage.GetCache(t.Hash())
-			t.cache.SetTorrent(t.Torrent)
-		}
-		return true
+	case <-tor.GotInfo():
+		return t.attachCache(tor)
 	case <-t.closed:
 		return false
 	case <-tm.C:
 		return false
 	}
+}
+
+// attachCache binds the storage cache to the anacrolix torrent. A nil cache means the
+// torrent was dropped while WaitInfo was blocked: CloseHash removed it from storage, so
+// the torrent is not usable and the caller must treat it as unavailable.
+func (t *Torrent) attachCache(tor *torrent.Torrent) bool {
+	if t == nil {
+		return false
+	}
+	if t.bt == nil || t.bt.storage == nil {
+		return true
+	}
+	cache := t.bt.storage.GetCache(tor.InfoHash())
+	if cache == nil {
+		return false
+	}
+	t.cache = cache
+	cache.SetTorrent(tor)
+	return true
+}
+
+// UnderlyingTorrent returns the anacrolix torrent this wrapper drives, or nil once the
+// wrapper has been closed. It takes muTorrent internally and must not be called with
+// muTorrent already held (the mutex is not reentrant).
+func (t *Torrent) UnderlyingTorrent() *torrent.Torrent {
+	if t == nil {
+		return nil
+	}
+	t.muTorrent.Lock()
+	defer t.muTorrent.Unlock()
+	return t.Torrent
 }
 
 func (t *Torrent) GotInfo() bool {
