@@ -162,8 +162,12 @@ func (bt *BTServer) Connect() error {
 	// V227: InitApiHelper takes btsMu.Lock — must be called OUTSIDE bt.mu
 	// to prevent AB/BA deadlock with SetSettings (btsMu → bt.mu)
 	InitApiHelper(bt)
+	// A ticker of a failed attempt would outlive a successful retry: nothing closes its stop.
+	if err != nil {
+		return err
+	}
 	go bt.StartTicker()
-	return err
+	return nil
 }
 
 // V143-Audit: StartTicker runs a central heartbeat for all torrents
@@ -432,6 +436,13 @@ func (bt *BTServer) configureProxy() error {
 	}
 
 	return nil
+}
+
+// clientAndStorage reads the fields that Connect and Disconnect reassign under bt.mu.
+func (bt *BTServer) clientAndStorage() (*torrent.Client, *torrstor.Storage) {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+	return bt.client, bt.storage
 }
 
 func (bt *BTServer) GetTorrent(hash torrent.InfoHash) *Torrent {

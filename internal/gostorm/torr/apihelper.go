@@ -446,10 +446,33 @@ func SetSettings(set *sets.BTSets) {
 
 	// Connect() calls InitApiHelper() which acquires btsMu.Lock() internally.
 	// Do NOT wrap in btsMu.Lock here — RWMutex is not reentrant → deadlock.
-	bts.Connect()
+	if err := reconnect(bts.Connect, 30, time.Second); err != nil {
+		log.TLogln("connect failed:", err)
+	}
 
 	time.Sleep(time.Millisecond * 200)
 	log.TLogln("end set settings")
+}
+
+// reconnect retries Connect: the closed client's uTP socket is released lazily, and until
+// then the peer port fails with "address already in use", leaving bts.client nil.
+func reconnect(connect func() error, attempts int, wait time.Duration) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = connect(); err == nil {
+			if i > 0 {
+				log.TLogln("connect ok, attempt", i+1)
+			}
+			return nil
+		}
+		if i == 0 {
+			log.TLogln("connect error, retrying:", err)
+		}
+		if i < attempts-1 {
+			time.Sleep(wait)
+		}
+	}
+	return err
 }
 
 func SetDefSettings() {
@@ -475,7 +498,9 @@ func SetDefSettings() {
 
 	// Connect() calls InitApiHelper() which acquires btsMu.Lock() internally.
 	// Do NOT wrap in btsMu.Lock here — RWMutex is not reentrant → deadlock.
-	bts.Connect()
+	if err := reconnect(bts.Connect, 30, time.Second); err != nil {
+		log.TLogln("connect failed:", err)
+	}
 
 	time.Sleep(time.Millisecond * 200)
 	log.TLogln("end set default settings")

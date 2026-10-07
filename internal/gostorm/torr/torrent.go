@@ -61,7 +61,7 @@ type Torrent struct {
 
 func NewTorrent(spec *torrent.TorrentSpec, bt *BTServer) (*Torrent, error) {
 	// https://github.com/anacrolix/torrent/issues/747
-	if bt == nil || bt.client == nil {
+	if bt == nil {
 		return nil, errors.New("BT client not connected")
 	}
 	switch settings.BTsets.RetrackersMode {
@@ -78,7 +78,13 @@ func NewTorrent(spec *torrent.TorrentSpec, bt *BTServer) (*Torrent, error) {
 		spec.Trackers = append(spec.Trackers, [][]string{trackers}...)
 	}
 
-	goTorrent, _, err := bt.client.AddTorrentSpec(spec)
+	// Disconnect nils bt.client under bt.mu during a settings reconnect: read it under the lock.
+	client, _ := bt.clientAndStorage()
+	if client == nil {
+		return nil, errors.New("BT client not connected")
+	}
+
+	goTorrent, _, err := client.AddTorrentSpec(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -140,10 +146,14 @@ func (t *Torrent) attachCache(tor *torrent.Torrent) bool {
 	if t == nil {
 		return false
 	}
-	if t.bt == nil || t.bt.storage == nil {
+	if t.bt == nil {
 		return true
 	}
-	cache := t.bt.storage.GetCache(tor.InfoHash())
+	_, storage := t.bt.clientAndStorage()
+	if storage == nil {
+		return true
+	}
+	cache := storage.GetCache(tor.InfoHash())
 	if cache == nil {
 		return false
 	}
@@ -356,7 +366,11 @@ func (t *Torrent) drop() {
 	// The check and the Drop must be one critical section across every wrapper of the
 	// same hash: two *Torrent have different muTorrent, so per-wrapper locking alone
 	// lets both pass the check before either drops (TOCTOU).
-	if t.bt != nil && t.bt.client != nil {
+	var client *torrent.Client
+	if t.bt != nil {
+		client, _ = t.bt.clientAndStorage()
+	}
+	if client != nil {
 		t.bt.dropMu.Lock()
 		defer t.bt.dropMu.Unlock()
 	}
@@ -365,14 +379,14 @@ func (t *Torrent) drop() {
 	if t.Torrent == nil {
 		return
 	}
-	if t.bt == nil || t.bt.client == nil {
+	if client == nil {
 		// No client to verify against: "cannot verify" is "do not drop", because
 		// Drop panics on an object the client no longer holds.
 		log.TLogln("[Drop] no client, skipping", t.Hash().HexString())
 		t.Torrent = nil
 		return
 	}
-	if current, held := t.bt.client.Torrent(t.Torrent.InfoHash()); !dropAllowed(current, held, t.Torrent) {
+	if current, held := client.Torrent(t.Torrent.InfoHash()); !dropAllowed(current, held, t.Torrent) {
 		t.Torrent = nil
 		return
 	}
@@ -404,8 +418,10 @@ func (t *Torrent) Close() bool {
 	// buffer received from peers (torrstor.MemPiece.buffer) — permanently reachable, even
 	// after the torrent itself expired and was dropped. Cache.Close() is idempotent (guarded
 	// by isClosed), so this is safe even if anacrolix's storage.TorrentImpl.Close already fired.
-	if t.bt != nil && t.bt.storage != nil {
-		t.bt.storage.CloseHash(t.Hash())
+	if t.bt != nil {
+		if _, storage := t.bt.clientAndStorage(); storage != nil {
+			storage.CloseHash(t.Hash())
+		}
 	}
 	return true
 }
