@@ -217,6 +217,10 @@ func (r *reader) readOnceAt(ctx context.Context, b []byte, pos int64) (n int, er
 		err = io.EOF
 		return
 	}
+	// Storage is piece-addressed: past this reader's extent it returns the next file's bytes.
+	if remaining := r.length - pos; int64(len(b)) > remaining {
+		b = b[:remaining]
+	}
 	for {
 		var avail int64
 		avail, err = r.waitAvailable(ctx, pos, int64(len(b)), n == 0)
