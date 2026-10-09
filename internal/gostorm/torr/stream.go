@@ -168,7 +168,8 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 		ResponseWriter: resp,
 		ctx:            ctx,
 	}
-	http.ServeContent(wrappedResp, req, file.Path(), time.Unix(t.Timestamp, 0), &ctxReader{Reader: reader, ctx: ctx})
+	http.ServeContent(wrappedResp, req, file.Path(), time.Unix(t.Timestamp, 0),
+		streamContent(&ctxReader{Reader: reader, ctx: ctx}, req.Header.Get("Range")))
 
 	if sets.BTsets.EnableDebug {
 		if clerr != nil {
