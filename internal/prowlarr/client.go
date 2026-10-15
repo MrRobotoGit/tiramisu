@@ -259,11 +259,11 @@ func joinInts(values []int) string {
 // ResolveHash follows a result's download link to its magnet and returns the info
 // hash. Indexers like RuTracker expose no hash in the search response, only this
 // link, so callers that gate on the hash resolve it here.
-func (c *Client) ResolveHash(downloadURL string) string {
+func (c *Client) ResolveHash(ctx context.Context, downloadURL string) string {
 	if c == nil || strings.TrimSpace(downloadURL) == "" {
 		return ""
 	}
-	return c.resolveHashFromDownloadURL(context.Background(), downloadURL)
+	return c.resolveHashFromDownloadURL(ctx, downloadURL)
 }
 
 // maxTorrentBytes bounds a .torrent download: real ones are a few hundred KB.

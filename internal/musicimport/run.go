@@ -202,7 +202,7 @@ func (r *Runner) trackIdentity(track ReleaseTrack, fallback string) string {
 // so the discovery runner is testable without a server.
 type torrentSearcher interface {
 	SearchWithOptions(ctx context.Context, query string, opts prowlarr.SearchOptions) ([]prowlarr.ProwlarrResult, error)
-	ResolveHash(downloadURL string) string
+	ResolveHash(ctx context.Context, downloadURL string) string
 }
 
 // selectAlbumTorrent is the search the importer and the discovery share: the lossless
@@ -254,7 +254,7 @@ func selectAlbumTorrent(ctx context.Context, indexer torrentSearcher, indexerIDs
 		}
 		for _, candidate := range SelectCandidates(results, artist, title, minSeeders, maxSizeBytes, 3) {
 			if candidate.Hash == "" {
-				hash := indexer.ResolveHash(candidate.DownloadURL)
+				hash := indexer.ResolveHash(ctx, candidate.DownloadURL)
 				if hash == "" {
 					logf("cannot resolve a hash for %q", candidate.Title)
 					continue

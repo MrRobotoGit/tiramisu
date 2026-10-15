@@ -11,7 +11,7 @@ import (
 // AlbumIndexer is the indexer side of a manual album search; *prowlarr.Client is one.
 type AlbumIndexer interface {
 	SearchWithOptions(ctx context.Context, query string, opts prowlarr.SearchOptions) ([]prowlarr.ProwlarrResult, error)
-	ResolveHash(downloadURL string) string
+	ResolveHash(ctx context.Context, downloadURL string) string
 }
 
 // AlbumBrainz is the MusicBrainz side of filing one album; *MusicBrainz is one.
@@ -43,7 +43,7 @@ func SearchAlbumCandidates(ctx context.Context, indexer AlbumIndexer, indexerIDs
 				break
 			}
 			if c.Hash == "" {
-				if c.Hash = strings.ToLower(indexer.ResolveHash(c.DownloadURL)); c.Hash == "" {
+				if c.Hash = strings.ToLower(indexer.ResolveHash(ctx, c.DownloadURL)); c.Hash == "" {
 					logf("cannot resolve a hash for %q", c.Title)
 					continue
 				}
