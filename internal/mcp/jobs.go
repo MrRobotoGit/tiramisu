@@ -71,6 +71,7 @@ func (j *Jobs) Start(kind string, fn func(ctx context.Context) (any, error)) (*J
 	go func() {
 		defer cancel()
 		res, err := run(ctx, j.logger, kind, job.ID, fn)
+		res, err = j.interrupted(ctx, kind, res, err)
 		j.mu.Lock()
 		job.result, job.err, job.finished = res, err, time.Now()
 		job.status = StatusDone
@@ -81,6 +82,19 @@ func (j *Jobs) Start(kind string, fn func(ctx context.Context) (any, error)) (*J
 		close(job.done)
 	}()
 	return job, nil
+}
+
+// interrupted overrides what a search reports once its context ended: the engines
+// swallow the cancellation into a generic indexer error or an empty success, and the
+// agent would relay either as a fact about the release. Adds keep their outcome.
+func (j *Jobs) interrupted(ctx context.Context, kind string, res any, err error) (any, error) {
+	if !cancellable[kind] || ctx.Err() == nil {
+		return res, err
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil, fmt.Errorf("cancelled by cancel_job: %w", context.Canceled)
+	}
+	return nil, fmt.Errorf("timed out after %s before finishing: %w", j.timeout, ctx.Err())
 }
 
 // run calls fn, turning a panic into the job's error: a bare goroutine that panics
