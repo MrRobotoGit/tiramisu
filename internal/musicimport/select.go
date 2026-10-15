@@ -67,7 +67,7 @@ func SelectCandidates(results []prowlarr.ProwlarrResult, artist, album string, m
 			continue
 		}
 		title := normalizeTitle(result.Title)
-		if !strings.Contains(title, " flac ") && !strings.HasSuffix(title, " flac") {
+		if !losslessTitle(title) {
 			continue
 		}
 		if result.Seeders < minSeeders {
@@ -104,7 +104,7 @@ func SelectCandidates(results []prowlarr.ProwlarrResult, artist, album string, m
 		if strings.Contains(title, " eac ") || strings.HasSuffix(title, " eac") {
 			score += 10
 		}
-		if strings.Contains(title, " 24 ") || strings.Contains(title, "24bit") {
+		if strings.Contains(title, " 24 ") || strings.Contains(title, "24bit") || strings.Contains(title, " tr24 ") {
 			score += 5
 		}
 
@@ -122,6 +122,24 @@ func SelectCandidates(results []prowlarr.ProwlarrResult, artist, album string, m
 		candidates = candidates[:limit]
 	}
 	return candidates
+}
+
+// losslessTitle reports whether a normalized title names a FLAC release. RuTracker's
+// hi-res section tags FLAC as "[TR24]" without spelling the format; a TR24 title that
+// names another format is refused, since only .flac files are filed.
+func losslessTitle(title string) bool {
+	if strings.Contains(title, " flac ") {
+		return true
+	}
+	if !strings.Contains(title, " tr24 ") {
+		return false
+	}
+	for _, format := range []string{" ape ", " wv ", " wavpack ", " wav ", " alac ", " dsd ", " dsf ", " dff ", " mp3 ", " aac "} {
+		if strings.Contains(title, format) {
+			return false
+		}
+	}
+	return true
 }
 
 func better(a, b Candidate) bool {
