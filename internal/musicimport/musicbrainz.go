@@ -16,6 +16,9 @@ import (
 // outcome (a stale Plex id) rather than a failure.
 var errMusicBrainzNotFound = errors.New("musicbrainz: not found")
 
+// errMusicBrainzBadRequest is a 400: for an id lookup, an id that is not an MBID.
+var errMusicBrainzBadRequest = errors.New("musicbrainz: bad request")
+
 // errMusicBrainzBusy marks an answer the server may give differently a moment later.
 var errMusicBrainzBusy = errors.New("musicbrainz: temporarily unavailable")
 
@@ -366,7 +369,7 @@ func (m *MusicBrainz) ReleaseGroupByID(ctx context.Context, rgID string) (Releas
 		} `json:"artist-credit"`
 	}
 	err := m.get(ctx, "/release-group/"+url.PathEscape(rgID), url.Values{"inc": {"artist-credits"}}, &rg)
-	if errors.Is(err, errMusicBrainzNotFound) {
+	if errors.Is(err, errMusicBrainzNotFound) || errors.Is(err, errMusicBrainzBadRequest) {
 		return ReleaseGroup{}, false, nil
 	}
 	if err != nil {
@@ -506,6 +509,8 @@ func (m *MusicBrainz) getOnce(ctx context.Context, path string, query url.Values
 		return json.NewDecoder(response.Body).Decode(out)
 	case http.StatusNotFound:
 		return errMusicBrainzNotFound
+	case http.StatusBadRequest:
+		return fmt.Errorf("musicbrainz %s: status 400: %w", path, errMusicBrainzBadRequest)
 	case http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusBadGateway, http.StatusGatewayTimeout:
 		return fmt.Errorf("musicbrainz %s: status %d: %w", path, response.StatusCode, errMusicBrainzBusy)
 	default:
