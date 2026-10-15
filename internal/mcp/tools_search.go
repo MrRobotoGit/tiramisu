@@ -13,39 +13,43 @@ import (
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/config"
 	"tiramisu/internal/library"
+	"tiramisu/internal/musicimport"
 	"tiramisu/internal/prowlarr"
 	"tiramisu/internal/syncer/engines"
 )
 
-type realBackend struct{ config func() *config.Config }
+type realBackend struct {
+	config func() *config.Config
+	brainz *musicimport.MusicBrainz // one client: MusicBrainz is rate limited
+}
 
-func (b realBackend) tmdb() *tmdb.Client { return tmdb.NewClient(b.config().TMDBAPIKey) }
+func (b *realBackend) tmdb() *tmdb.Client { return tmdb.NewClient(b.config().TMDBAPIKey) }
 
-func (b realBackend) SearchMovies(ctx context.Context, q, y string) ([]tmdb.Movie, error) {
+func (b *realBackend) SearchMovies(ctx context.Context, q, y string) ([]tmdb.Movie, error) {
 	return b.tmdb().SearchMovies(ctx, q, y)
 }
 
-func (b realBackend) SearchTV(ctx context.Context, q, y string) ([]tmdb.TVShow, error) {
+func (b *realBackend) SearchTV(ctx context.Context, q, y string) ([]tmdb.TVShow, error) {
 	return b.tmdb().SearchTV(ctx, q, y)
 }
 
-func (b realBackend) MovieIMDB(ctx context.Context, id int) (string, error) {
+func (b *realBackend) MovieIMDB(ctx context.Context, id int) (string, error) {
 	return b.tmdb().ExternalIDs(ctx, id)
 }
 
-func (b realBackend) ShowIMDB(ctx context.Context, id int) (string, error) {
+func (b *realBackend) ShowIMDB(ctx context.Context, id int) (string, error) {
 	return b.tmdb().TVExternalIDs(ctx, id)
 }
 
-func (b realBackend) SearchMovie(ctx context.Context, cfg engines.SearchConfig, imdb, title string, year int) (engines.SearchResult, error) {
+func (b *realBackend) SearchMovie(ctx context.Context, cfg engines.SearchConfig, imdb, title string, year int) (engines.SearchResult, error) {
 	return engines.NewMovieSearcher(cfg).Search(ctx, imdb, title, year)
 }
 
-func (b realBackend) SearchShow(ctx context.Context, cfg engines.SearchConfig, imdb string, tmdbID int, seasons ...int) (engines.SearchResult, error) {
+func (b *realBackend) SearchShow(ctx context.Context, cfg engines.SearchConfig, imdb string, tmdbID int, seasons ...int) (engines.SearchResult, error) {
 	return engines.NewShowSearcher(cfg).Search(ctx, imdb, tmdbID, seasons...)
 }
 
-func (b realBackend) ShowTitles(ctx context.Context, cfg engines.SearchConfig, tmdbID int) (string, string, []string, error) {
+func (b *realBackend) ShowTitles(ctx context.Context, cfg engines.SearchConfig, tmdbID int) (string, string, []string, error) {
 	details, known, err := engines.NewShowSearcher(cfg).KnownTitles(ctx, tmdbID)
 	if err != nil {
 		return "", "", nil, err
@@ -57,11 +61,11 @@ func (b realBackend) ShowTitles(ctx context.Context, cfg engines.SearchConfig, t
 	return name, details.FirstAirDate, known, nil
 }
 
-func (b realBackend) ShowMatcher(cfg engines.SearchConfig, show string, known []string, release string) func([]string) error {
+func (b *realBackend) ShowMatcher(cfg engines.SearchConfig, show string, known []string, release string) func([]string) error {
 	return engines.NewShowSearcher(cfg).ShowMatcher(show, known, release)
 }
 
-func (b realBackend) FetchTorrent(ctx context.Context, cfg engines.SearchConfig, url string) (library.TorrentSource, error) {
+func (b *realBackend) FetchTorrent(ctx context.Context, cfg engines.SearchConfig, url string) (library.TorrentSource, error) {
 	if !cfg.ProwlarrCfg.Enabled {
 		return library.TorrentSource{}, fmt.Errorf("prowlarr is not configured")
 	}
@@ -107,7 +111,7 @@ func (s *server) registerSearch(srv *sdk.Server) {
 	}, s.searchReleases)
 	sdk.AddTool(srv, &sdk.Tool{
 		Name:        "get_job",
-		Description: "Report a job started by search_releases, add_release, inspect_torrent or add_audio. Waits up to wait_seconds for it to finish.",
+		Description: "Report a job started by search_releases, add_release, search_album, add_album, inspect_torrent or add_audio. Waits up to wait_seconds for it to finish.",
 	}, s.getJob)
 }
 
@@ -198,6 +202,8 @@ type JobOutput struct {
 	Add     *library.AddResponse      `json:"add,omitempty"`
 	Audio   *library.AudioAddResponse `json:"audio,omitempty"`
 	Inspect *library.InspectResponse  `json:"inspect,omitempty"`
+	Album   *AlbumSearchView          `json:"album,omitempty"`
+	Added   *AlbumAdded               `json:"album_added,omitempty"`
 }
 
 func (s *server) searchReleases(_ context.Context, _ *sdk.CallToolRequest, in SearchInput) (*sdk.CallToolResult, JobStarted, error) {
@@ -276,6 +282,10 @@ func (s *server) getJob(ctx context.Context, _ *sdk.CallToolRequest, in JobInput
 		out.Audio = r
 	case *library.InspectResponse:
 		out.Inspect = r
+	case *albumJob:
+		out.Album = albumView(r)
+	case *AlbumAdded:
+		out.Added = r
 	}
 	return nil, out, nil
 }

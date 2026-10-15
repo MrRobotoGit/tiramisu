@@ -12,6 +12,7 @@ import (
 	"tiramisu/internal/catalog/tmdb"
 	"tiramisu/internal/config"
 	"tiramisu/internal/library"
+	"tiramisu/internal/musicimport"
 	"tiramisu/internal/syncer/engines"
 )
 
@@ -37,6 +38,13 @@ type Backend interface {
 	ShowTitles(ctx context.Context, cfg engines.SearchConfig, tmdbID int) (name, firstAirDate string, known []string, err error)
 	ShowMatcher(cfg engines.SearchConfig, showName string, known []string, releaseTitle string) func([]string) error
 	FetchTorrent(ctx context.Context, cfg engines.SearchConfig, downloadURL string) (library.TorrentSource, error)
+
+	// Music: MusicBrainz identity, the sync's lossless search, and its filing.
+	ArtistAlbums(ctx context.Context, artist string) ([]musicimport.ArtistReleaseGroup, error)
+	FindAlbum(ctx context.Context, artist, album string) (musicimport.ReleaseGroup, bool, error)
+	CommittedMusic(ctx context.Context) (musicimport.CommittedSet, error)
+	SearchAlbum(ctx context.Context, artist, album string) ([]musicimport.Candidate, error)
+	AddAlbum(ctx context.Context, artist, album, rgID string, c musicimport.Candidate) (musicimport.AddResult, error)
 }
 
 type Deps struct {
@@ -63,7 +71,7 @@ const (
 // NewServer builds the MCP server with every tool registered.
 func NewServer(deps Deps) *sdk.Server {
 	if deps.Backend == nil {
-		deps.Backend = realBackend{config: deps.Config}
+		deps.Backend = &realBackend{config: deps.Config, brainz: musicimport.NewMusicBrainz()}
 	}
 	s := &server{deps: deps, jobs: NewJobs(maxJobs, jobTTL, jobTimeout)}
 	srv := sdk.NewServer(&sdk.Implementation{Name: "tiramisu", Version: deps.Version},
@@ -71,6 +79,7 @@ func NewServer(deps Deps) *sdk.Server {
 	s.registerSearch(srv)
 	s.registerAdd(srv)
 	s.registerAudio(srv)
+	s.registerMusic(srv)
 	s.registerLibrary(srv)
 	return srv
 }
@@ -99,7 +108,9 @@ func (s *server) searchConfig() engines.SearchConfig {
 const instructions = `Tiramisu library tools. The library is virtual: adding a release writes a stub the media server scans; nothing is downloaded up front.
 
 Rules:
-- Resolve the title first (resolve_title), then search_releases, then poll get_job until done.
+- Video: resolve_title, then search_releases, then poll get_job until done, then add_release.
+- Music: resolve_album (an artist alone lists the discography, with present=true for albums already in the library), then search_album per album, get_job, then add_album. Only lossless releases are offered: an album available only as MP3 cannot be added, say so.
+- inspect_torrent and add_audio are for a torrent the user names, and for audiobooks, which have no search.
 - Present the candidates and wait for the user's choice before add_release, even when there is only one. One line each: name, size, seeders.
 - complete=false means the search did not finish (an indexer failed or timed out). Say "the search was incomplete", never "nothing exists".
 - A complete search that returns nothing for a well-known title may mean its releases are blacklisted (removed for good in the past). Say so.

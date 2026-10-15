@@ -91,6 +91,25 @@ func (c CommittedSet) HasAlbum(artist, album, identity string) bool {
 	return identity == "" || bare[identity]
 }
 
+// HasAlbumNamed is HasAlbum that also matches the folder by normalized names, as the
+// library index matches Plex albums: an album filed by hand rarely spells the
+// artist and title exactly as MusicBrainz does.
+func (c CommittedSet) HasAlbumNamed(artist, album, identity string) bool {
+	if c.HasAlbum(artist, album, identity) {
+		return true
+	}
+	want := albumKey(artist, album)
+	if want == "" {
+		return false
+	}
+	for prefix := range c.AlbumPrefixes {
+		if a, t, ok := strings.Cut(prefix, "/"); ok && albumKey(a, t) == want {
+			return true
+		}
+	}
+	return false
+}
+
 // Committed reads every committed projection once.
 func (t *Tiramisu) Committed(ctx context.Context) (CommittedSet, error) {
 	set := CommittedSet{ExternalIDs: map[string]bool{}, AlbumPrefixes: map[string]map[string]bool{}}

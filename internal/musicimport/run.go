@@ -294,11 +294,13 @@ func (r *Runner) selectTorrent(ctx context.Context, album Album, group ReleaseGr
 	return selectAlbumTorrent(ctx, r.Indexer, r.Options.IndexerIDs, artist, title, r.Options.MinSeeders, r.Options.MaxSizeBytes, nil, r.logf)
 }
 
-// libraryWriter is what applyFiles needs from the Library API client.
-type libraryWriter interface {
+// LibraryWriter is what applyFiles needs from the Library API client.
+type LibraryWriter interface {
 	Inspect(ctx context.Context, hash, title string, torrentFile []byte) ([]SourceFile, error)
 	Add(ctx context.Context, hash, title string, torrentFile []byte, files []AddFile) (AddResult, error)
 }
+
+type libraryWriter = LibraryWriter
 
 // applyFiles inspects the torrent and files its lossless files as projections, each
 // with its own track id when the tracklist matches and the group id otherwise.
