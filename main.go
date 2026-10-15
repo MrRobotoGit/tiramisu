@@ -44,6 +44,7 @@ import (
 	"tiramisu/internal/gostorm/web"
 	"tiramisu/internal/library"
 	"tiramisu/internal/lockmgr"
+	"tiramisu/internal/mcp"
 	"tiramisu/internal/metadb"
 	"tiramisu/internal/monitor/collector"
 	"tiramisu/internal/monitor/dashboard"
@@ -5030,7 +5031,7 @@ func main() {
 			contentType = "movie"
 		}
 		year, _ := strconv.Atoi(r.URL.Query().Get("year"))
-		streams, err := prowlarrClient.FetchTorrents(imdbID, contentType, title, year)
+		streams, err := prowlarrClient.FetchTorrents(r.Context(), imdbID, contentType, title, year)
 		if err != nil {
 			http.Error(w, "prowlarr search failed: "+err.Error(), http.StatusBadGateway)
 			return
@@ -5309,6 +5310,13 @@ func main() {
 		http.HandleFunc("/api/library/remove", libHandler.Remove)
 		http.HandleFunc("/api/library/list", libHandler.List)
 		http.HandleFunc("/api/library/inspect", libHandler.Inspect)
+		mcp.Register(http.DefaultServeMux, mcp.Deps{
+			Library:  libMgr,
+			Config:   gc,
+			StateDir: GetStateDir,
+			Version:  AppVersion,
+			Logger:   logger,
+		})
 	}
 
 	// Health Monitor + Dashboard (Fase 5)

@@ -336,16 +336,30 @@ func (c *Client) SearchMovie(ctx context.Context, query, year string) (int, erro
 	return result.Results[0].ID, nil
 }
 
-// SearchMovieBest returns the best-matching Movie for a free-text title (and optional year),
-// using the same response shape as Discover/Popular so callers get title/release_date/language.
-func (c *Client) SearchMovieBest(ctx context.Context, query, year string) (Movie, error) {
+// SearchMovies returns the first page of matches for a free-text title.
+func (c *Client) SearchMovies(ctx context.Context, query, year string) ([]Movie, error) {
 	urlStr := fmt.Sprintf("%s/search/movie?api_key=%s&query=%s&page=1",
 		baseURL, c.apiKey, url.QueryEscape(query))
 	if year != "" {
 		urlStr += "&year=" + year
 	}
+	return c.fetchDiscoverPage(ctx, urlStr)
+}
 
-	movies, err := c.fetchDiscoverPage(ctx, urlStr)
+// SearchTV returns the first page of matches for a show name.
+func (c *Client) SearchTV(ctx context.Context, query, firstAirYear string) ([]TVShow, error) {
+	urlStr := fmt.Sprintf("%s/search/tv?api_key=%s&query=%s&page=1",
+		baseURL, c.apiKey, url.QueryEscape(query))
+	if firstAirYear != "" {
+		urlStr += "&first_air_date_year=" + firstAirYear
+	}
+	return c.fetchTVPage(ctx, urlStr)
+}
+
+// SearchMovieBest returns the best-matching Movie for a free-text title (and optional year),
+// using the same response shape as Discover/Popular so callers get title/release_date/language.
+func (c *Client) SearchMovieBest(ctx context.Context, query, year string) (Movie, error) {
+	movies, err := c.SearchMovies(ctx, query, year)
 	if err != nil {
 		return Movie{}, err
 	}
@@ -359,13 +373,7 @@ func (c *Client) SearchMovieBest(ctx context.Context, query, year string) (Movie
 // SearchMovieBest. Episode stubs written before the show id was persisted carry no
 // id at all, so the only way back to TMDB for those is the show's own name.
 func (c *Client) SearchTVBest(ctx context.Context, query string, firstAirYear string) (TVShow, error) {
-	urlStr := fmt.Sprintf("%s/search/tv?api_key=%s&query=%s&page=1",
-		baseURL, c.apiKey, url.QueryEscape(query))
-	if firstAirYear != "" {
-		urlStr += "&first_air_date_year=" + firstAirYear
-	}
-
-	shows, err := c.fetchTVPage(ctx, urlStr)
+	shows, err := c.SearchTV(ctx, query, firstAirYear)
 	if err != nil {
 		return TVShow{}, err
 	}

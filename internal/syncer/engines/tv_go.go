@@ -162,11 +162,6 @@ var tvExcludedGenreIDs = map[int]bool{99: true, 10763: true, 10764: true, 10767:
 
 // NewTVGoEngine creates a new Go TV sync engine.
 func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
-	var prowlarrClient *prowlarr.Client
-	if cfg.ProwlarrCfg.Enabled {
-		prowlarrClient = prowlarr.NewClient(cfg.ProwlarrCfg)
-	}
-
 	logPath := filepath.Join(cfg.LogsDir, "tv-sync.log")
 	logFile, _ := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	logger := log.New(io.MultiWriter(os.Stdout, logFile), "[TVSync] ", log.LstdFlags)
@@ -177,8 +172,8 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 	e := &TVGoEngine{
 		gostorm:          NewGoStormClient(cfg.GoStormURL),
 		tmdb:             tmdb.NewClient(cfg.TMDBAPIKey),
-		torrentio:        torrentio.NewClient(cfg.TorrentioURL, "sort=qualitysize|qualityfilter=480p,720p,scr,cam"),
-		prowlarr:         prowlarrClient,
+		torrentio:        torrentio.NewClient(cfg.TorrentioURL, torrentioOptions),
+		prowlarr:         newProwlarrClient(cfg.ProwlarrCfg),
 		plexURL:          cfg.PlexURL,
 		plexToken:        cfg.PlexToken,
 		plexTVLib:        cfg.PlexTVLib,
@@ -900,7 +895,7 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		for s := startSeason; s <= endSeason; s++ {
 			targetSeasons = append(targetSeasons, s)
 		}
-		streams, complete, err := e.prowlarr.FetchTorrentsStatus(imdbID, "series", showName, 0, nil, targetSeasons...)
+		streams, complete, err := e.prowlarr.FetchTorrentsStatus(ctx, imdbID, "series", showName, 0, nil, targetSeasons...)
 		if err != nil {
 			e.logger.Printf("Prowlarr search failed for %s: %v", showName, err)
 			streams = nil

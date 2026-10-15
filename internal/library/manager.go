@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -157,6 +158,9 @@ type AddRequest struct {
 	// Files carries the requested projections for an audio type: one torrent
 	// can back many of them, and the caller names each one.
 	Files []AudioFileRequest `json:"files"`
+	// AcceptFiles vets the torrent's file list once metadata arrives; an error drops
+	// the torrent and becomes a 422. Not part of the HTTP contract.
+	AcceptFiles func(paths []string) error `json:"-"`
 }
 
 // AddedFile is one stub written to disk.
@@ -383,6 +387,17 @@ func (m *Manager) Add(ctx context.Context, req AddRequest) (*AddResponse, error)
 	if err != nil || info == nil {
 		dropped[hash] = true
 		return nil, errf(http.StatusGatewayTimeout, "no metadata after %ds: %v", wait, err)
+	}
+
+	if req.AcceptFiles != nil {
+		paths := make([]string, 0, len(info.FileStats))
+		for _, f := range info.FileStats {
+			paths = append(paths, f.Path)
+		}
+		if err := req.AcceptFiles(paths); err != nil {
+			dropped[hash] = true
+			return nil, &Error{Status: http.StatusUnprocessableEntity, Message: err.Error(), Err: err}
+		}
 	}
 
 	var files []AddedFile
@@ -933,6 +948,37 @@ func (m *Manager) Remove(ctx context.Context, req RemoveRequest) (*RemoveRespons
 	if len(failed) > 0 {
 		return nil, errf(http.StatusInternalServerError,
 			"removed %d stub(s), cannot delete: %s", len(resp.Removed), strings.Join(failed, ", "))
+	}
+	return resp, nil
+}
+
+// RemoveAny routes a removal to the audio or video path, as the HTTP handler does.
+// The returned value is the concrete response of the path taken.
+func (m *Manager) RemoveAny(ctx context.Context, req RemoveRequest) (any, error) {
+	if section, canonical := SectionForType(req.Type); canonical && IsAudioSection(section) {
+		switch {
+		case req.Path != "" && req.Prefix != "":
+			return nil, errf(http.StatusBadRequest, "path and prefix are mutually exclusive")
+		case req.Path == "" && req.Prefix == "":
+			return nil, errf(http.StatusBadRequest, "path or prefix is required")
+		case req.Prefix != "":
+			resp, err := m.RemoveAudioPrefix(ctx, req)
+			if err != nil {
+				return nil, err
+			}
+			return resp, nil
+		}
+	}
+	audio, err := m.RemoveAudio(ctx, req)
+	if !errors.Is(err, ErrRequestNotAudio) {
+		if err != nil {
+			return nil, err
+		}
+		return audio, nil
+	}
+	resp, err := m.Remove(ctx, req)
+	if err != nil {
+		return nil, err
 	}
 	return resp, nil
 }

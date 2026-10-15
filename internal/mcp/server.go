@@ -1,0 +1,116 @@
+// Package mcp exposes library management as MCP tools at :9080/mcp.
+package mcp
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"time"
+
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"tiramisu/internal/catalog/tmdb"
+	"tiramisu/internal/config"
+	"tiramisu/internal/library"
+	"tiramisu/internal/syncer/engines"
+)
+
+// Library is the part of *library.Manager the tools use.
+type Library interface {
+	Add(ctx context.Context, req library.AddRequest) (*library.AddResponse, error)
+	AddAudio(ctx context.Context, req library.AddRequest) (*library.AudioAddResponse, error)
+	Inspect(ctx context.Context, req library.InspectRequest) (*library.InspectResponse, error)
+	List(kind string) ([]library.Item, error)
+	ListAudio(req library.AudioListRequest) (*library.AudioListResponse, error)
+	ListGaps() ([]library.Gap, int, error)
+	RemoveAny(ctx context.Context, req library.RemoveRequest) (any, error)
+}
+
+// Backend is the network side: TMDB, the indexers, the release file.
+type Backend interface {
+	SearchMovies(ctx context.Context, query, year string) ([]tmdb.Movie, error)
+	SearchTV(ctx context.Context, query, year string) ([]tmdb.TVShow, error)
+	MovieIMDB(ctx context.Context, tmdbID int) (string, error)
+	ShowIMDB(ctx context.Context, tmdbID int) (string, error)
+	SearchMovie(ctx context.Context, cfg engines.SearchConfig, imdb, title string, year int) (engines.SearchResult, error)
+	SearchShow(ctx context.Context, cfg engines.SearchConfig, imdb string, tmdbID int, seasons ...int) (engines.SearchResult, error)
+	ShowTitles(ctx context.Context, cfg engines.SearchConfig, tmdbID int) (name, firstAirDate string, known []string, err error)
+	ShowMatcher(cfg engines.SearchConfig, showName string, known []string, releaseTitle string) func([]string) error
+	FetchTorrent(ctx context.Context, cfg engines.SearchConfig, downloadURL string) (library.TorrentSource, error)
+}
+
+type Deps struct {
+	Library  Library
+	Backend  Backend // nil = the real one built from Config
+	Config   func() *config.Config
+	StateDir func() string
+	Version  string
+	Logger   *log.Logger
+}
+
+type server struct {
+	deps Deps
+	jobs *Jobs
+}
+
+const (
+	maxJobs    = 20
+	jobTTL     = 30 * time.Minute
+	jobTimeout = 10 * time.Minute
+	maxWait    = 25 * time.Second
+)
+
+// NewServer builds the MCP server with every tool registered.
+func NewServer(deps Deps) *sdk.Server {
+	if deps.Backend == nil {
+		deps.Backend = realBackend{config: deps.Config}
+	}
+	s := &server{deps: deps, jobs: NewJobs(maxJobs, jobTTL, jobTimeout)}
+	srv := sdk.NewServer(&sdk.Implementation{Name: "tiramisu", Version: deps.Version},
+		&sdk.ServerOptions{Instructions: instructions})
+	s.registerSearch(srv)
+	s.registerAdd(srv)
+	s.registerAudio(srv)
+	s.registerLibrary(srv)
+	return srv
+}
+
+// Register mounts the server on mux at /mcp.
+func Register(mux *http.ServeMux, deps Deps) {
+	srv := NewServer(deps)
+	mux.Handle("/mcp", sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv }, nil))
+}
+
+// searchConfig is the live profile, translated as the syncers translate it.
+func (s *server) searchConfig() engines.SearchConfig {
+	c := s.deps.Config()
+	return engines.SearchConfig{
+		TMDBAPIKey:   c.TMDBAPIKey,
+		TorrentioURL: c.TorrentioURL,
+		ProwlarrCfg:  c.Prowlarr,
+		Language:     c.Language,
+		MovieWeights: c.QualityScoringConfig.MovieWeights(),
+		TVWeights:    c.QualityScoringConfig.TVWeights(),
+		StateDir:     s.deps.StateDir(),
+		Logger:       s.deps.Logger,
+	}
+}
+
+const instructions = `Tiramisu library tools. The library is virtual: adding a release writes a stub the media server scans; nothing is downloaded up front.
+
+Rules:
+- Resolve the title first (resolve_title), then search_releases, then poll get_job until done.
+- Present the candidates and wait for the user's choice before add_release, even when there is only one. One line each: name, size, seeders.
+- complete=false means the search did not finish (an indexer failed or timed out). Say "the search was incomplete", never "nothing exists".
+- A complete search that returns nothing for a well-known title may mean its releases are blacklisted (removed for good in the past). Say so.
+- Pass overrides to search_releases only when the user explicitly asked to change the profile in this conversation. Never use them on your own to find something.
+- Before remove_entries with confirm=true, show the whole preview and ask whether the removal is for good (blacklist=true) or to replace (blacklist=false) if the user did not say.
+- Never re-add the dead_hash of a gap: it is the release the reaper discarded. The engine retries gaps on its own.
+- To undo a wrong add: remove_entries with blacklist=true on that entry.
+- Report the choice, the outcome in one line, and anything that did not go as described. Keep rejected candidates and raw responses for when the user asks.
+- A search running while a scheduled sync runs can be slow: both hit the same indexers.`
+
+// errResult is the tool error convention: the message says which half broke.
+func errResult(err error) *sdk.CallToolResult {
+	return &sdk.CallToolResult{IsError: true, Content: []sdk.Content{&sdk.TextContent{Text: err.Error()}}}
+}

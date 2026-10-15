@@ -64,11 +64,11 @@ func NewClient(cfg ConfigProwlarr) *Client {
 // An error means the search itself did not complete - every query failed or timed out.
 // That is not the same as a search that ran and found nothing, and callers must not cache
 // it as "no releases exist": a slow Prowlarr would otherwise blacklist the title for a day.
-func (c *Client) FetchTorrents(imdbID, contentType, title string, year int, seasons ...int) ([]Stream, error) {
+func (c *Client) FetchTorrents(ctx context.Context, imdbID, contentType, title string, year int, seasons ...int) ([]Stream, error) {
 	if c == nil {
 		return []Stream{}, nil
 	}
-	return c.FetchTorrentsFiltered(imdbID, contentType, title, year, nil, seasons...)
+	return c.FetchTorrentsFiltered(ctx, imdbID, contentType, title, year, nil, seasons...)
 }
 
 // FetchTorrentsFiltered is FetchTorrents with a gate applied before the info hashes are
@@ -76,23 +76,23 @@ func (c *Client) FetchTorrents(imdbID, contentType, title string, year int, seas
 // each resolution is a serialised round trip through Prowlarr, so gating afterwards
 // pays for candidates that are thrown away moments later. A nil keep behaves exactly
 // like FetchTorrents.
-func (c *Client) FetchTorrentsFiltered(imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, error) {
-	streams, _, err := c.FetchTorrentsStatus(imdbID, contentType, title, year, keep, seasons...)
+func (c *Client) FetchTorrentsFiltered(ctx context.Context, imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, error) {
+	streams, _, err := c.FetchTorrentsStatus(ctx, imdbID, contentType, title, year, keep, seasons...)
 	return streams, err
 }
 
 // FetchTorrentsStatus is FetchTorrentsFiltered with the search's own health reported
 // back: complete is false when some queries failed while others answered. The streams
 // are still usable, but "nothing found" cannot be read as "nothing exists".
-func (c *Client) FetchTorrentsStatus(imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, bool, error) {
+func (c *Client) FetchTorrentsStatus(ctx context.Context, imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, bool, error) {
 	if c == nil {
 		return []Stream{}, true, nil
 	}
-	results, partial, err := c.fetchFromProwlarrStatus(imdbID, contentType, title, year, seasons...)
+	results, partial, err := c.fetchFromProwlarrStatus(ctx, imdbID, contentType, title, year, seasons...)
 	if err != nil {
 		return []Stream{}, false, err
 	}
-	streams, unresolved := c.mapToStremioFiltered(results, keep)
+	streams, unresolved := c.mapToStremioFiltered(ctx, results, keep)
 	// A release whose hash never resolved was dropped in silence, and a search that
 	// produced nothing BECAUSE of that is an indexer or proxy failure, not proof the
 	// title is dead: the caller must not condemn a stub on it. One unresolvable result
@@ -108,7 +108,7 @@ func (c *Client) FetchTorrentsStatus(imdbID, contentType, title string, year int
 // IMDb-ID search (1337x and friends) otherwise never contribute movie results at all.
 // partial=true means at least one query failed while another answered: the merged
 // results are usable, but incomplete.
-func (c *Client) fetchFromProwlarrStatus(imdbID, contentType, title string, year int, seasons ...int) ([]ProwlarrResult, bool, error) {
+func (c *Client) fetchFromProwlarrStatus(ctx context.Context, imdbID, contentType, title string, year int, seasons ...int) ([]ProwlarrResult, bool, error) {
 	prowlarrType := "movie"
 	if contentType == "series" {
 		prowlarrType = "tvsearch"
@@ -154,7 +154,7 @@ func (c *Client) fetchFromProwlarrStatus(imdbID, contentType, title string, year
 		}))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
+	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
 	defer cancel()
 
 	ch := make(chan result, len(queries))
@@ -263,7 +263,7 @@ func (c *Client) ResolveHash(downloadURL string) string {
 	if c == nil || strings.TrimSpace(downloadURL) == "" {
 		return ""
 	}
-	return c.resolveHashFromDownloadURL(downloadURL)
+	return c.resolveHashFromDownloadURL(context.Background(), downloadURL)
 }
 
 // maxTorrentBytes bounds a .torrent download: real ones are a few hundred KB.
@@ -353,7 +353,7 @@ func (c *Client) queryCtx(ctx context.Context, params map[string]string) ([]Prow
 // lightweight GET request that follows Prowlarr's 301→magnet redirect.
 // Resolution is performed concurrently (up to 5 goroutines).
 func (c *Client) mapToStremioFormat(results []ProwlarrResult) []Stream {
-	streams, _ := c.mapToStremioFiltered(results, nil)
+	streams, _ := c.mapToStremioFiltered(context.Background(), results, nil)
 	return streams
 }
 
@@ -383,7 +383,7 @@ func (c *Client) toStream(res ProwlarrResult) Stream {
 // ones that need resolving. A nil keep resolves everything, which is the old behaviour.
 // It also returns how many kept results had to be dropped because their hash could not
 // be resolved, so the caller can tell an empty answer from a degraded one.
-func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream) bool) ([]Stream, int) {
+func (c *Client) mapToStremioFiltered(ctx context.Context, results []ProwlarrResult, keep func(Stream) bool) ([]Stream, int) {
 	if len(results) == 0 {
 		return []Stream{}, 0
 	}
@@ -432,7 +432,7 @@ func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				hash := c.resolveHashFromDownloadURL(item.res.DownloadUrl)
+				hash := c.resolveHashFromDownloadURL(ctx, item.res.DownloadUrl)
 				mu.Lock()
 				if hash != "" {
 					item.res.InfoHash = hash
@@ -463,8 +463,8 @@ func (c *Client) mapToStremioFiltered(results []ProwlarrResult, keep func(Stream
 // The budget is 20s because Prowlarr proxies this to the indexer: measured 1.8s/13s/>20s
 // on three 1337x URLs. Indexers that return an infoHash inline never reach this path, so
 // a short budget silently dropped only the results that need it most.
-func (c *Client) resolveHashFromDownloadURL(downloadURL string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), resolveHashTimeout)
+func (c *Client) resolveHashFromDownloadURL(ctx context.Context, downloadURL string) string {
+	ctx, cancel := context.WithTimeout(ctx, resolveHashTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)

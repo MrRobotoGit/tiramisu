@@ -169,11 +169,6 @@ var (
 
 // NewMovieGoEngine creates a new Go movie sync engine.
 func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
-	var prowlarrClient *prowlarr.Client
-	if cfg.ProwlarrCfg.Enabled {
-		prowlarrClient = prowlarr.NewClient(cfg.ProwlarrCfg)
-	}
-
 	logPath := filepath.Join(cfg.LogsDir, "movies-sync.log")
 	logFile, _ := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	logger := log.New(io.MultiWriter(os.Stdout, logFile), "[MovieSync] ", log.LstdFlags)
@@ -181,8 +176,8 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 	e := &MovieGoEngine{
 		gostorm:   NewGoStormClient(cfg.GoStormURL),
 		tmdb:      tmdb.NewClient(cfg.TMDBAPIKey),
-		torrentio: torrentio.NewClient(cfg.TorrentioURL, "sort=qualitysize|qualityfilter=480p,720p,scr,cam"),
-		prowlarr:  prowlarrClient,
+		torrentio: torrentio.NewClient(cfg.TorrentioURL, torrentioOptions),
+		prowlarr:  newProwlarrClient(cfg.ProwlarrCfg),
 		rt:        rottentomatoes.NewClient(),
 		plexURL:   cfg.PlexURL,
 		plexToken: cfg.PlexToken,
@@ -806,7 +801,7 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 			ms, _ := e.classifyMovieStream(s)
 			return ms != nil
 		}
-		ps, complete, err := e.prowlarr.FetchTorrentsStatus(imdbID, "movie", title, year, keep)
+		ps, complete, err := e.prowlarr.FetchTorrentsStatus(ctx, imdbID, "movie", title, year, keep)
 		if err != nil {
 			e.logger.Printf("[MovieSync] Prowlarr search failed: %v", err)
 		} else {

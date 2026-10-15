@@ -102,35 +102,7 @@ func (h *Handler) Remove(w http.ResponseWriter, r *http.Request) {
 		}
 		req = strict
 	}
-	// Audio first, falling through on the routing sentinel so every video request
-	// reaches the legacy path unchanged.
-	if section, canonical := SectionForType(req.Type); canonical && IsAudioSection(section) {
-		switch {
-		case req.Path != "" && req.Prefix != "":
-			writeError(w, http.StatusBadRequest, "path and prefix are mutually exclusive")
-			return
-		case req.Path == "" && req.Prefix == "":
-			writeError(w, http.StatusBadRequest, "path or prefix is required")
-			return
-		case req.Prefix != "":
-			audio, err := h.mgr.RemoveAudioPrefix(r.Context(), req)
-			if err != nil {
-				writeAPIError(w, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, audio)
-			return
-		}
-	}
-	if audio, err := h.mgr.RemoveAudio(r.Context(), req); !errors.Is(err, ErrRequestNotAudio) {
-		if err != nil {
-			writeAPIError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, audio)
-		return
-	}
-	resp, err := h.mgr.Remove(r.Context(), req)
+	resp, err := h.mgr.RemoveAny(r.Context(), req)
 	if err != nil {
 		writeAPIError(w, err)
 		return
