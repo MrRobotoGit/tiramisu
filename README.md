@@ -1339,7 +1339,9 @@ removes entries:
 | `search_releases` | Prowlarr + Torrentio search, gated and scored like the sync; returns a job |
 | `get_job` | Polls a search, add or inspect job |
 | `add_release` | Files the candidate you chose; TV releases are checked against the show's names |
-| `inspect_torrent`, `add_audio` | Music and audiobooks: list a torrent's files, file its tracks |
+| `resolve_album` | Artist → discography from MusicBrainz, or one album; flags what is already in the library |
+| `search_album`, `add_album` | The music sync's own search (lossless only) and filing: MusicBrainz track ids, cue images split per track |
+| `inspect_torrent`, `add_audio` | A torrent you name, and audiobooks: list its files, file its tracks |
 | `list_library`, `list_gaps` | What the library holds; TV episodes the reaper removed |
 | `remove_entries` | Preview first; removes only with `confirm`, for good or to replace |
 
@@ -1349,6 +1351,7 @@ one search and only when you ask, and never writes it to `config.json`.
 
 ```
 add the latest Dummy Bunny movie in 4K
+add Dummy Bunny's discography
 season 2 of Dummy Bunny is missing episodes 4 to 8, fill them in
 is Dummy Bunny (2024) already in the library, and in what quality?
 ```
