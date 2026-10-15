@@ -7,7 +7,7 @@
    ╚═╝    ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚═╝ ╚══════╝  ╚═════╝
 ```
 
-<h1><sub><sub><strong>Tiramisu</strong> is the most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex or Jellyfin library. Hermes and OpenClaw ready. Forget Real-Debrid.</sub></sub></h1>
+<h1><sub><sub><strong>Tiramisu</strong> is the most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex or Jellyfin library. MCP ready for Hermes, OpenClaw and Claude Code. Forget Real-Debrid.</sub></sub></h1>
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MrRobotoGit/tiramisu)
 [![Mentioned in Awesome Selfhosted](https://awesome.re/mentioned-badge.svg)](https://github.com/awesome-selfhosted/awesome-selfhosted)
@@ -1356,7 +1356,7 @@ season 2 of Dummy Bunny is missing episodes 4 to 8, fill them in
 is Dummy Bunny (2024) already in the library, and in what quality?
 ```
 
-The search tools need v1.12.0 or later.
+The MCP server needs v1.11.5 or later.
 
 > **Trust model:** like the rest of `:9080`, `/mcp` has no authentication.
 > Keep the port on your LAN.
