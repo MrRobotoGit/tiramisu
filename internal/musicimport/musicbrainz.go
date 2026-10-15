@@ -352,6 +352,44 @@ func (m *MusicBrainz) searchReleaseGroups(ctx context.Context, query string) ([]
 	}
 }
 
+// ReleaseGroupByID reads one release group's title and credit: the check that an id
+// names the album the caller means. A group MusicBrainz does not know is not found.
+func (m *MusicBrainz) ReleaseGroupByID(ctx context.Context, rgID string) (ReleaseGroup, bool, error) {
+	if strings.TrimSpace(rgID) == "" {
+		return ReleaseGroup{}, false, nil
+	}
+	var rg struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+		AC    []struct {
+			Name string `json:"name"`
+		} `json:"artist-credit"`
+	}
+	err := m.get(ctx, "/release-group/"+url.PathEscape(rgID), url.Values{"inc": {"artist-credits"}}, &rg)
+	if errors.Is(err, errMusicBrainzNotFound) {
+		return ReleaseGroup{}, false, nil
+	}
+	if err != nil {
+		return ReleaseGroup{}, false, err
+	}
+	return ReleaseGroup{ID: rg.ID, Title: rg.Title, Artist: strings.Join(artistNames(rg.AC), ", ")}, rg.ID != "", nil
+}
+
+// MatchesAlbum reports whether g is the album named artist / title, by the names the
+// library compares on. A collaboration matches any of its credited artists.
+func MatchesAlbum(g ReleaseGroup, artist, title string) bool {
+	if nameKey(g.Title) != nameKey(title) {
+		return false
+	}
+	want := artistIdentity(artist)
+	for _, credited := range strings.Split(g.Artist, ", ") {
+		if artistIdentity(credited) == want {
+			return true
+		}
+	}
+	return artistIdentity(g.Artist) == want
+}
+
 // GroupReleases lists the official releases of a release group: the editions a
 // tracklist can be read from.
 func (m *MusicBrainz) GroupReleases(ctx context.Context, rgID string) ([]RecordingRelease, error) {
