@@ -83,13 +83,17 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 	m.uploadReleaseFile(ctx, file, title)
 	addedHash, err := m.cfg.GoStorm.AddTorrent(ctx, magnet, title)
 	if err != nil || addedHash == "" {
+		// An interrupted request may still have been taken, and the engine saves it.
+		if !preexisting {
+			m.dropTorrent(ctx, lockKey)
+		}
 		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)
 	}
 	engineHash := strings.ToLower(strings.TrimSpace(addedHash))
 	if !reInfoHash.MatchString(engineHash) {
-		// Hydrated under the hash we asked for, so that is the one to drop.
+		// Hydrated under the hash we asked for, dropped in the hex the engine keys by.
 		if !preexisting {
-			m.dropTorrent(ctx, hash)
+			m.dropTorrent(ctx, lockKey)
 		}
 		return nil, errf(http.StatusBadGateway, "gostorm returned a malformed info hash %q", addedHash)
 	}

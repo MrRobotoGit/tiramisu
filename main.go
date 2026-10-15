@@ -1139,16 +1139,18 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	tailFillTargets.Delete(fullPath)
 
 	// Extract hash and remove torrent from GoStorm
-	success, err := globalTorrentRemover.RemoveTorrentFromFile(fullPath)
+	success, blacklisted, err := globalTorrentRemover.RemoveTorrentFromFile(fullPath)
 	if err != nil {
 		logger.Printf("UNLINK ERROR: failed to remove torrent: %v", err)
 		// Continue with file deletion even if torrent removal fails
 	} else if success {
 		logger.Printf("UNLINK: torrent successfully removed from GoStorm")
-	} else {
+	} else if blacklisted {
 		// Also reached when an audio projection still owns the torrent, which the
 		// guard logs with its own reason.
 		logger.Printf("UNLINK: torrent not removed (already gone, or still referenced), but hash was blacklisted")
+	} else {
+		logger.Printf("UNLINK: torrent not removed and hash not blacklisted (see the warning above)")
 	}
 
 	// Delete physical .mkv file
@@ -5293,11 +5295,14 @@ func main() {
 			},
 			// Same record the FUSE unlink handler writes: without it the sync engines
 			// add the title back on their next run.
-			Blacklist: func(path, hash string) {
-				if globalTorrentRemover == nil || len(hash) != 40 {
-					return
+			Blacklist: func(path, hash string) error {
+				if globalTorrentRemover == nil {
+					return fmt.Errorf("the torrent remover is not running")
 				}
-				globalTorrentRemover.addToBlacklist(hash, globalTorrentRemover.deriveTitleFromPath(path))
+				if len(hash) != 40 {
+					return fmt.Errorf("malformed info hash %q", hash)
+				}
+				return globalTorrentRemover.addToBlacklist(hash, globalTorrentRemover.deriveTitleFromPath(path))
 			},
 			Logger:       logger,
 			MediaServer:  mediaserver.New(gc().MediaServerType, gc().Plex.URL, gc().Plex.Token),

@@ -58,6 +58,10 @@ type AudioProjectionRegistry interface {
 
 // canonicalHashKey folds a valid base32 info hash onto its 40-hex spelling so
 // one torrent has one lock key and one ownership identity.
+// CanonicalHash spells an info hash in lowercase hex, decoding the 32-character
+// base32 form a magnet may carry; anything else comes back trimmed and lowercased.
+func CanonicalHash(hash string) string { return canonicalHashKey(hash) }
+
 func canonicalHashKey(hash string) string {
 	h := strings.ToLower(strings.TrimSpace(hash))
 	if len(h) != 32 {
@@ -130,6 +134,10 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 	m.uploadReleaseFile(ctx, file, intent.Title)
 	addedHash, err := m.cfg.GoStorm.AddTorrent(ctx, magnet, intent.Title)
 	if err != nil || addedHash == "" {
+		// An interrupted request may still have been taken, and the engine saves it.
+		if !preexisting {
+			m.dropTorrent(ctx, lockKey)
+		}
 		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)
 	}
 	engineHash := strings.ToLower(strings.TrimSpace(addedHash))

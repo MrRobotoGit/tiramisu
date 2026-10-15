@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"tiramisu/internal/gostorm/native"
 	"tiramisu/internal/library"
@@ -35,8 +37,9 @@ func NewTorrentRemover(nativeBridge *native.NativeClient, logger *log.Logger) *T
 	}
 }
 
-// RemoveTorrentFromFile extracts hash from file and removes torrent
-func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (bool, error) {
+// RemoveTorrentFromFile extracts hash from file, blacklists it and removes the torrent.
+// blacklisted reports whether the release really reached the blacklist.
+func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (removed, blacklisted bool, err error) {
 	filename := filepath.Base(fullPath)
 	title := tr.deriveTitleFromPath(fullPath)
 
@@ -57,22 +60,26 @@ func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (bool, error) {
 	// CRITICAL FIX: Ensure hash is valid and 40 chars before proceeding
 	fullHash = strings.ToLower(fullHash)
 	if len(fullHash) != 40 {
-		return false, fmt.Errorf("invalid or missing hash (%s) for: %s", fullHash, filename)
+		return false, false, fmt.Errorf("invalid or missing hash (%s) for: %s", fullHash, filename)
 	}
 
 	tr.logger.Printf("AutoRemove: identified hash %s for %s", fullHash[:8], title)
 
 	// 2. ALWAYS add to blacklist (FASE 5.1)
-	tr.addToBlacklist(fullHash, title)
-
-	// 3. Attempt to remove from GoStorm
-	removed, err := tr.removeTorrent(fullHash)
-	if err != nil {
-		tr.logger.Printf("AutoRemove: removal from GoStorm failed for %s: %v", fullHash[:8], err)
-		return false, nil // Return false but no error, as blacklist worked
+	blacklisted = true
+	if err := tr.addToBlacklist(fullHash, title); err != nil {
+		blacklisted = false
+		tr.logger.Printf("AutoRemove: WARNING: %s not blacklisted, the sync may add it back: %v", fullHash[:8], err)
 	}
 
-	return removed, nil
+	// 3. Attempt to remove from GoStorm
+	removed, err = tr.removeTorrent(fullHash)
+	if err != nil {
+		tr.logger.Printf("AutoRemove: removal from GoStorm failed for %s: %v", fullHash[:8], err)
+		return false, blacklisted, nil
+	}
+
+	return removed, blacklisted, nil
 }
 
 // extractHashFromFile reads the virtual mkv to get the hash.
@@ -126,22 +133,47 @@ func (tr *TorrentRemover) deriveTitleFromPath(path string) string {
 }
 
 // addToBlacklist adds a hash and title to the persistent blacklist file
-func (tr *TorrentRemover) addToBlacklist(hash, title string) {
+func (tr *TorrentRemover) addToBlacklist(hash, title string) error {
+	return tr.addToBlacklistAt(filepath.Join(GetStateDir(), "blacklist.json"), hash, title)
+}
+
+// blacklistMu serialises the read-modify-write: the unlink handler, the Library API
+// and the reaper write concurrently, and the last rename would drop the others' hashes.
+var blacklistMu sync.Mutex
+
+func (tr *TorrentRemover) addToBlacklistAt(blacklistPath, hash, title string) error {
+	blacklistMu.Lock()
+	defer blacklistMu.Unlock()
 	// Readers look the hash up lowercased, so a capitalised entry would never match.
 	hash = strings.ToLower(hash)
-	// blacklistPath := "/home/pi/STATE/blacklist.json"
-	blacklistPath := filepath.Join(GetStateDir(), "blacklist.json")
 
 	type Blacklist struct {
 		Hashes map[string]string `json:"hashes"`
 		Titles []string          `json:"titles"`
 	}
 
-	bl := Blacklist{Hashes: make(map[string]string), Titles: []string{}}
-
-	// Read existing
-	if data, err := ioutil.ReadFile(blacklistPath); err == nil {
-		json.Unmarshal(data, &bl)
+	var bl Blacklist
+	data, err := ioutil.ReadFile(blacklistPath)
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &bl); err != nil {
+			// Set aside, never rewritten in place: the bytes stay for a repair, and the
+			// readers already see an empty blacklist while the file is unparsable.
+			aside := fmt.Sprintf("%s.corrupt-%d", blacklistPath, time.Now().UnixNano())
+			if rerr := os.Rename(blacklistPath, aside); rerr != nil {
+				return fmt.Errorf("blacklist %s is unreadable (%v) and cannot be set aside: %w", blacklistPath, err, rerr)
+			}
+			tr.logger.Printf("BLACKLIST WARNING: %s was unreadable (%v), moved to %s; starting a new one: every release blacklisted before is no longer excluded until that file is repaired and merged back", blacklistPath, err, aside)
+			bl = Blacklist{}
+		}
+	case !os.IsNotExist(err):
+		return fmt.Errorf("read blacklist: %w", err)
+	}
+	if bl.Hashes == nil {
+		bl.Hashes = make(map[string]string)
+	}
+	if bl.Titles == nil {
+		bl.Titles = []string{}
 	}
 
 	changed := false
@@ -181,15 +213,22 @@ func (tr *TorrentRemover) addToBlacklist(hash, title string) {
 		}
 	}
 
-	if changed {
-		if newData, err := json.MarshalIndent(bl, "", "  "); err == nil {
-			tmpPath := blacklistPath + ".tmp"
-			if err := ioutil.WriteFile(tmpPath, newData, 0644); err == nil {
-				os.Rename(tmpPath, blacklistPath)
-				tr.logger.Printf("BLACKLISTED: %s (%s)", hash[:8], title)
-			}
-		}
+	if !changed {
+		return nil
 	}
+	newData, err := json.MarshalIndent(bl, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmpPath := blacklistPath + ".tmp"
+	if err := ioutil.WriteFile(tmpPath, newData, 0644); err != nil {
+		return fmt.Errorf("write blacklist: %w", err)
+	}
+	if err := os.Rename(tmpPath, blacklistPath); err != nil {
+		return fmt.Errorf("write blacklist: %w", err)
+	}
+	tr.logger.Printf("BLACKLISTED: %s (%s)", hash[:8], title)
+	return nil
 }
 
 // findFullHashBySuffix (Fallback logic)
