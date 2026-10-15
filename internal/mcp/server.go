@@ -42,6 +42,7 @@ type Backend interface {
 	// Music: MusicBrainz identity, the sync's lossless search, and its filing.
 	ArtistAlbums(ctx context.Context, artist string) ([]musicimport.ArtistReleaseGroup, error)
 	FindAlbum(ctx context.Context, artist, album string) (musicimport.ReleaseGroup, bool, error)
+	AlbumByID(ctx context.Context, rgID string) (musicimport.ReleaseGroup, bool, error)
 	CommittedMusic(ctx context.Context) (musicimport.CommittedSet, error)
 	SearchAlbum(ctx context.Context, artist, album string) ([]musicimport.Candidate, error)
 	AddAlbum(ctx context.Context, artist, album, rgID string, c musicimport.Candidate) (musicimport.AddResult, error)
@@ -74,6 +75,9 @@ func NewServer(deps Deps) *sdk.Server {
 		deps.Backend = &realBackend{config: deps.Config, brainz: musicimport.NewMusicBrainz()}
 	}
 	s := &server{deps: deps, jobs: NewJobs(maxJobs, jobTTL, jobTimeout)}
+	if deps.Logger != nil {
+		s.jobs.logger = deps.Logger
+	}
 	srv := sdk.NewServer(&sdk.Implementation{Name: "tiramisu", Version: deps.Version},
 		&sdk.ServerOptions{Instructions: instructions})
 	s.registerSearch(srv)
@@ -110,14 +114,17 @@ const instructions = `Tiramisu library tools. The library is virtual: adding a r
 Rules:
 - Video: resolve_title, then search_releases, then poll get_job until done, then add_release.
 - Music: resolve_album (an artist alone lists the discography, with present=true for albums already in the library), then search_album per album, get_job, then add_album. Only lossless releases are offered: an album available only as MP3 cannot be added, say so.
+- A search_album warning means rg_id may name another album: tell the user and resolve_album again before add_album.
 - inspect_torrent and add_audio are for a torrent the user names, and for audiobooks, which have no search.
 - Present the candidates and wait for the user's choice before add_release, even when there is only one. One line each: name, size, seeders.
 - complete=false means the search did not finish (an indexer failed or timed out). Say "the search was incomplete", never "nothing exists".
 - A complete search that returns nothing for a well-known title may mean its releases are blacklisted (removed for good in the past). Say so.
 - Pass overrides to search_releases only when the user explicitly asked to change the profile in this conversation. Never use them on your own to find something.
-- Before remove_entries with confirm=true, show the whole preview and ask whether the removal is for good (blacklist=true) or to replace (blacklist=false) if the user did not say.
+- Before remove_entries with confirm=true on movie or tv, show the whole preview and ask whether the removal is for good (blacklist=true) or to replace (blacklist=false) if the user did not say. Music and audiobook have no blacklist and always take blacklist=false: albums the music sync imported stay out, but one added by hand may come back if the music discovery recommends it later. Say so when the user wants it gone for good.
+- A remove_entries warning means the entry is gone but was not blacklisted: say the sync may add it back.
 - Never re-add the dead_hash of a gap: it is the release the reaper discarded. The engine retries gaps on its own.
-- To undo a wrong add: remove_entries with blacklist=true on that entry.
+- To undo a wrong add: remove_entries on that entry, blacklist=true for movie or tv, false for music and audiobook.
+- When the user drops a search or an inspect, or before retrying one, cancel_job the job still running: running jobs share a cap.
 - Report the choice, the outcome in one line, and anything that did not go as described. Keep rejected candidates and raw responses for when the user asks.
 - A search running while a scheduled sync runs can be slow: both hit the same indexers.`
 

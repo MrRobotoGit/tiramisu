@@ -16,7 +16,7 @@ type InspectInput struct {
 	Hash         string `json:"hash,omitempty"`
 	Magnet       string `json:"magnet,omitempty"`
 	Title        string `json:"title" jsonschema:"the torrent's display name; required"`
-	TorrentFile  string `json:"torrent_file,omitempty" jsonschema:"the release's .torrent, base64"`
+	TorrentFile  string `json:"torrent_file,omitempty" jsonschema:"the release's .torrent, base64; requests over 4 MiB are refused, so about 3 MiB of .torrent at most"`
 	MetadataWait int    `json:"metadata_wait,omitempty" jsonschema:"seconds, default 60, max 300"`
 }
 
@@ -25,7 +25,7 @@ type AudioInput struct {
 	Hash        string                     `json:"hash,omitempty"`
 	Magnet      string                     `json:"magnet,omitempty"`
 	Title       string                     `json:"title"`
-	TorrentFile string                     `json:"torrent_file,omitempty" jsonschema:"the release's .torrent, base64"`
+	TorrentFile string                     `json:"torrent_file,omitempty" jsonschema:"the release's .torrent, base64; requests over 4 MiB are refused, so about 3 MiB of .torrent at most"`
 	Files       []library.AudioFileRequest `json:"files" jsonschema:"one entry per track: source_path from inspect_torrent, path you choose inside the section"`
 }
 
@@ -72,9 +72,10 @@ func (s *server) addAudio(_ context.Context, _ *sdk.CallToolRequest, in AudioInp
 	if in.Magnet != "" {
 		hash = library.HashFromMagnet(in.Magnet)
 	}
-	token, ok := library.HashSuffixToken(hash)
+	// The token is cut from the hex spelling the engine reports, also for a base32 magnet.
+	token, ok := library.HashSuffixToken(library.CanonicalHash(hash))
 	if !ok {
-		return errResult(fmt.Errorf("a 40-character hash (or a magnet carrying one) is required")), JobStarted{}, nil
+		return errResult(fmt.Errorf("an info hash (40 hex or 32 base32 characters, or a magnet carrying one) is required")), JobStarted{}, nil
 	}
 	file, err := decodeTorrent(in.TorrentFile)
 	if err != nil {
@@ -82,7 +83,7 @@ func (s *server) addAudio(_ context.Context, _ *sdk.CallToolRequest, in AudioInp
 	}
 	files := make([]library.AudioFileRequest, len(in.Files))
 	for i, f := range in.Files {
-		if !library.HasHashSuffix(f.Path, hash) {
+		if !library.HasHashSuffix(f.Path, library.CanonicalHash(hash)) {
 			ext := path.Ext(f.Path)
 			f.Path = strings.TrimSuffix(f.Path, ext) + "_" + token + ext
 		}

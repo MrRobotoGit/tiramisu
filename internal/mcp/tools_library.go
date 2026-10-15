@@ -45,7 +45,7 @@ type RemoveInput struct {
 	Type      string   `json:"type" jsonschema:"movie, tv, music or audiobook"`
 	Paths     []string `json:"paths,omitempty" jsonschema:"fuse_path or path of each entry"`
 	Prefix    string   `json:"prefix,omitempty" jsonschema:"audio only: every projection under this album prefix"`
-	Blacklist *bool    `json:"blacklist" jsonschema:"required: true removes for good (the sync will not re-add it), false removes to replace"`
+	Blacklist *bool    `json:"blacklist" jsonschema:"required: true removes for good (the sync will not re-add it), false removes to replace. Music and audiobook take false only"`
 	Confirm   bool     `json:"confirm,omitempty" jsonschema:"false (default) only previews; true removes"`
 }
 
@@ -55,6 +55,8 @@ type RemoveOutput struct {
 	Unresolved []string `json:"unresolved,omitempty"`
 	Removed    []string `json:"removed,omitempty"`
 	Failed     []string `json:"failed,omitempty"`
+	// Warnings are removals for good that the sync may still undo.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func isAudio(kind string) bool { return kind == "music" || kind == "audiobook" }
@@ -84,6 +86,9 @@ func (s *server) listLibrary(_ context.Context, _ *sdk.CallToolRequest, in ListI
 		limit = maxListLimit
 	}
 	if isAudio(in.Type) {
+		if in.Query != "" || in.IMDB != "" || in.Offset != 0 {
+			return errResult(fmt.Errorf("query, imdb and offset are video only: audio narrows with prefix and pages with cursor")), ListOutput{}, nil
+		}
 		resp, err := s.deps.Library.ListAudio(library.AudioListRequest{Type: in.Type, Prefix: in.Prefix, Limit: limit, Cursor: in.Cursor})
 		if err != nil {
 			return errResult(err), ListOutput{}, nil
@@ -130,8 +135,14 @@ func (s *server) removeEntries(ctx context.Context, _ *sdk.CallToolRequest, in R
 	if in.Blacklist == nil {
 		return errResult(fmt.Errorf("blacklist is required: ask the user whether this removal is for good or to replace")), RemoveOutput{}, nil
 	}
+	if *in.Blacklist && isAudio(in.Type) {
+		return errResult(fmt.Errorf("audio has no blacklist: remove music and audiobook with blacklist=false")), RemoveOutput{}, nil
+	}
 	if in.Prefix != "" && !isAudio(in.Type) {
 		return errResult(fmt.Errorf("prefix is for music and audiobook only")), RemoveOutput{}, nil
+	}
+	if in.Prefix != "" && len(in.Paths) > 0 {
+		return errResult(fmt.Errorf("paths and prefix are mutually exclusive: prefix removes the whole album")), RemoveOutput{}, nil
 	}
 	if in.Prefix == "" && len(in.Paths) == 0 {
 		return errResult(fmt.Errorf("paths or prefix is required")), RemoveOutput{}, nil
@@ -154,9 +165,13 @@ func (s *server) removeEntries(ctx context.Context, _ *sdk.CallToolRequest, in R
 	}
 	for _, r := range reqs {
 		target := r.Path + r.Prefix
-		if _, err := s.deps.Library.RemoveAny(ctx, r); err != nil {
+		resp, err := s.deps.Library.RemoveAny(ctx, r)
+		if err != nil {
 			out.Failed = append(out.Failed, target+": "+err.Error())
 			continue
+		}
+		if v, ok := resp.(*library.RemoveResponse); ok {
+			out.Warnings = append(out.Warnings, v.Warnings...)
 		}
 		out.Removed = append(out.Removed, target)
 	}

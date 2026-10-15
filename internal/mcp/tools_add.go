@@ -47,9 +47,12 @@ func (s *server) addRelease(ctx context.Context, _ *sdk.CallToolRequest, in AddI
 		if err != nil {
 			return errResult(err), JobStarted{}, nil
 		}
+		if err := finished(snap, "search"); err != nil {
+			return errResult(err), JobStarted{}, nil
+		}
 		sj, ok := snap.Result.(*searchJob)
-		if !ok || snap.Status != StatusDone {
-			return errResult(fmt.Errorf("job %s is not a finished search", in.JobID)), JobStarted{}, nil
+		if !ok {
+			return errResult(fmt.Errorf("job %s holds no searchJob result", in.JobID)), JobStarted{}, nil
 		}
 		var c *engines.Candidate
 		for i := range sj.Result.Candidates {

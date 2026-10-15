@@ -17,9 +17,9 @@ import (
 // musicCandidates is how many lossless releases a search offers per album.
 const musicCandidates = 5
 
-func (b *realBackend) musicLogf() func(string, ...any) {
-	return log.New(os.Stdout, "[MCPMusic] ", log.LstdFlags).Printf
-}
+var musicLog = log.New(os.Stdout, "[MCPMusic] ", log.LstdFlags)
+
+func (b *realBackend) musicLogf() func(string, ...any) { return musicLog.Printf }
 
 // musicLibrary is the Library API the music sync files through: same path, same result.
 func (b *realBackend) musicLibrary() *musicimport.Tiramisu {
@@ -39,6 +39,10 @@ func (b *realBackend) ArtistAlbums(ctx context.Context, artist string) ([]musici
 
 func (b *realBackend) FindAlbum(ctx context.Context, artist, album string) (musicimport.ReleaseGroup, bool, error) {
 	return b.brainz.SearchReleaseGroup(ctx, artist, album)
+}
+
+func (b *realBackend) AlbumByID(ctx context.Context, rgID string) (musicimport.ReleaseGroup, bool, error) {
+	return b.brainz.ReleaseGroupByID(ctx, rgID)
 }
 
 func (b *realBackend) CommittedMusic(ctx context.Context) (musicimport.CommittedSet, error) {
@@ -102,6 +106,8 @@ type AlbumSearchView struct {
 	Album      string           `json:"album"`
 	RGID       string           `json:"rg_id"`
 	Candidates []AlbumCandidate `json:"candidates"`
+	// Warning says rg_id may name another album: its tracklist would be filed here.
+	Warning string `json:"warning,omitempty"`
 }
 
 type AlbumAdded struct {
@@ -113,6 +119,7 @@ type AlbumAdded struct {
 type albumJob struct {
 	Artist, Album, RGID string
 	Candidates          []musicimport.Candidate
+	Warning             string
 }
 
 type AddAlbumInput struct {
@@ -178,11 +185,15 @@ func (s *server) searchAlbum(_ context.Context, _ *sdk.CallToolRequest, in Album
 		return errResult(fmt.Errorf("artist, album and rg_id are required: resolve_album returns them")), JobStarted{}, nil
 	}
 	job, err := s.jobs.Start("search_album", func(ctx context.Context) (any, error) {
+		warning, err := s.checkReleaseGroup(ctx, in.Artist, in.Album, in.RGID)
+		if err != nil {
+			return nil, err
+		}
 		cands, err := s.deps.Backend.SearchAlbum(ctx, in.Artist, in.Album)
 		if err != nil {
 			return nil, err
 		}
-		return &albumJob{Artist: in.Artist, Album: in.Album, RGID: in.RGID, Candidates: cands}, nil
+		return &albumJob{Artist: in.Artist, Album: in.Album, RGID: in.RGID, Candidates: cands, Warning: warning}, nil
 	})
 	if err != nil {
 		return errResult(err), JobStarted{}, nil
@@ -195,9 +206,12 @@ func (s *server) addAlbum(ctx context.Context, _ *sdk.CallToolRequest, in AddAlb
 	if err != nil {
 		return errResult(err), JobStarted{}, nil
 	}
+	if err := finished(snap, "search_album"); err != nil {
+		return errResult(err), JobStarted{}, nil
+	}
 	aj, ok := snap.Result.(*albumJob)
-	if !ok || snap.Status != StatusDone {
-		return errResult(fmt.Errorf("job %s is not a finished search_album", in.JobID)), JobStarted{}, nil
+	if !ok {
+		return errResult(fmt.Errorf("job %s holds no albumJob result", in.JobID)), JobStarted{}, nil
 	}
 	var chosen *musicimport.Candidate
 	for i := range aj.Candidates {
@@ -226,8 +240,23 @@ func (s *server) addAlbum(ctx context.Context, _ *sdk.CallToolRequest, in AddAlb
 	return nil, JobStarted{JobID: job.ID}, nil
 }
 
+// checkReleaseGroup holds rg_id to the album it is filed under: add_album reads the
+// tracklist from rg_id alone. Unknown fails; a mismatch or a MusicBrainz error warns.
+func (s *server) checkReleaseGroup(ctx context.Context, artist, album, rgID string) (string, error) {
+	g, ok, err := s.deps.Backend.AlbumByID(ctx, rgID)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("rg_id %s could not be checked against %s / %s: %v", rgID, artist, album, err), nil
+	case !ok:
+		return "", fmt.Errorf("rg_id %s is not a MusicBrainz release group: take it from resolve_album", rgID)
+	case !musicimport.MatchesAlbum(g, artist, album):
+		return fmt.Sprintf("rg_id %s is %s / %s, not %s / %s: adding would file that album's tracklist", rgID, g.Artist, g.Title, artist, album), nil
+	}
+	return "", nil
+}
+
 func albumView(aj *albumJob) *AlbumSearchView {
-	v := &AlbumSearchView{Artist: aj.Artist, Album: aj.Album, RGID: aj.RGID, Candidates: []AlbumCandidate{}}
+	v := &AlbumSearchView{Artist: aj.Artist, Album: aj.Album, RGID: aj.RGID, Candidates: []AlbumCandidate{}, Warning: aj.Warning}
 	for _, c := range aj.Candidates {
 		v.Candidates = append(v.Candidates, AlbumCandidate{Hash: c.Hash, Name: c.Title, SizeMB: c.Size >> 20, Seeders: c.Seeders})
 	}

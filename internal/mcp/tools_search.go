@@ -88,6 +88,8 @@ type Title struct {
 
 type ResolveOutput struct {
 	Results []Title `json:"results"`
+	// Warnings name results whose IMDb id TMDB failed to give: retry, it is not absent.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 const maxResolve = 5
@@ -113,6 +115,17 @@ func (s *server) registerSearch(srv *sdk.Server) {
 		Name:        "get_job",
 		Description: "Report a job started by search_releases, add_release, search_album, add_album, inspect_torrent or add_audio. Waits up to wait_seconds for it to finish.",
 	}, s.getJob)
+	sdk.AddTool(srv, &sdk.Tool{
+		Name:        "cancel_job",
+		Description: "Stop a running search_releases, search_album or inspect_torrent job and free its slot. Adds cannot be cancelled.",
+	}, s.cancelJob)
+}
+
+func (s *server) cancelJob(_ context.Context, _ *sdk.CallToolRequest, in CancelInput) (*sdk.CallToolResult, CancelOutput, error) {
+	if err := s.jobs.Cancel(in.JobID); err != nil {
+		return errResult(err), CancelOutput{}, nil
+	}
+	return nil, CancelOutput{JobID: in.JobID, Cancelled: true}, nil
 }
 
 func (s *server) resolveTitle(ctx context.Context, _ *sdk.CallToolRequest, in ResolveInput) (*sdk.CallToolResult, ResolveOutput, error) {
@@ -131,7 +144,10 @@ func (s *server) resolveTitle(ctx context.Context, _ *sdk.CallToolRequest, in Re
 			if i == maxResolve {
 				break
 			}
-			imdb, _ := s.deps.Backend.MovieIMDB(ctx, m.ID)
+			imdb, err := s.deps.Backend.MovieIMDB(ctx, m.ID)
+			if err != nil {
+				out.Warnings = append(out.Warnings, fmt.Sprintf("IMDb id of %s unavailable: %v", m.Title, err))
+			}
 			out.Results = append(out.Results, Title{Title: m.Title, Year: yearOf(m.ReleaseDate), IMDB: imdb, TMDBID: m.ID})
 		}
 	case "tv":
@@ -143,7 +159,10 @@ func (s *server) resolveTitle(ctx context.Context, _ *sdk.CallToolRequest, in Re
 			if i == maxResolve {
 				break
 			}
-			imdb, _ := s.deps.Backend.ShowIMDB(ctx, sh.ID)
+			imdb, err := s.deps.Backend.ShowIMDB(ctx, sh.ID)
+			if err != nil {
+				out.Warnings = append(out.Warnings, fmt.Sprintf("IMDb id of %s unavailable: %v", sh.Name, err))
+			}
 			out.Results = append(out.Results, Title{Title: sh.Name, Year: yearOf(sh.FirstAirDate), IMDB: imdb, TMDBID: sh.ID, FirstAirDate: sh.FirstAirDate})
 		}
 	default:
@@ -186,6 +205,15 @@ type SearchView struct {
 	Seasons          map[string]engines.SeasonStatus `json:"seasons,omitempty"`
 	Show             string                          `json:"show,omitempty"`
 	OverridesApplied map[string]any                  `json:"overrides_applied,omitempty"`
+}
+
+type CancelInput struct {
+	JobID string `json:"job_id"`
+}
+
+type CancelOutput struct {
+	JobID     string `json:"job_id"`
+	Cancelled bool   `json:"cancelled"`
 }
 
 type JobInput struct {
