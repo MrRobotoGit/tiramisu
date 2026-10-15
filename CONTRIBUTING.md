@@ -6,13 +6,12 @@ This document explains what fits the project, and what will be closed. Reading i
 
 ## What Tiramisu is not
 
-Tiramisu is not a download manager, not a debrid client, not a media library UI, and not a media player. It is the infrastructure layer between a torrent swarm and a media server. Everything above that layer (library administration, release selection, naming, tradeoffs) is policy, and policy does not live in this repository: it lives in a versioned [agent skill](hermes/SKILL.md) driven by the user's agent of choice.
+Tiramisu is not a download manager, not a debrid client, not a media library UI, and not a media player. It is the infrastructure layer between a torrent swarm and a media server. Everything above that layer (library administration, release selection, naming, tradeoffs) is policy. Policy lives in the engine as configuration (`quality_scoring`, `language`) and is applied, never imposed: the [MCP server](README.md#mcp-server) presents candidates scored with it, the user may vary it explicitly for one search, and the user always makes the choice.
 
 ## What is welcome
 
 - Improvements, bug fixes, data race fixes and optimizations in the FUSE layer, in the GoStorm engine, and in the torrent client layer, including the vendored anacrolix/torrent fork.
-- Agentic autonomy built on the skill: the skill is the base. An MCP server that exposes primitives already in the Library API is welcome; one that freezes policy (search, scoring, selection) is not. Never without a skill and guardrails.
-- Improvements to the versioned skill, where the project's policy lives.
+- Agentic autonomy built on the MCP server: tools that expose engine primitives and the engine's configurable policy are welcome. Not welcome: policy hardcoded without configuration, or tools that let the agent choose for the user. Never without guardrails.
 - Docker: the maintainer does not run Tiramisu in Docker by design, but every improvement to the Docker image is more than welcome.
 
 ## Before you open a pull request
@@ -25,7 +24,7 @@ Tiramisu is not a download manager, not a debrid client, not a media library UI,
 
 **The engine.** Minimal, stable primitives: torrent add/get/list, FUSE stub creation, blacklist on unlink from the mount, the config API on `:9080`, and the Library API (`add` / `remove` / `list`, raw primitives only). These endpoints exist so clients without filesystem access can do the same operations the mount exposes.
 
-**The skill layer.** Policy: search, scoring, release selection, language and bandwidth tradeoffs, duplicate detection, naming, verification. A server endpoint freezes a policy and cannot ask the user when a tradeoff appears; a skill iterates like documentation. Logic like this will not be merged into the engine, and it will not be merged into the embedded Control Panel either.
+**The policy layer.** Search, scoring, release selection, language and bandwidth tradeoffs live in the engine as configuration, the same profile the scheduled sync uses. The MCP server applies it and presents the result; tradeoffs are surfaced to the user, who decides. A change in policy is a change in configuration first: a hardcoded rule with no setting behind it will not be merged, in the engine, in the MCP server or in the Control Panel.
 
 **The media server.** Metadata, library scanning, subtitle fetching, playback. Do not build these into the FUSE daemon.
 

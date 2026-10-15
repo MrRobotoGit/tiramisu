@@ -91,8 +91,9 @@ blocklist** is optional and off by default; when enabled it is downloaded at
 startup, refreshed every 24 hours, and injected into the engine before any
 connection is made. A **Library API** (`/api/library/add`, `/remove`, `/list`)
 lets any HTTP client file or remove a title, movies, series, music and
-audiobooks alike, without touching the filesystem, and
-`hermes/SKILL.md` is the ready-made skill that teaches an AI agent to use it.
+audiobooks alike, without touching the filesystem, and an
+[MCP server](#mcp-server) at `/mcp` lets an AI agent search, pick and file
+releases with the deployment's own scoring profile.
 All of it, engine included, ships as a single `tiramisu` binary.
 
 ---
@@ -117,7 +118,7 @@ All of it, engine included, ships as a single `tiramisu` binary.
 - [Configuration Reference](#configuration-reference)
 - [Sync Engine](#sync-engine-go-native)
 - [Library API](#library-api-9080)
-- [AI Agent Skill](#ai-agent-skill)
+- [MCP Server](#mcp-server)
 - [Prowlarr Integration](#prowlarr-integration-resilience)
 - [Plex/Jellyfin & Samba Setup](#plexjellyfin-and-samba-setup)
 - [Build from Source](#build-from-source)
@@ -1322,37 +1323,40 @@ there.
 
 ---
 
-## AI Agent Skill
+## MCP Server
 
-`hermes/SKILL.md` is a portable skill file for an AI agent, written for
-[Hermes](https://github.com/NousResearch/hermes-agent) and following the same
-`SKILL.md` convention as [OpenClaw](https://github.com/openclaw/openclaw) and
-Claude Code: YAML frontmatter with a name, a description, a version, an author
-and a license, then markdown instructions. Drop it in a skills directory to use
-it with any of them.
+Tiramisu serves its library tools over MCP at `http://<host>:9080/mcp`
+(Streamable HTTP). An agent searches releases with the deployment's own scoring
+profile, the same pipeline the sync uses, files the one you pick, lists and
+removes entries:
 
-It teaches the agent how to add one specific release by hand for the times the
-automated sync misses something, and how to reason about the holes the reaper
-leaves behind. The flow reads the deployment's own scoring profile from
-`/api/config`, searches the indexers, scores the candidates the way the sync
-engine would, files the winner through the [Library API](#library-api-9080), and
-undoes it if the pick was wrong. Everything goes over HTTP against the control
-port, so the agent needs no access to the host and nothing to install. No hosts,
-ports or weights are hardcoded: they are read from the running configuration, so
-the same file works unchanged on any deployment.
+- Claude Code: `claude mcp add --transport http tiramisu http://<host>:9080/mcp`
+- Any MCP client that speaks Streamable HTTP: point it at the same URL.
 
-The add flow needs v1.9.64 or later, the gap workflow v1.9.71 or later.
+| Tool | What it does |
+|------|--------------|
+| `resolve_title` | Title → IMDb id (and TMDB id, first-air date for shows) |
+| `search_releases` | Prowlarr + Torrentio search, gated and scored like the sync; returns a job |
+| `get_job` | Polls a search, add or inspect job |
+| `add_release` | Files the candidate you chose; TV releases are checked against the show's names |
+| `inspect_torrent`, `add_audio` | Music and audiobooks: list a torrent's files, file its tracks |
+| `list_library`, `list_gaps` | What the library holds; TV episodes the reaper removed |
+| `remove_entries` | Preview first; removes only with `confirm`, for good or to replace |
 
-Once the skill is loaded, plain language is enough:
+Searches and adds run as jobs: indexer searches can take minutes. The agent
+always asks before adding or removing. It changes the scoring profile only for
+one search and only when you ask, and never writes it to `config.json`.
 
 ```
-Hermes, add the latest Dummy Bunny movie in 4K
-Hermes, season 2 of Dummy Bunny is missing episodes 4 to 8, fill them in
-Hermes, is Dummy Bunny (2024) already in the library, and in what quality?
+add the latest Dummy Bunny movie in 4K
+season 2 of Dummy Bunny is missing episodes 4 to 8, fill them in
+is Dummy Bunny (2024) already in the library, and in what quality?
 ```
 
-The agent picks the release, applies the same scoring the sync engine uses, and
-reports what it chose and why before writing anything.
+The search tools need v1.12.0 or later.
+
+> **Trust model:** like the rest of `:9080`, `/mcp` has no authentication.
+> Keep the port on your LAN.
 
 ---
 
