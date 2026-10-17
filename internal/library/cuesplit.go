@@ -298,7 +298,7 @@ func (m *Manager) expandCueImages(ctx context.Context, hash string, files []File
 			if title == "" {
 				title = fmt.Sprintf("Track %02d", t.Number)
 			}
-			name := fmt.Sprintf("%s_%s.flac", SafeComponent(fmt.Sprintf("%02d - %s", t.Number, title)), token)
+			name := KeepComponent(SafeComponent(fmt.Sprintf("%02d - %s", t.Number, title)), "_"+token+".flac")
 			if dir != "." && dir != "" {
 				name = dir + "/" + name
 			}

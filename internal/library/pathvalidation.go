@@ -99,12 +99,37 @@ func validatePathSyntax(virtualPath string) error {
 	return nil
 }
 
+// MaxPathComponents is the component limit validatePathSyntax enforces.
+const MaxPathComponents = maxPathComponents
+
 // SafeComponent turns a title into a path component validatePathComponent accepts:
-// forbidden characters dropped (":" becomes " -"), control characters removed, and
-// no leading period or trailing period or space.
+// NFC, forbidden characters dropped (":" becomes " -"), control characters removed,
+// whitespace collapsed, no leading period or trailing period or space, reserved
+// device names suffixed with "_" and the byte limit applied.
 func SafeComponent(name string) string {
+	out := fitComponent(strings.Join(strings.Fields(cleanRunes(name)), " "), "")
+	if out == "" {
+		return "Untitled"
+	}
+	return out
+}
+
+// KeepComponent is SafeComponent for a name whose spelling is worth keeping, such
+// as a torrent's own folders and files: a name the validator accepts comes back
+// unchanged. suffix (the leaf's "_<hash8>.ext") is appended verbatim and the byte
+// limit leaves room for it. A name with nothing usable left becomes "Untitled":
+// dropping it would merge a folder's files into its parent's.
+func KeepComponent(name, suffix string) string {
+	out := fitComponent(cleanRunes(name), suffix)
+	if out == "" && name != "" {
+		out = "Untitled"
+	}
+	return out + suffix
+}
+
+func cleanRunes(name string) string {
 	var b strings.Builder
-	for _, r := range name {
+	for _, r := range norm.NFC.String(name) {
 		switch {
 		case r == ':':
 			b.WriteString(" -")
@@ -115,11 +140,32 @@ func SafeComponent(name string) string {
 			b.WriteRune(r)
 		}
 	}
-	out := strings.Join(strings.Fields(b.String()), " ")
-	out = strings.TrimLeft(out, ".")
-	out = strings.TrimRight(out, ". ")
-	if out == "" {
-		return "Untitled"
+	// A dropped character can leave a mark next to the base it composes with.
+	return norm.NFC.String(b.String())
+}
+
+// fitComponent applies the rules on a whole component to out, which suffix will
+// end: the trailing rule only binds when nothing follows.
+func fitComponent(out, suffix string) string {
+	trim := func(s string) string {
+		s = strings.TrimLeft(s, ".")
+		if suffix == "" {
+			s = strings.TrimRight(s, ". ")
+		}
+		return s
+	}
+	out = trim(out)
+	if stem, _, _ := strings.Cut(out+suffix, "."); reservedDeviceNames[strings.ToUpper(stem)] && len(stem) <= len(out) {
+		out = out[:len(stem)] + "_" + out[len(stem):]
+	}
+	// A suffix past the limit leaves the component invalid either way; the
+	// validator reports it instead of a slice panic here.
+	for limit := max(maxComponentBytes-len(suffix), 0); len(out) > limit; {
+		cut := limit
+		for cut > 0 && !utf8.RuneStart(out[cut]) {
+			cut--
+		}
+		out = trim(norm.NFC.String(out[:cut]))
 	}
 	return out
 }

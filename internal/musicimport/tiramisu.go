@@ -75,13 +75,13 @@ type CommittedSet struct {
 }
 
 // HasAlbum reports whether the album is already committed. The artist-qualified
-// prefix is enough on its own; the bare-name fallback exists for releases added by
-// hand as a single folder, and it only counts when the identities under that folder
-// include this album's: a same-named album by another artist must not hide a
-// missing import.
+// prefix is enough on its own, with or without identities under it (add_audio files
+// none); the bare-name fallback exists for releases added by hand as a single
+// folder, and it only counts when the identities under that folder include this
+// album's: a same-named album by another artist must not hide a missing import.
 func (c CommittedSet) HasAlbum(artist, album, identity string) bool {
 	prefix := strings.Trim(sanitizeComponent(artist)+"/"+sanitizeComponent(album), "/")
-	if len(c.AlbumPrefixes[prefix]) > 0 {
+	if _, ok := c.AlbumPrefixes[prefix]; ok {
 		return true
 	}
 	bare := c.AlbumPrefixes[sanitizeComponent(album)]
