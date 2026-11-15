@@ -61,16 +61,17 @@ type Cache struct {
 
 	activeReaders atomic.Int32
 
-	isRemove     atomic.Bool
-	isClosed     atomic.Bool
-	IsAggressive bool         // V217: Aggressive download priority
-	MasterLimit  int          // V218: Master limit from config.json
-	lastCleanNS  atomic.Int64 // throttle stamp, read before muRemove is held
-	lastEvictLog time.Time    // rate-limits the starved-eviction warning
-	muRemove     sync.Mutex
-	torrent      *torrent.Torrent
-	cleanTrigger chan struct{} // V227: Rate-limited cleanup trigger (never closed — use cleanStop)
-	cleanStop    chan struct{} // V280: Closed on Cache.Close() to stop the goroutine
+	isRemove       atomic.Bool
+	isClosed       atomic.Bool
+	IsAggressive   bool         // V217: Aggressive download priority
+	MasterLimit    int          // V218: Master limit from config.json
+	lastCleanNS    atomic.Int64 // throttle stamp, read before muRemove is held
+	lastStrandedNS atomic.Int64 // last dropStrandedPartials scan
+	lastEvictLog   time.Time    // rate-limits the starved-eviction warning
+	muRemove       sync.Mutex
+	torrent        *torrent.Torrent
+	cleanTrigger   chan struct{} // V227: Rate-limited cleanup trigger (never closed — use cleanStop)
+	cleanStop      chan struct{} // V280: Closed on Cache.Close() to stop the goroutine
 
 	// V279: Track which pieces have non-None priority set by us.
 	// clearPriority() iterates this (~25 entries) instead of all c.pieces (~512).
@@ -410,12 +411,21 @@ func (c *Cache) cleanPieces() {
 // untouched before it counts as left behind by a seek.
 const strandedPartialAge = 20 * time.Second
 
+// strandedSweepEvery spaces the stranded-partial scans.
+const strandedSweepEvery = 5 * time.Second
+
 // dropStrandedPartials frees incomplete pieces a seek left behind. Eviction only takes complete
 // pieces, and nothing requests these any more, so each would hold a whole piece of RAM until the
 // torrent closes (40 seeks: 480MB allocated in a 128MB cache). The torrent forgets the chunks
 // first, so a later request re-downloads them instead of trusting a freed buffer. Runs after
 // getRemPieces, which rebuilds pieceInRange.
 func (c *Cache) dropStrandedPartials(now time.Time) {
+	// cleanPieces runs many times a second near capacity; a piece needs 20s untouched to qualify,
+	// so a full scan every few seconds loses nothing (it cost ~7% CPU run on every cycle).
+	if last := c.lastStrandedNS.Load(); last != 0 && now.UnixNano()-last < int64(strandedSweepEvery) {
+		return
+	}
+	c.lastStrandedNS.Store(now.UnixNano())
 	c.muReaders.RLock()
 	pieces, tor := c.pieces, c.torrent
 	c.muReaders.RUnlock()
