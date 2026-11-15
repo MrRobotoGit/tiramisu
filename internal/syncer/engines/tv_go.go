@@ -1291,6 +1291,9 @@ func (e *TVGoEngine) processFullpack(ctx context.Context, showName, showIMDB str
 		epPath := filepath.Join(seasonDir, epFilename)
 		streamURL := fmt.Sprintf("%s/stream?link=%s&index=%d&play", e.gostorm.baseURL, hash, vf.ID)
 
+		if e.servedElsewhere(key, epPath, streamURL) {
+			continue
+		}
 		if e.createMKV(epPath, streamURL, vf.Length, magnet) {
 			if existing, ok := e.registry[key]; ok && existing.FilePath != "" && existing.FilePath != epPath {
 				e.removeStub(ctx, existing.FilePath, existing.Hash)
@@ -1375,6 +1378,9 @@ func (e *TVGoEngine) processSingle(ctx context.Context, showName, showIMDB strin
 	epPath := filepath.Join(seasonDir, epFilename)
 	streamURL := fmt.Sprintf("%s/stream?link=%s&index=%d&play", e.gostorm.baseURL, hash, bestFile.ID)
 
+	if e.servedElsewhere(key, epPath, streamURL) {
+		return 0
+	}
 	if e.createMKV(epPath, streamURL, bestFile.Length, magnet) {
 		if existing, ok := e.registry[key]; ok && existing.FilePath != "" && existing.FilePath != epPath {
 			e.removeStub(ctx, existing.FilePath, existing.Hash)
@@ -1659,6 +1665,21 @@ func (e *TVGoEngine) getShowFolderName(showName, firstAirDate string) string {
 
 func (e *TVGoEngine) buildFilename(show string, season, episode int, hash8 string) string {
 	return library.EpisodeFilename(show, season, episode, hash8)
+}
+
+// servedElsewhere reports a torrent file already exposed under another episode name, which is
+// what a generic show title matched to the wrong torrent produces. Moving this episode's own stub
+// (its registry entry points at the duplicate) stays allowed.
+func (e *TVGoEngine) servedElsewhere(key, epPath, streamURL string) bool {
+	dup, ok := library.DuplicateStub(e.tvDir, epPath, streamURL)
+	if !ok {
+		return false
+	}
+	if existing, ok := e.registry[key]; ok && existing.FilePath == dup {
+		return false
+	}
+	e.logger.Printf("[TVSync] skip %s: the same torrent file is already %s", filepath.Base(epPath), dup)
+	return true
 }
 
 // createMKV writes an episode stub. The imdb field stays empty on purpose: the

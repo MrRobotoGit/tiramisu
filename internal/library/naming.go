@@ -6,8 +6,10 @@
 package library
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -174,5 +176,68 @@ func WriteStub(path, streamURL string, size int64, magnet, imdbID string) error 
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+	return WriteStubData(path, data)
+}
+
+// WriteStubData writes a stub only when its content changes, through a rename. The stub's mtime
+// is the virtual file's mtime: rewriting identical content made Plex re-analyse the file, and an
+// in-place write let a concurrent lookup read truncated JSON and answer ENOENT.
+func WriteStubData(path string, data []byte) error {
+	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, data) {
+		return nil
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// DuplicateStub returns another stub under root that already serves the same torrent file as
+// streamURL (same link and index). Two names for one torrent file share one FUSE inode, so the
+// second name inherits the first one's path for playback state, webhooks and removal. Episode
+// names end with the hash's first 8 characters, so only those stubs are read.
+func DuplicateStub(root, path, streamURL string) (string, bool) {
+	link, idx, ok := stubTarget(streamURL)
+	if !ok || len(link) < 8 {
+		return "", false
+	}
+	h8 := strings.ToLower(link[:8])
+	for _, pat := range []string{"*_" + h8 + ".mkv", "*/*_" + h8 + ".mkv", "*/*/*_" + h8 + ".mkv"} {
+		matches, _ := filepath.Glob(filepath.Join(root, pat))
+		for _, m := range matches {
+			if m == path {
+				continue
+			}
+			data, err := os.ReadFile(m)
+			if err != nil {
+				continue
+			}
+			var st struct {
+				URL string `json:"url"`
+			}
+			if json.Unmarshal(data, &st) != nil {
+				continue
+			}
+			if l, i, ok := stubTarget(st.URL); ok && strings.EqualFold(l, link) && i == idx {
+				return m, true
+			}
+		}
+	}
+	return "", false
+}
+
+func stubTarget(streamURL string) (link string, index int, ok bool) {
+	u, err := url.Parse(streamURL)
+	if err != nil {
+		return "", 0, false
+	}
+	q := u.Query()
+	link = q.Get("link")
+	index, err = strconv.Atoi(q.Get("index"))
+	return link, index, link != "" && err == nil
 }

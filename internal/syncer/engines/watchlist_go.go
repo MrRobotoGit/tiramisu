@@ -540,7 +540,7 @@ func (e *WatchlistGoEngine) createMKV(hash, streamTitle string, fileIndex int, f
 		return "", err
 	}
 
-	if err := os.WriteFile(path, jsonData, 0644); err != nil {
+	if err := library.WriteStubData(path, jsonData); err != nil {
 		return "", err
 	}
 
