@@ -465,6 +465,10 @@ func terminateOrphanPump(path string) bool {
 }
 
 // resolveTargetFile finds the torrent hash and file index for a given URL and size.
+// resolveTargetFileFn is resolveTargetFile, a var so the FUSE-layer simulator can resolve without
+// the BitTorrent engine.
+var resolveTargetFileFn = resolveTargetFile
+
 func resolveTargetFile(url string, targetSize int64, physicalPath string) (string, int, error) {
 	if nativeBridge == nil {
 		return "", 0, fmt.Errorf("nativeBridge is nil")
@@ -1385,7 +1389,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 		isNative = true
 	} else {
 		var err error
-		finalHash, fileIdx, err = resolveTargetFile(n.vMeta.URL, n.vMeta.Size, n.vMeta.Path)
+		finalHash, fileIdx, err = resolveTargetFileFn(n.vMeta.URL, n.vMeta.Size, n.vMeta.Path)
 		isNative = (err == nil)
 		if !isNative && gc().LogLevel == "DEBUG" {
 			logger.Printf("[NativeBridge] Resolution failed for %s: %v. Access will rely on cache/retry.", filepath.Base(n.vMeta.Path), err)
@@ -1394,6 +1398,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 
 	h := &MkvHandle{
 		wakeWait:         wakeWait,
+		openedAt:         time.Now(),
 		url:              n.vMeta.URL,
 		magnet:           magnetCandidate, // Store for potential re-wake
 		size:             n.vMeta.Size,
@@ -1490,6 +1495,9 @@ type MkvHandle struct {
 	seqAdvances     atomic.Int32 // consecutive sequential streaming reads, feeds the promotion below
 	headerChainEnd  atomic.Int64 // end of the last header read skipped by isHeaderRead, 0 if none
 	released        atomic.Bool  // Release ran once (orphan GC or kernel)
+	seqRun          atomic.Int32 // consecutive streaming advances, primary or not (feeds streamedOnce)
+	streamedOnce    atomic.Bool  // read sequentially like a player at least once
+	openedAt        time.Time    // set once at Open
 	wakeWait        *pendingWake // activation still running when Open returned; set once
 }
 
@@ -1783,7 +1791,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *native.NativeRea
 
 	if h.hash == "" {
 		// Late hash resolution for handles where Open() didn't complete it.
-		if hash, fileID, err := resolveTargetFile(h.url, h.size, h.path); err == nil {
+		if hash, fileID, err := resolveTargetFileFn(h.url, h.size, h.path); err == nil {
 			h.mu.Lock()
 			h.hash = hash
 			h.fileID = fileID
@@ -2261,10 +2269,16 @@ func advanceProvesStreaming(prevOff, off, readLen, size, tolerance, streamingThr
 const primaryProofReads = 3 // consecutive sequential reads before a handle drives the pump
 
 func (h *MkvHandle) promoteIfStreaming(prevOff, off int64, readLen int) {
+	advance := prevOff >= 0 && advanceProvesStreaming(prevOff, off, int64(readLen), h.size, gc().SequentialTolerance, gc().StreamingThreshold)
+	if !advance {
+		h.seqRun.Store(0)
+	} else if h.seqRun.Add(1) >= primaryProofReads {
+		h.streamedOnce.Store(true)
+	}
 	if h.isPrimaryHandle.Load() || h.hash == "" || prevOff < 0 {
 		return
 	}
-	if !advanceProvesStreaming(prevOff, off, int64(readLen), h.size, gc().SequentialTolerance, gc().StreamingThreshold) {
+	if !advance {
 		h.seqAdvances.Store(0)
 		return
 	}
@@ -2280,6 +2294,16 @@ func (h *MkvHandle) promoteIfStreaming(prevOff, off int64, readLen int) {
 	ps, ok := val.(*PlaybackState)
 	if !ok || !(ps.GetStatus() || ps.IsInferredPlayback()) {
 		return
+	}
+	// A second sequential reader (Plex intro or loudness analysis) must not take the pump from a
+	// player that is watching: they swapped primary back and forth (fusesim analysis_same_file).
+	if inc := activeStreamingPrimary(h.path, h); inc != nil {
+		ps.mu.RLock()
+		confirmedAt := ps.ConfirmedAt
+		ps.mu.RUnlock()
+		if !mayTakeOverStreamingPrimary(h, inc, confirmedAt) {
+			return
+		}
 	}
 	if becomePrimary(h) {
 		logger.Printf("[V284] Handle promoted to primary after %d sequential reads at %dMB: %s",
@@ -2397,6 +2421,48 @@ func primaryOffsetFor(path string, except *MkvHandle) int64 {
 		return true
 	})
 	return off
+}
+
+// primaryActiveWindow is how recently a primary that has streamed must have read to count as a
+// player that is watching.
+const primaryActiveWindow = 2 * time.Second
+
+// primaryStreamingFor reports a primary handle on path, other than except, that has streamed like
+// a player and read within primaryActiveWindow. A stale probe primary (header and Cues only) never
+// streamed, so it does not block the real player's promotion.
+func primaryStreamingFor(path string, except *MkvHandle) bool {
+	return activeStreamingPrimary(path, except) != nil
+}
+
+// mayTakeOverStreamingPrimary reports whether h may take primary from inc, a primary that is
+// watching. Only the player of a session that started while inc was already reading qualifies:
+// opened after inc, and before Plex confirmed the playback. An analysis started during a confirmed
+// session opens after the confirmation (fusesim analysis_same_file); when the analysis was running
+// first, the player opens after it and before the webhook (fusesim analysis_then_play).
+func mayTakeOverStreamingPrimary(h, inc *MkvHandle, confirmedAt time.Time) bool {
+	return !h.openedAt.IsZero() && h.openedAt.After(inc.openedAt) && !h.openedAt.After(confirmedAt)
+}
+
+// activeStreamingPrimary returns the primary handle on path, other than except, that has streamed
+// like a player and read within primaryActiveWindow, or nil.
+func activeStreamingPrimary(path string, except *MkvHandle) *MkvHandle {
+	var found *MkvHandle
+	now := time.Now()
+	activeHandles.Range(func(key, _ interface{}) bool {
+		other, ok := key.(*MkvHandle)
+		if !ok || other == except || other.path != path || !other.isPrimaryHandle.Load() || !other.streamedOnce.Load() {
+			return true
+		}
+		other.mu.Lock()
+		last := other.lastActivityTime
+		other.mu.Unlock()
+		if now.Sub(last) <= primaryActiveWindow {
+			found = other
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 // becomePrimary makes h the only primary handle for its path, returning false if it already was.
@@ -2688,7 +2754,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	h.mu.Lock()
 	// Late hash recovery: if Open() failed to resolve (metadata lag), retry now.
 	if h.hash == "" && h.url != "" {
-		if hash, fileID, err := resolveTargetFile(h.url, h.size, h.path); err == nil {
+		if hash, fileID, err := resolveTargetFileFn(h.url, h.size, h.path); err == nil {
 			h.hash = hash
 			h.fileID = fileID
 			logger.Printf("[LateResolution] Recovered hash for %s: %s", filepath.Base(h.path), h.hash[:8])
@@ -2820,7 +2886,10 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		// isPrimaryHandle so the pump loop's playerOff sync and Release's ps.playerOff
 		// persistence (see nativePump) pick it up instead of only the original primary handle,
 		// which may be an idle stale probe by now.
-		if !h.isPrimaryHandle.Load() {
+		// Only a handle that has streamed like a player qualifies, and never over a primary that is
+		// watching: Plex's sparse probes (chapter thumbnails, analysis) would otherwise take the
+		// pump with every far read (fusesim metadata_probe_same_file: 8 moves, 9 interrupts).
+		if !h.isPrimaryHandle.Load() && h.streamedOnce.Load() && !primaryStreamingFor(h.path, h) {
 			if val, ok := playbackRegistry.Load(h.path); ok {
 				if pbs, ok := val.(*PlaybackState); ok && (pbs.GetStatus() || pbs.IsInferredPlayback()) {
 					becomePrimary(h)
@@ -2831,7 +2900,8 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		if val, ok := activePumps.Load(h.path); ok {
 			ps = val.(*NativePumpState)
 		}
-		if ps == nil || !ps.interruptPending.Swap(true) {
+		// The pump follows the primary: a secondary's seek has nothing of the pump to interrupt.
+		if h.isPrimaryHandle.Load() && (ps == nil || !ps.interruptPending.Swap(true)) {
 			seekReader.Interrupt()
 			torrstor.ResetShield()
 			h.state.Store(stateStreaming)
