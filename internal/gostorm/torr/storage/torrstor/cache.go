@@ -373,6 +373,7 @@ func (c *Cache) cleanPieces() {
 	}()
 
 	remPieces := c.getRemPieces()
+	c.dropStrandedPartials(now)
 	filled := atomic.LoadInt64(&c.filled)
 	if filled > c.capacity {
 		rems := (filled-c.capacity)/c.pieceLength + 1
@@ -403,6 +404,39 @@ func (c *Cache) cleanPieces() {
 		}
 	}
 
+}
+
+// strandedPartialAge is how long an incomplete piece outside every reader window must go
+// untouched before it counts as left behind by a seek.
+const strandedPartialAge = 20 * time.Second
+
+// dropStrandedPartials frees incomplete pieces a seek left behind. Eviction only takes complete
+// pieces, and nothing requests these any more, so each would hold a whole piece of RAM until the
+// torrent closes (40 seeks: 480MB allocated in a 128MB cache). The torrent forgets the chunks
+// first, so a later request re-downloads them instead of trusting a freed buffer. Runs after
+// getRemPieces, which rebuilds pieceInRange.
+func (c *Cache) dropStrandedPartials(now time.Time) {
+	c.muReaders.RLock()
+	pieces, tor := c.pieces, c.torrent
+	c.muReaders.RUnlock()
+	if pieces == nil || tor == nil || c.isClosed.Load() {
+		return
+	}
+	cutoff := now.Unix() - int64(strandedPartialAge/time.Second)
+	for id, p := range pieces {
+		if !strandedPartial(atomic.LoadInt64(&p.Size), p.Complete.Load(),
+			id < len(c.pieceInRange) && c.pieceInRange[id], atomic.LoadInt64(&p.Accessed), cutoff) {
+			continue
+		}
+		since := p.mPiece.writeCount()
+		if tor.ForgetPartialPiece(id) {
+			p.mPiece.releaseIfUnwritten(since)
+		}
+	}
+}
+
+func strandedPartial(size int64, complete, inReaderWindow bool, accessed, cutoff int64) bool {
+	return size > 0 && !complete && !inReaderWindow && accessed <= cutoff
 }
 
 func (c *Cache) getRemPieces() []*Piece {
