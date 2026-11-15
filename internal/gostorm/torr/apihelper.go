@@ -128,6 +128,17 @@ func ForceSaveTorrentToDB(torr *Torrent) {
 	saveTorrentToDB(torr)
 }
 
+// SaveMetadataIfMissing saves the torrent only while its InfoBytes are not persisted yet, which
+// is what lets the next Wake skip the metadata wait. Once they are, a save on every wake only
+// snapshots peers under the client lock during playback; ForceSaveTorrentToDB at expiry keeps
+// the peer list current.
+func SaveMetadataIfMissing(torr *Torrent) {
+	if torr == nil || torr.TorrentSpec == nil || len(torr.TorrentSpec.InfoBytes) > 0 {
+		return
+	}
+	SaveTorrentToDB(torr)
+}
+
 // SaveTorrentToDB saves with a 30s debounce per hash to avoid redundant fsyncs.
 func SaveTorrentToDB(torr *Torrent) {
 	hash := torr.Hash()

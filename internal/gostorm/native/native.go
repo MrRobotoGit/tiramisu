@@ -178,7 +178,7 @@ func (c *NativeClient) Wake(ctx context.Context, magnetUrl string, fileIdx int) 
 		// safely (no streaming active). The previous 90s delayed goroutine was
 		// removed (V306) because it fired during active playback, causing cl._mu
 		// contention (PeerConns snapshot) that briefly stalled the pump.
-		torr.SaveTorrentToDB(t)
+		torr.SaveMetadataIfMissing(t)
 
 		// Optimistic active update
 		c.activeHashes.Store(hash, true)
