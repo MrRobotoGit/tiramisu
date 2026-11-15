@@ -616,11 +616,12 @@ func fillAttrFromStat(st *syscall.Stat_t, out *fuse.Attr) {
 	out.Blocks = uint64(st.Blocks)           // CRITICAL: Samba uses for throughput calc
 	out.Size = uint64(st.Size)
 
-	// Use time.Now() as cross-platform baseline for virtualized FUSE attributes.
-	now := time.Now()
-	out.Mtime = sanitizeTime(now)
-	out.Atime = sanitizeTime(now)
-	out.Ctime = sanitizeTime(now)
+	// The physical directory's times: they move only when a stub is added or removed, so a
+	// scanner can skip unchanged folders. time.Now() made every folder look modified.
+	mtime, ctime := vfs.StatTimes(st)
+	out.Mtime = sanitizeTime(mtime)
+	out.Atime = out.Mtime
+	out.Ctime = sanitizeTime(ctime)
 }
 
 // fillAttrFromMetadata populates FUSE attributes from our internal Metadata.
@@ -1122,6 +1123,32 @@ func invalidateSyncRemovedPath(path string) {
 		}
 	}
 	globalDirCache.Delete(path)
+	notifyKernelEntry(path)
+}
+
+// fuseMaxBackground is fuse_max_background, or master_concurrency_limit when unset.
+func fuseMaxBackground() int {
+	if n := gc().FuseMaxBackground; n > 0 {
+		return n
+	}
+	return gc().ConcurrencyLimit
+}
+
+// kernelRoot is the mounted root inode, for kernel cache invalidation; nil until mounted.
+var kernelRoot atomic.Pointer[fs.Inode]
+
+// notifyKernelEntry drops the kernel's dentry for a physical path, so entry TTLs longer than a
+// second never show a removed stub. Listings are not kernel-cached, only the dircache above.
+func notifyKernelEntry(path string) {
+	root := kernelRoot.Load()
+	if root == nil || physicalSourcePath == "" {
+		return
+	}
+	rel, err := filepath.Rel(physicalSourcePath, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return
+	}
+	safeGo(func() { vfs.NotifyEntryPath(root, filepath.ToSlash(rel)) })
 }
 
 // Unlink handles file deletion and triggers torrent auto-remove (FASE 4.2)
@@ -1255,6 +1282,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	if wake == nil && nativeBridge != nil {
 		wake = nativeBridge.Wake
 	}
+	var wakeWait *pendingWake
 	if wake != nil && magnetCandidate != "" {
 		if headReady {
 			// Open returns instantly here, so the activation must not inherit the
@@ -1280,30 +1308,29 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 			if ctx.Err() != nil {
 				return nil, 0, syscall.EINTR
 			}
-			// A synchronous activation that cannot start is terminal: returning a
-			// handle here gives a scanner a file whose reads can never be served.
-			// The request context goes with it, so a cancelled Open makes the wake
-			// return (and release its semaphore token) instead of running to the
-			// metadata timeout detached.
-			activated := make(chan error, 1)
-			go func() {
-				// A panicking activation must fail the Open, not take the process down.
+			// Samba runs CREATE on the client's single smbd process, so waiting here for a cold
+			// activation (up to the 45s metadata timeout) froze every Plex session of that client.
+			// An activation that fails within the grace still fails Open; a slower one goes on in
+			// the background and the handle's first read waits for it, on Samba's aio threads.
+			pw := &pendingWake{done: make(chan struct{})}
+			if err := vfs.StartWake(func(c context.Context) (err error) {
+				// done must close even on panic, or the handle's reads would wait forever.
 				defer func() {
 					if r := recover(); r != nil {
-						logger.Printf("[PANIC] wake goroutine recovered for %s: %v\n%s", magnetCandidate, r, debug.Stack())
-						activated <- fmt.Errorf("activation panicked: %v", r)
+						err = fmt.Errorf("activation panicked: %v", r)
 					}
+					pw.err = err
+					close(pw.done)
 				}()
-				activated <- wake(ctx, magnetCandidate, urlFileIdx)
-			}()
+				return wake(c, magnetCandidate, urlFileIdx)
+			}, videoWakeGrace, logger.Printf); err != nil {
+				logger.Printf("[VFS] activation failed for %s: %v", n.vMeta.Path, err)
+				return nil, 0, syscall.EIO
+			}
 			select {
-			case err := <-activated:
-				if err != nil {
-					logger.Printf("[VFS] activation failed for %s: %v", n.vMeta.Path, err)
-					return nil, 0, syscall.EIO
-				}
-			case <-ctx.Done():
-				return nil, 0, syscall.EINTR
+			case <-pw.done:
+			default:
+				wakeWait = pw
 			}
 		}
 	}
@@ -1366,6 +1393,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	}
 
 	h := &MkvHandle{
+		wakeWait:         wakeWait,
 		url:              n.vMeta.URL,
 		magnet:           magnetCandidate, // Store for potential re-wake
 		size:             n.vMeta.Size,
@@ -1461,6 +1489,34 @@ type MkvHandle struct {
 	isPrimaryHandle atomic.Bool  // pump creator, primary reconnects (refCount 0→1), proven readers
 	seqAdvances     atomic.Int32 // consecutive sequential streaming reads, feeds the promotion below
 	headerChainEnd  atomic.Int64 // end of the last header read skipped by isHeaderRead, 0 if none
+	released        atomic.Bool  // Release ran once (orphan GC or kernel)
+	wakeWait        *pendingWake // activation still running when Open returned; set once
+}
+
+// pendingWake is a torrent activation Open stopped waiting for.
+type pendingWake struct {
+	done chan struct{}
+	err  error // valid once done is closed
+}
+
+// videoWakeGrace is how long Open waits for a cold video activation before handing it to the reads.
+const videoWakeGrace = 2 * time.Second
+
+// awaitWake blocks a read until the activation Open left running ends.
+func (h *MkvHandle) awaitWake(ctx context.Context) syscall.Errno {
+	pw := h.wakeWait
+	if pw == nil {
+		return 0
+	}
+	select {
+	case <-pw.done:
+		if pw.err != nil {
+			return syscall.EIO
+		}
+		return 0
+	case <-ctx.Done():
+		return syscall.EINTR
+	}
 }
 
 // startNativePump acquires a slot and starts the background pump.
@@ -2114,8 +2170,15 @@ func pathPlaybackActive(path string) bool {
 const headerProbeZone = 2 * 1024 * 1024
 
 // headerChainLimit bounds how far a header read may continue sequentially and still count as one:
-// probes reading on past 2MB stopped by 9MB in production, a player starting over goes on.
-const headerChainLimit = 16 * 1024 * 1024
+// the SSD warmup head (64MB by default). Plex's head reads ran past 16MB on every resume; inside
+// the head the SSD serves the reads and the pump skips that zone anyway, so a player that really
+// starts over loses nothing waiting until the head ends to reposition the pump.
+func headerChainLimit() int64 {
+	if warmup.FileSize > 16*1024*1024 {
+		return warmup.FileSize
+	}
+	return 16 * 1024 * 1024
+}
 
 // isHeaderRead reports a header read by a handle already positioned past it, or a read continuing
 // one sequentially up to headerChainLimit. It is not a seek (82% of seek interrupts in production
@@ -2128,7 +2191,13 @@ func isHeaderRead(prevOff, off, chainEnd, tolerance int64) bool {
 	if off < headerProbeZone {
 		return true
 	}
-	return chainEnd > 0 && off < headerChainLimit && abs(off-chainEnd) <= tolerance
+	limit := headerChainLimit()
+	if off < limit && prevOff >= limit {
+		// Plex parses the head out of order (2MB, then 28MB): any read inside the SSD head by a
+		// handle positioned past it is still header parsing, sequential or not.
+		return true
+	}
+	return chainEnd > 0 && off < limit && abs(off-chainEnd) <= tolerance
 }
 
 // classifyHeaderRead applies isHeaderRead and tracks the chain for the next read.
@@ -2611,6 +2680,9 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 
 	if off >= h.size {
 		return fuse.ReadResultData(nil), 0
+	}
+	if errno := h.awaitWake(fuseCtx); errno != 0 {
+		return nil, errno
 	}
 
 	h.mu.Lock()
@@ -3303,6 +3375,10 @@ func ownsPumpState(handleState, registered *NativePumpState) bool {
 }
 
 func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
+	// The orphan-handle GC releases too; the kernel's later RELEASE must not decrement twice.
+	if h.released.Swap(true) {
+		return 0
+	}
 	ttffReleaseClose(h.path)
 	logger.Printf("=== RELEASE VIRTUAL === path=%s", h.path)
 
@@ -5538,7 +5614,7 @@ func main() {
 		MountOptions: fuse.MountOptions{
 			MaxInflightRequestBytes: maxInflight,
 			AllowOther:              true,
-			MaxBackground:           gc().ConcurrencyLimit,
+			MaxBackground:           fuseMaxBackground(),
 			// MaxWrite:                 1024 * 1024,
 			MaxWrite: 4 * 1024 * 1024, // Samba Turbo: 4MB write buffer
 			// MaxReadAhead:             1024 * 1024,
@@ -5557,6 +5633,8 @@ func main() {
 	}
 
 	logger.Printf("FUSE mounted at %s with VirtualMkvRoot, all systems active", mount)
+	kernelRoot.Store(rootData.EmbeddedInode())
+	vfs.SetMountReadAhead(mount, gc().FuseReadAheadKB)
 
 	go smbdWatchdog()
 	go ttffCleanupLoop()

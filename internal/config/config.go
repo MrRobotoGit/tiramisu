@@ -255,6 +255,14 @@ type Config struct {
 	// Backpressure: past the cap go-fuse stops reading /dev/fuse. 0 = unlimited.
 	FuseMaxInflightMB int64 `json:"fuse_max_inflight_mb"`
 
+	// FuseReadAheadKB is the kernel readahead of the mount (bdi read_ahead_kb): the kernel's
+	// 128KB default splits every 1MB read in eight FUSE requests. 0 leaves the kernel default.
+	FuseReadAheadKB int `json:"fuse_read_ahead_kb"`
+
+	// FuseMaxBackground caps the kernel's async FUSE requests (readahead included); 0 follows
+	// master_concurrency_limit as before.
+	FuseMaxBackground int `json:"fuse_max_background"`
+
 	// --- HTTP Resilience ---
 	MaxRetryAttempts         int `json:"max_retry_attempts"`
 	RetryDelayMS             int `json:"retry_delay_ms"`
@@ -394,10 +402,11 @@ func LoadConfig() Config {
 		BlockListURL:           DefaultBlockListURL,
 		BlockListFilter:        DefaultBlockListFilter,
 
-		AttrTimeoutSeconds:     1.0,
-		EntryTimeoutSeconds:    1.0,
-		NegativeTimeoutSeconds: 0.0,
+		AttrTimeoutSeconds:     5.0, // attributes are content-addressed; out-of-band changes notify the kernel
+		EntryTimeoutSeconds:    5.0,
+		NegativeTimeoutSeconds: 1.0,
 		FuseMaxInflightMB:      0, // off: config.json-only knob, matches go-fuse's own default
+		FuseReadAheadKB:        1024,
 
 		MaxRetryAttempts: 6,
 		RetryDelayMS:     500,
