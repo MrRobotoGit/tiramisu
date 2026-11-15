@@ -5615,6 +5615,9 @@ func main() {
 			MaxInflightRequestBytes: maxInflight,
 			AllowOther:              true,
 			MaxBackground:           fuseMaxBackground(),
+			// Reads are served from memory, where splice only adds a copy through a pipe; with 1MB
+			// readahead every reply also overflowed the 1MB pipe and logged "trySplice" per read.
+			DisableSplice: true,
 			// MaxWrite:                 1024 * 1024,
 			MaxWrite: 4 * 1024 * 1024, // Samba Turbo: 4MB write buffer
 			// MaxReadAhead:             1024 * 1024,
