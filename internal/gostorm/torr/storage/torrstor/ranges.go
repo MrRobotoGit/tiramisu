@@ -123,3 +123,22 @@ func perReaderReadahead(total int64, readers int) int64 {
 	}
 	return ra
 }
+
+// protectedWindow returns the reader's eviction-protected byte range. The forward side covers the
+// readahead actually requested: protecting less made the band between the two download with
+// deadlines and then get evicted as the oldest complete pieces (~11% re-download with 4-8MB
+// pieces). The total stays at `protected`; whatever the readahead leaves goes behind the reader.
+// Before the first AdjustRA (readahead 0) the old percentage split applies.
+func protectedWindow(cur, protected, prc, readahead int64) (begin, end int64) {
+	forward := protected * prc / 100
+	if readahead > 0 {
+		forward = readahead
+	}
+	if forward > protected {
+		forward = protected
+	}
+	if forward < 0 {
+		forward = 0
+	}
+	return cur - (protected - forward), cur + forward
+}
