@@ -1283,7 +1283,7 @@ func (p *Peer) initUpdateRequestsTimer() {
 		}
 	}
 	if enableUpdateRequestsTimer {
-		p.updateRequestsTimer = time.AfterFunc(math.MaxInt64, p.updateRequestsTimerFunc)
+		p.updateRequestsTimer = newReleasedTimer(math.MaxInt64, p.updateRequestsTimerFunc)
 	}
 }
 
@@ -1380,6 +1380,9 @@ func (cl *Client) gotMetadataExtensionMsg(payload []byte, t *Torrent, c *PeerCon
 		return fmt.Errorf("error unmarshalling bencode: %s", err)
 	}
 	piece := d.Piece
+	if piece < 0 {
+		return fmt.Errorf("invalid metadata piece index %d", piece)
+	}
 	switch d.Type {
 	case pp.DataMetadataExtensionMsgType:
 		c.allStats(add(1, func(cs *ConnStats) *Count { return &cs.MetadataChunksRead }))
@@ -1387,6 +1390,10 @@ func (cl *Client) gotMetadataExtensionMsg(payload []byte, t *Torrent, c *PeerCon
 			return fmt.Errorf("got unexpected piece %d", piece)
 		}
 		c.metadataRequests[piece] = false
+		if d.TotalSize != len(t.metadataBytes) {
+			// The peer has a different idea of the metadata: don't mix its data into ours.
+			return nil
+		}
 		begin := len(payload) - d.PieceSize()
 		if begin < 0 || begin >= len(payload) {
 			return fmt.Errorf("data has bad offset in payload: %d", begin)

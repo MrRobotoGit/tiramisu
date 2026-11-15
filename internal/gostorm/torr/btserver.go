@@ -234,8 +234,9 @@ func (bt *BTServer) configure(ctx context.Context) {
 	bt.config.DisableIPv6 = !settings.BTsets.EnableIPv6
 	bt.config.DisableTCP = settings.BTsets.DisableTCP
 	bt.config.DisableUTP = settings.BTsets.DisableUTP
-	//	https://github.com/anacrolix/torrent/issues/703
-	// bt.config.DisableWebtorrent = true //	NE
+	// No WebRTC peers here, and pion/dtls v2 carries CVE-2026-26014 with no fixed v2 release: a
+	// magnet with a wss:// tracker would otherwise start it.
+	bt.config.DisableWebtorrent = true
 	// bt.config.DisableWebseeds = false  //	NE
 	bt.config.NoDefaultPortForwarding = settings.BTsets.DisableUPNP
 	bt.config.NoDHT = settings.BTsets.DisableDHT

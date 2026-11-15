@@ -232,6 +232,8 @@ func (p *Peer) getDesiredRequestState() (desired desiredRequestState) {
 	}
 	// Caller-provided allocation for roaring bitmap iteration.
 	var it typedRoaring.Iterator[RequestIndex]
+	candidateLimit := requestCandidateLimitFor(int(t.chunksPerRegularPiece()), int(p.nominalMaxRequests()))
+	var stealCandidates []RequestIndex
 	requestStrategy.GetRequestablePieces(
 		input,
 		t.getPieceRequestOrder(),
@@ -241,6 +243,10 @@ func (p *Peer) getDesiredRequestState() (desired desiredRequestState) {
 			}
 			if !p.peerHasPiece(pieceIndex) {
 				return false
+			}
+			if len(requestHeap.requestIndexes) >= candidateLimit && len(stealCandidates) >= candidateLimit {
+				// Pieces come in priority order: lower ones cannot win this refill.
+				return true
 			}
 			requestHeap.pieceStates[pieceIndex] = pieceExtra
 			allowedFast := p.peerAllowedFast.Contains(pieceIndex)
@@ -264,14 +270,37 @@ func (p *Peer) getDesiredRequestState() (desired desiredRequestState) {
 					// Can't re-request while awaiting acknowledgement.
 					return
 				}
-				requestHeap.requestIndexes = append(requestHeap.requestIndexes, r)
+				if holder := t.requestingPeer(r); holder == nil || holder == p {
+					if len(requestHeap.requestIndexes) < candidateLimit {
+						requestHeap.requestIndexes = append(requestHeap.requestIndexes, r)
+					}
+				} else if len(stealCandidates) < candidateLimit {
+					if stealCandidates == nil {
+						stealCandidates = make([]RequestIndex, 0, candidateLimit)
+					}
+					stealCandidates = append(stealCandidates, r)
+				}
 			})
 			return true
 		},
 	)
+	// Steal candidates keep their own budget instead of filling what free requests leave
+	// (upstream): a full window of free requests would otherwise drop the urgent steal from a
+	// stalled peer.
+	requestHeap.requestIndexes = append(requestHeap.requestIndexes, stealCandidates...)
 	t.assertPendingRequests()
 	desired.Requests = requestHeap
 	return
+}
+
+// requestCandidateLimitFor bounds the requests a refill considers: enough to refill the peer's
+// pipeline from the highest-priority pieces without heap-sorting the whole readahead window
+// under the client lock after every chunk. Backported from upstream c7ede03b (#1113).
+func requestCandidateLimitFor(chunksPerPiece, nominalMaxRequests int) int {
+	if a, b := chunksPerPiece*2, nominalMaxRequests*4; a > b {
+		return a
+	}
+	return nominalMaxRequests * 4
 }
 
 func (p *Peer) maybeUpdateActualRequestState() {
@@ -388,6 +417,7 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 			diff := int64(current.Requests.GetCardinality()) + 1 - (int64(existing.uncancelledRequests()) - 1)
 			urgent := requestIsUrgent(t.pieceDeadlines[t.pieceIndexOfRequestIndex(req)], now)
 			if !stealPermitted(p.needRequestUpdate, diff, p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived,
+				peerStalled(existing.lastUsefulChunkReceived, existing.lastStartedExpectingToReceiveChunks, now),
 				func() bool { return t.stealRequestGraceElapsed(req, existing, urgent) }) {
 				continue
 			}

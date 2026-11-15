@@ -23,6 +23,9 @@ import (
 
 var vars = expvar.NewMap("tracker/http")
 
+// maxTrackerResponseBytes bounds an HTTP tracker response body.
+const maxTrackerResponseBytes = 4 << 20
+
 func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
 	q := url.Values{}
 
@@ -112,7 +115,12 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 	}
 	defer resp.Body.Close()
 	var buf bytes.Buffer
-	io.Copy(&buf, resp.Body)
+	// A tracker response is a few KB: a broken or hostile tracker must not fill the RAM (upstream
+	// 92ad5149 caps it at 4MiB).
+	if n, _ := io.Copy(&buf, io.LimitReader(resp.Body, maxTrackerResponseBytes+1)); n > maxTrackerResponseBytes {
+		err = fmt.Errorf("tracker response exceeds %d bytes", maxTrackerResponseBytes)
+		return
+	}
 	if resp.StatusCode != 200 {
 		err = fmt.Errorf("response from tracker: %s: %q", resp.Status, buf.Bytes())
 		return

@@ -19,6 +19,8 @@ func (me *lockWithDeferreds) Unlock() {
 	for i := 0; i < len(unlockActions); i += 1 {
 		unlockActions[i]()
 	}
+	// Don't let the backing array keep the actions, and what they capture, alive (upstream 44941e96).
+	clear(unlockActions)
 	me.unlockActions = unlockActions[:0]
 	me.internal.Unlock()
 }

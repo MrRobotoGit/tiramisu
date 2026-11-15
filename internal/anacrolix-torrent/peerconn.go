@@ -63,7 +63,7 @@ type PeerConn struct {
 	// The peer's extension map, as sent in their extended handshake.
 	PeerExtensionIDs map[pp.ExtensionName]pp.ExtensionNumber
 	PeerClientName   atomic.Value
-	uploadTimer      *time.Timer
+	uploadTimer      *releasedTimer
 	pex              pexConnState
 
 	// The pieces the peer has claimed to have.
@@ -71,6 +71,8 @@ type PeerConn struct {
 	// The peer has everything. This can occur due to a special message, when
 	// we may not even know the number of pieces in the torrent yet.
 	peerSentHaveAll bool
+	// Whether we've pinged the peer's DHT node in response to a Port message.
+	sentDhtPing bool
 
 	peerRequestDataAllocLimiter alloclim.Limiter
 
@@ -191,6 +193,9 @@ func (cn *PeerConn) utp() bool {
 }
 
 func (cn *PeerConn) onClose() {
+	if cn.uploadTimer != nil {
+		cn.uploadTimer.Stop()
+	}
 	if cn.pex.IsEnabled() {
 		cn.pex.Close()
 	}
@@ -234,7 +239,7 @@ func (cn *PeerConn) requestMetadataPiece(index int) {
 }
 
 func (cn *PeerConn) requestedMetadataPiece(index int) bool {
-	return index < len(cn.metadataRequests) && cn.metadataRequests[index]
+	return index >= 0 && index < len(cn.metadataRequests) && cn.metadataRequests[index]
 }
 
 func (cn *PeerConn) onPeerSentCancel(r Request) {
@@ -491,9 +496,8 @@ func (cn *PeerConn) onPeerSentHaveAll() error {
 }
 
 func (cn *PeerConn) peerSentHaveNone() error {
-	if !cn.peerSentHaveAll {
-		cn.t.decPeerPieceAvailability(&cn.Peer)
-	}
+	// Also drops the conn from the all-pieces set after a HaveAll (upstream 1014ccaf).
+	cn.t.decPeerPieceAvailability(&cn.Peer)
 	cn._peerPieces.Clear()
 	cn.peerSentHaveAll = false
 	cn.peerPiecesChanged()
@@ -904,10 +908,15 @@ func (c *PeerConn) mainReadLoop() (err error) {
 			req := newRequestFromMessage(&msg)
 			c.onPeerSentCancel(req)
 		case pp.Port:
+			// Only the first Port message is acted on: a peer must not make us ping per message.
+			if c.sentDhtPing {
+				break
+			}
 			ipa, ok := tryIpPortFromNetAddr(c.RemoteAddr)
 			if !ok {
 				break
 			}
+			c.sentDhtPing = true
 			pingAddr := net.UDPAddr{
 				IP:   ipa.IP,
 				Port: ipa.Port,
@@ -1087,7 +1096,7 @@ func (c *PeerConn) uploadAllowed() bool {
 
 func (c *PeerConn) setRetryUploadTimer(delay time.Duration) {
 	if c.uploadTimer == nil {
-		c.uploadTimer = time.AfterFunc(delay, c.tickleWriter)
+		c.uploadTimer = newReleasedTimer(delay, c.tickleWriter)
 	} else {
 		c.uploadTimer.Reset(delay)
 	}

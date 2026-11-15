@@ -142,6 +142,11 @@ type networkAndHost struct {
 }
 
 func isUnsupportedNetworkError(err error) bool {
+	// No support for the family at all (kernel or container without IPv6), or no address of it to
+	// bind: skip the network instead of failing the client (upstream e119fbe2, 6e2c965f).
+	if errors.Is(err, syscall.EAFNOSUPPORT) || errors.Is(err, syscall.EADDRNOTAVAIL) {
+		return true
+	}
 	var sysErr *os.SyscallError
 	//spewCfg := spew.NewDefaultConfig()
 	//spewCfg.ContinueOnMethod = true

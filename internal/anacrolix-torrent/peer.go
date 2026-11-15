@@ -59,7 +59,11 @@ type (
 		lastMessageReceived     time.Time
 		completedHandshake      time.Time
 		lastUsefulChunkReceived time.Time
-		lastChunkSent           time.Time
+		// Last Reject of a request the peer held (not the ack of our cancel). Guarded by the
+		// client lock. Pauses the half-queue refill: a peer that drops requests holds fewer than
+		// its reqq, and refilling early only multiplies the Rejects.
+		lastDropReject time.Time
+		lastChunkSent  time.Time
 
 		// requestLatency is the windowed minimum time from request to chunk, for the adaptive
 		// pipeline target. Guarded by t.cl's lock.
@@ -91,7 +95,7 @@ type (
 		// Stuff controlled by the local peer.
 		needRequestUpdate    string
 		requestState         request_strategy.PeerRequestState
-		updateRequestsTimer  *time.Timer
+		updateRequestsTimer  *releasedTimer
 		lastRequestUpdate    time.Time
 		peakRequests         maxRequests
 		lastBecameInterested time.Time
@@ -659,7 +663,8 @@ func (c *Peer) remoteRejectedRequest(r RequestIndex) bool {
 		c.decPeakRequests()
 		// Only a request the peer held counts as a drop: a Reject that acknowledges our own
 		// cancel (a steal, a seek) says nothing about the peer.
-		c.gradient2Drop(time.Now())
+		c.lastDropReject = time.Now()
+		c.gradient2Drop(c.lastDropReject)
 	} else if c.requestState.Cancelled.CheckedRemove(r) {
 		reason = "Peer.cancel"
 	} else {
@@ -778,7 +783,7 @@ func (c *Peer) receiveChunk(msg *pp.Message) error {
 			if !c.peerChoking {
 				c._chunksReceivedWhileExpecting++
 			}
-			if c.isLowOnRequests() {
+			if c.isLowOnRequests() || c.wantsEarlyRefill(time.Now()) {
 				c.updateRequests("Peer.receiveChunk deleted request")
 			}
 		} else {
@@ -1011,6 +1016,20 @@ func (p *Peer) uncancelledRequests() uint64 {
 }
 
 type peerLocalPublicAddr = IpPort
+
+// refillPauseAfterDrop is how long a peer that dropped one of its requests goes back to being
+// refilled only when its queue is empty.
+const refillPauseAfterDrop = 5 * time.Second
+
+// wantsEarlyRefill reports whether the queue should be topped up before it empties. Refilling
+// only from empty leaves the peer idle for one RTT per batch, and the bandwidth estimate that
+// sizes the queue counts that idle time, so remote peers settle near half their bandwidth.
+func (p *Peer) wantsEarlyRefill(now time.Time) bool {
+	if !p.lastDropReject.IsZero() && now.Sub(p.lastDropReject) < refillPauseAfterDrop {
+		return false
+	}
+	return int(p.requestState.Requests.GetCardinality()) <= int(p.nominalMaxRequests())/2
+}
 
 func (p *Peer) isLowOnRequests() bool {
 	return p.requestState.Requests.IsEmpty() && p.requestState.Cancelled.IsEmpty()

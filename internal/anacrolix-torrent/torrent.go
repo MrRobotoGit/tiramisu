@@ -449,7 +449,7 @@ func (t *Torrent) saveMetadataPiece(index int, data []byte) {
 	if t.haveInfo() {
 		return
 	}
-	if index >= len(t.metadataCompletedChunks) {
+	if index < 0 || index >= len(t.metadataCompletedChunks) {
 		t.logger.Printf("%s: ignoring metadata piece %d", t, index)
 		return
 	}
@@ -462,8 +462,12 @@ func (t *Torrent) metadataPieceCount() int {
 }
 
 func (t *Torrent) haveMetadataPiece(piece int) bool {
+	if piece < 0 {
+		return false
+	}
 	if t.haveInfo() {
-		return (1<<14)*piece < len(t.metadataBytes)
+		// The piece count, not index*16KiB: a peer-supplied index can overflow the product.
+		return piece < t.metadataPieceCount()
 	} else {
 		return piece < len(t.metadataCompletedChunks) && t.metadataCompletedChunks[piece]
 	}
@@ -483,6 +487,10 @@ func infoPieceHashes(info *metainfo.Info) (ret [][]byte) {
 func (t *Torrent) makePieces() {
 	hashes := infoPieceHashes(t.info)
 	t.pieces = make([]Piece, len(hashes))
+	// Piece offsets only grow, so each file search resumes where the previous piece's ended: from
+	// file 0 every time it was O(pieces*files) under the client lock, seconds on a big discography
+	// on the Pi (upstream 58ab7c4d).
+	firstFrom, endFrom := 0, 0
 	for i, hash := range hashes {
 		piece := &t.pieces[i]
 		piece.t = t
@@ -490,8 +498,12 @@ func (t *Torrent) makePieces() {
 		piece.noPendingWrites.L = &piece.pendingWritesMutex
 		piece.hash = (*metainfo.Hash)(unsafe.Pointer(&hash[0]))
 		files := *t.files
-		beginFile := pieceFirstFileIndex(piece.torrentBeginOffset(), files)
-		endFile := pieceEndFileIndex(piece.torrentEndOffset(), files)
+		beginFile := pieceFirstFileIndexFrom(piece.torrentBeginOffset(), files, firstFrom)
+		endFile := pieceEndFileIndexFrom(piece.torrentEndOffset(), files, endFrom)
+		firstFrom = beginFile
+		if endFile > 0 {
+			endFrom = endFile - 1
+		}
 		piece.files = files[beginFile:endFile]
 		// V255: Cache storage.Piece to avoid per-call allocations in hot path.
 		if t.storage != nil {
@@ -503,8 +515,14 @@ func (t *Torrent) makePieces() {
 // Returns the index of the first file containing the piece. files must be
 // ordered by offset.
 func pieceFirstFileIndex(pieceOffset int64, files []*File) int {
-	for i, f := range files {
-		if f.offset+f.length > pieceOffset {
+	return pieceFirstFileIndexFrom(pieceOffset, files, 0)
+}
+
+// pieceFirstFileIndexFrom is pieceFirstFileIndex skipping files before from, which must all end
+// at or before pieceOffset.
+func pieceFirstFileIndexFrom(pieceOffset int64, files []*File, from int) int {
+	for i := from; i < len(files); i++ {
+		if f := files[i]; f.offset+f.length > pieceOffset {
 			return i
 		}
 	}
@@ -514,8 +532,14 @@ func pieceFirstFileIndex(pieceOffset int64, files []*File) int {
 // Returns the index after the last file containing the piece. files must be
 // ordered by offset.
 func pieceEndFileIndex(pieceEndOffset int64, files []*File) int {
-	for i, f := range files {
-		if f.offset+f.length >= pieceEndOffset {
+	return pieceEndFileIndexFrom(pieceEndOffset, files, 0)
+}
+
+// pieceEndFileIndexFrom is pieceEndFileIndex skipping files before from, which must all end
+// before pieceEndOffset.
+func pieceEndFileIndexFrom(pieceEndOffset int64, files []*File, from int) int {
+	for i := from; i < len(files); i++ {
+		if f := files[i]; f.offset+f.length >= pieceEndOffset {
 			return i + 1
 		}
 	}
@@ -635,7 +659,7 @@ func (t *Torrent) setMetadataSize(size int) (err error) {
 		// We already know the correct metadata size.
 		return
 	}
-	if uint32(size) > maxMetadataSize {
+	if size < 0 || int64(size) > int64(maxMetadataSize) {
 		return log.WithLevel(log.Warning, errors.New("bad size"))
 	}
 	if len(t.metadataBytes) == size {
@@ -3690,10 +3714,12 @@ func (t *Torrent) checkValidReceiveChunk(r Request) error {
 	if r.Begin >= pieceLength {
 		return fmt.Errorf("chunk begins beyond end of piece (%v >= %v)", r.Begin, pieceLength)
 	}
-	// We could check chunk lengths here, but chunk request size is not changed often, and tricky
-	// for peers to manipulate as they need to send potentially large buffers to begin with. There
-	// should be considerable checks elsewhere for this case due to the network overhead. We should
-	// catch most of the overflow manipulation stuff by checking index and begin above.
+	// The chunk must be exactly the one we would request: a misaligned or oversized chunk would be
+	// written past its chunk, or past the piece, which the storage layer panics on. Backported from
+	// upstream 4b30f293 (#1171).
+	if expected := t.requestIndexToRequest(t.requestIndexFromRequest(r)); r != expected {
+		return fmt.Errorf("chunk %v doesn't match expected request %v", r, expected)
+	}
 	return nil
 }
 
