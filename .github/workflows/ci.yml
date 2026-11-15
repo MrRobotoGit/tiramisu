@@ -26,6 +26,10 @@ jobs:
     name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # GCC on ubuntu-26.04 defaults to C23, where go-libutp's `typedef uint8 bool` no longer
+      # compiles. The Docker build (bookworm, GCC 12) and the Pi are unaffected.
+      CGO_CFLAGS: "-O2 -g -std=gnu17"
 
     steps:
       - name: Checkout code
