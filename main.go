@@ -1490,6 +1490,7 @@ type MkvHandle struct {
 	hasWarmup       bool          // true if both head+tail warmup available at Open time
 	usesWarmup      bool          // false for audio projections: they skip SSD warmup entirely
 	state           atomic.Uint32 // handleState: stateWarmup | stateStreaming
+	coldBoostTried  atomic.Bool
 	pumpOnce        sync.Once
 	isPrimaryHandle atomic.Bool  // pump creator, primary reconnects (refCount 0→1), proven readers
 	seqAdvances     atomic.Int32 // consecutive sequential streaming reads, feeds the promotion below
@@ -2177,6 +2178,19 @@ func pathPlaybackActive(path string) bool {
 // headerProbeZone is the start of the file that players and Samba re-read for container headers.
 const headerProbeZone = 2 * 1024 * 1024
 
+// boostColdStart raises the torrent's connection limit at the first player read past the header,
+// the same signal probePumpParked uses; header and Cues probes from scans never reach it.
+func (h *MkvHandle) boostColdStart(off int64) {
+	if h.hash == "" || off < headerProbeZone || off >= h.size-tailProbeZoneSize(h.size) || h.coldBoostTried.Swap(true) {
+		return
+	}
+	go func() {
+		if tr := torr.PeekTorrent(h.hash); tr != nil {
+			tr.BoostColdStart()
+		}
+	}()
+}
+
 // headerChainLimit bounds how far a header read may continue sequentially and still count as one:
 // the SSD warmup head (64MB by default). Plex's head reads ran past 16MB on every resume; inside
 // the head the SSD serves the reads and the pump skips that zone anyway, so a player that really
@@ -2794,6 +2808,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	h.storeReadOff(headerRead, off)
 
 	h.promoteIfStreaming(prevOff, off, len(dest))
+	h.boostColdStart(off)
 
 	// Transition WARMUP→STREAMING on resume (first read >= warmup.FileSize), seek (jump > budget),
 	// or plain sequential progression past the warmup zone (no seek ever happens during linear

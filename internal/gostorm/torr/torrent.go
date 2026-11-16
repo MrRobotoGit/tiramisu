@@ -57,6 +57,8 @@ type Torrent struct {
 	closed <-chan struct{}
 
 	cachedFileStats []*state.TorrentFileStat
+
+	coldBoost coldBoost
 }
 
 func NewTorrent(spec *torrent.TorrentSpec, bt *BTServer) (*Torrent, error) {
@@ -226,8 +228,10 @@ func (t *Torrent) UpdateStats() {
 		return
 	}
 
+	usefulBytes := int64(-1)
 	if t.Torrent != nil && t.Torrent.Info() != nil {
 		st := t.Torrent.Stats()
+		usefulBytes = st.BytesReadUsefulData.Int64()
 		deltaDlBytes := st.BytesRead.Int64() - t.BytesReadUsefulData
 		deltaUpBytes := st.BytesWritten.Int64() - t.BytesWrittenData
 		deltaTime := time.Since(t.lastTimeSpeed).Seconds()
@@ -248,6 +252,9 @@ func (t *Torrent) UpdateStats() {
 	t.lastTimeSpeed = time.Now()
 	t.muTorrent.Unlock()
 
+	if usefulBytes >= 0 {
+		t.endColdBoost(usefulBytes)
+	}
 	t.updateRA()
 }
 
