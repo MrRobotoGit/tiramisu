@@ -49,9 +49,25 @@ func IsResponsive() bool {
 // events (seeks, buffer probes) do not reset the escalation history. The cycle
 // resets naturally only when a full clean streak is achieved.
 func ResetShield() {
-	shieldActive.Store(false)
+	// Logged so the dashboard's event timeline sees STRICT end here too, not only on a clean streak.
+	if shieldActive.Swap(false) {
+		log.TLogln("[AdaptiveShield] Shield reset - Restoring FAST mode (Shield: OFF)")
+	}
 	isWatchdogRunning.Store(false)
 	staticCorruptionCount.Store(0)
+}
+
+// ShieldStatus is the Adaptive Shield as the engine holds it: STRICT on or off, the last
+// corruption (Unix seconds, 0 = never) and the clean streak STRICT currently needs.
+func ShieldStatus() (active bool, lastCorruption int64, needS int64) {
+	needS = 30 * int64(strictCycleCount.Load())
+	if needS < 30 {
+		needS = 30
+	}
+	if needS > strictEscalationCapSeconds {
+		needS = strictEscalationCapSeconds
+	}
+	return shieldActive.Load(), lastCorruptionUnix.Load(), needS
 }
 
 type Piece struct {
@@ -114,6 +130,11 @@ func (p *Piece) MarkNotComplete() error {
 	// First corruption event bans the peer (engine level) but keeps FAST mode.
 	// Consecutive or rapid corruption forces STRICT mode.
 	if settings.GetAdaptiveShield() && settings.GetResponsiveMode() && !shieldActive.Load() {
+		// The dashboard reads torrent= to colour the right pipe in the swarm view.
+		torrentHash := "unknown"
+		if p.cache != nil {
+			torrentHash = p.cache.hash.HexString()
+		}
 		count := staticCorruptionCount.Add(1)
 		if count > 1 {
 			cycle := strictCycleCount.Add(1)
@@ -121,10 +142,10 @@ func (p *Piece) MarkNotComplete() error {
 			if cleanNeeded > strictEscalationCapSeconds {
 				cleanNeeded = strictEscalationCapSeconds
 			}
-			log.TLogln("[AdaptiveShield] Persistent corruption - Force STRICT mode (Shield: ACTIVE, cycle", cycle, ", need", cleanNeeded, "s clean)")
+			log.TLogln("[AdaptiveShield] Persistent corruption - Force STRICT mode (Shield: ACTIVE, cycle", cycle, ", need", cleanNeeded, "s clean) torrent="+torrentHash)
 			shieldActive.Store(true)
 		} else {
-			log.TLogln("[AdaptiveShield] Single corruption detected for piece", p.Id, "- FAST mode preserved, monitoring...")
+			log.TLogln("[AdaptiveShield] Single corruption detected for piece", p.Id, "- FAST mode preserved, monitoring... torrent="+torrentHash)
 		}
 	}
 

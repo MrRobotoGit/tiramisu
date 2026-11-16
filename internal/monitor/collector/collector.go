@@ -32,6 +32,13 @@ const shieldEventWindow = 10 * time.Minute
 type ShieldEvent struct {
 	Type string `json:"type"`
 	Time int64  `json:"t"` // UnixMilli
+	// Hash is the torrent whose piece failed verification; empty for "restore" and for
+	// log lines written before the field existed.
+	Hash string `json:"hash,omitempty"`
+	// NeedS is the clean streak the engine requires before leaving STRICT ("strict" only).
+	NeedS int `json:"need_s,omitempty"`
+	// Piece is the piece that failed verification ("corruption" from a single-corruption line).
+	Piece int `json:"piece,omitempty"`
 }
 
 // HealthStatus holds the current system health snapshot.
@@ -117,12 +124,15 @@ type TorrentInfo struct {
 	BytesRead  int64   `json:"bytes_read"`
 	IsPriority bool    `json:"is_priority"`
 	Status     string  `json:"status"`
-	Is4K       bool    `json:"is_4k"`
-	IsDV       bool    `json:"is_dv"`
-	IsHDR      bool    `json:"is_hdr"`
-	Is1080p    bool    `json:"is_1080p"`
-	Audio      string  `json:"audio,omitempty"`
-	Channels   string  `json:"channels,omitempty"`
+	// HalfOpen and Pending are peers still connecting / queued: the swarm view draws them dashed.
+	HalfOpen int    `json:"half_open"`
+	Pending  int    `json:"pending"`
+	Is4K     bool   `json:"is_4k"`
+	IsDV     bool   `json:"is_dv"`
+	IsHDR    bool   `json:"is_hdr"`
+	Is1080p  bool   `json:"is_1080p"`
+	Audio    string `json:"audio,omitempty"`
+	Channels string `json:"channels,omitempty"`
 }
 
 // SpeedPoint is a timestamped speed measurement.
@@ -245,6 +255,9 @@ var (
 	reShieldStrict  = regexp.MustCompile(`\[AdaptiveShield\].*Force STRICT mode`)
 	reShieldRestore = regexp.MustCompile(`\[AdaptiveShield\].*Restoring FAST mode`)
 	reShieldCorr    = regexp.MustCompile(`\[AdaptiveShield\] (?:Single|Persistent) corruption`)
+	reShieldHash    = regexp.MustCompile(`torrent=([0-9a-f]{40})`)
+	reShieldNeed    = regexp.MustCompile(`need (\d+) s clean`)
+	reShieldPiece   = regexp.MustCompile(`for piece (\d+)`)
 )
 
 // parseShieldEvents reads the last portion of tiramisu.log and extracts
@@ -269,13 +282,25 @@ func (c *Collector) parseShieldEvents() []ShieldEvent {
 			continue
 		}
 		ms := t.UnixMilli()
+		hash := ""
+		if h := reShieldHash.FindStringSubmatch(line); h != nil {
+			hash = h[1]
+		}
 		switch {
 		case reShieldStrict.MatchString(line):
-			events = append(events, ShieldEvent{Type: "strict", Time: ms})
+			need := 0
+			if n := reShieldNeed.FindStringSubmatch(line); n != nil {
+				need, _ = strconv.Atoi(n[1])
+			}
+			events = append(events, ShieldEvent{Type: "strict", Time: ms, Hash: hash, NeedS: need})
 		case reShieldRestore.MatchString(line):
 			events = append(events, ShieldEvent{Type: "restore", Time: ms})
 		case reShieldCorr.MatchString(line):
-			events = append(events, ShieldEvent{Type: "corruption", Time: ms})
+			piece := 0
+			if pm := reShieldPiece.FindStringSubmatch(line); pm != nil {
+				piece, _ = strconv.Atoi(pm[1])
+			}
+			events = append(events, ShieldEvent{Type: "corruption", Time: ms, Hash: hash, Piece: piece})
 		}
 	}
 	return events
@@ -387,6 +412,8 @@ func (c *Collector) fetchTorrents() []TorrentInfo {
 		UploadSpeed      float64 `json:"upload_speed"`
 		ActivePeers      int     `json:"active_peers"`
 		ConnectedSeeders int     `json:"connected_seeders"`
+		HalfOpenPeers    int     `json:"half_open_peers"`
+		PendingPeers     int     `json:"pending_peers"`
 		TorrentSize      int64   `json:"torrent_size"`
 		BytesRead        int64   `json:"bytes_read"`
 		IsPriority       bool    `json:"is_priority"`
@@ -419,6 +446,8 @@ func (c *Collector) fetchTorrents() []TorrentInfo {
 			BytesRead:  r.BytesRead,
 			IsPriority: r.IsPriority,
 			Status:     status,
+			HalfOpen:   r.HalfOpenPeers,
+			Pending:    r.PendingPeers,
 		})
 	}
 	return out

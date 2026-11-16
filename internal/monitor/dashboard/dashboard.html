@@ -3,434 +3,666 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tiramisu Health Monitor</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<title>Tiramisu — Monitor</title>
+<link rel="stylesheet" href="/ui/theme.css">
+<script src="/ui/theme.js"></script>
+<script src="/ui/swarm.js"></script>
 <style>
-body{background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);min-height:100vh}
-.glass{background:rgba(30,41,59,.8);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.1)}
-.pulse-ok{animation:pok 2s infinite}
-.pulse-err{animation:perr 1s infinite}
-@keyframes pok{0%,100%{opacity:1}50%{opacity:.7}}
-@keyframes perr{0%,100%{opacity:1}50%{opacity:.5}}
-.log-line{font-family:ui-monospace,monospace;font-size:.75rem;line-height:1.4;white-space:pre-wrap;word-break:break-all}
+.dash { display: grid; grid-template-columns: minmax(0, 712fr) minmax(0, 368fr); gap: 16px; align-items: start; }
+.dash > * { min-width: 0; }
+.dash .full { grid-column: 1 / -1; }
+/* Order on every screen: speed, torrents, active streams, services, scheduler + logs. */
+#p-speed { order: 1; } #p-torrents { order: 2; } #p-streams { order: 3; } #p-status { order: 4; } .dash .half-row { order: 5; }
+/* The network view needs the room: speed and torrents each take a full row. */
+.dash.net-view #p-speed, .dash.net-view #p-torrents { grid-column: 1 / -1; }
+@media (min-width: 901px) { .dash.net-view #p-speed .kpi-row { display: none; } }
+#net-strip { display: flex; align-items: center; gap: 12px; font: 400 10px var(--mono); color: var(--ink3); }
+#net-strip svg { flex: 1; }
+.dash.net-view #p-torrents .card-body { flex-direction: row; align-items: center; gap: 40px; }
+.dash.net-view #p-torrents .card-body > hr { display: none; }
+.dash.net-view #p-torrents .card-body > * { flex: 1; }
+.dash .half-row { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.dash .half-row > * { min-width: 0; }
+
+.strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); background: var(--panel); border: 1px solid var(--hair); border-radius: var(--radius); overflow: hidden; }
+.cell { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; border-left: 1px solid var(--hair); min-width: 0; }
+.cell:first-child { border-left: 0; }
+.cell .v { display: flex; align-items: center; gap: 8px; font-weight: 500; min-width: 0; }
+.cell .v span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell .v.err span:last-child { color: var(--accent); }
+.cell .sub { font-family: var(--mono); font-size: 11px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meter { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.meter .k { width: 30px; color: var(--ink3); }
+.meter .bar { flex: 1; height: 4px; background: var(--well); border-radius: 2px; overflow: hidden; }
+.meter .bar i { display: block; height: 100%; background: var(--ink); border-radius: 2px; width: 0; transition: width .5s; }
+.meter .n { font-family: var(--mono); min-width: 52px; text-align: right; }
+
+.kpi-row { display: flex; align-items: baseline; gap: 8px; }
+.chart { width: 100%; height: 170px; display: block; overflow: visible; }
+.chart .grid { stroke: var(--hair); stroke-width: 1; }
+.chart .ylab { fill: var(--ink3); font: 400 10px var(--mono); }
+.chart .line { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-linejoin: round; }
+.chart .area { fill: var(--area); }
+.shield { width: 100%; height: 10px; display: block; }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 11px; color: var(--ink3); }
+.legend .sw { display: inline-block; vertical-align: middle; margin-right: 6px; }
+.legend .spacer { flex: 1; }
+
+.kpis { display: grid; grid-template-columns: repeat(3, 1fr); }
+.kpis > div { display: flex; flex-direction: column; gap: 4px; padding-left: 16px; border-left: 1px solid var(--hair); }
+.kpis > div:first-child { padding-left: 0; border-left: 0; }
+.fbar { position: relative; height: 12px; background: var(--well); border-radius: 2px; overflow: hidden; display: flex; }
+.fbar i { display: block; height: 100%; transition: width .5s; }
+.fticks { position: relative; height: 4px; }
+.fticks i { position: absolute; top: 0; width: 1px; background: var(--ink3); }
+
+.stream { display: flex; align-items: center; gap: 16px; padding: 14px 24px; border-top: 1px solid var(--hair); }
+.stream:first-child { border-top: 0; }
+.stream.idle { opacity: .45; }
+.poster { width: 42px; height: 60px; flex: 0 0 42px; border-radius: 2px; background: var(--well); box-shadow: inset 0 0 0 1px var(--hair); object-fit: cover; }
+.stream .b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.stream .t { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stream .t span { color: var(--ink3); font-weight: 400; }
+.stream .meta { font-family: var(--mono); font-size: 11px; color: var(--ink3); }
+.stream .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.stream .spd { text-align: right; display: flex; flex-direction: column; gap: 2px; white-space: nowrap; }
+.stream .spd .n { font-family: var(--mono); font-size: 14px; font-weight: 500; }
+
+.job { display: flex; align-items: center; gap: 12px; padding: 13px 24px; border-top: 1px solid var(--hair); }
+.job:first-child { border-top: 0; }
+.job .c { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.job .t { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.job .t b { font-weight: 500; }
+.job .e { font-family: var(--mono); font-size: 11px; color: var(--accent); overflow-wrap: anywhere; }
+
+.terminal { height: 260px; }
+.foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink3); padding-top: 4px; }
+
+.mob-only { display: none !important; }
+.tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; justify-content: space-around; padding: 10px 24px 24px; background: var(--panel); border-top: 1px solid var(--hair); }
+.tabbar a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; font-weight: 500; color: var(--ink3); text-decoration: none; }
+.tabbar a span { font-size: 15px; }
+.tabbar a.active { color: var(--ink); }
+.search .input { width: 300px; }
+.search .kbd { font-family: var(--mono); font-size: 10px; color: var(--ink3); border: 1px solid var(--hair2); border-radius: 3px; padding: 0 4px; }
+
+@media (max-width: 1200px) {
+  .strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cell:nth-child(4) { border-left: 0; }
+  .cell:nth-child(n+4) { border-top: 1px solid var(--hair); }
+}
+@media (max-width: 900px) {
+  /* Phone order: speed, torrents, streams, services, scheduler, logs. */
+  .dash { grid-template-columns: minmax(0, 1fr); }
+  .dash .half-row { display: contents; }
+  #p-speed { order: 1; } #p-torrents { order: 2; } #p-streams { order: 3; }
+  #p-status { order: 4; } #p-sched { order: 5; } #p-logs { order: 6; }
+  .strip { grid-template-columns: 1fr 1fr; }
+  .cell:nth-child(odd) { border-left: 0; }
+  .cell:nth-child(even) { border-left: 1px solid var(--hair); }
+  .cell:nth-child(n+3) { border-top: 1px solid var(--hair); }
+  .stream, .job { padding: 12px 16px; gap: 12px; }
+  .poster { width: 36px; height: 52px; flex-basis: 36px; }
+  .stream .spd { display: none; }
+  .stream .mob-spd { display: block !important; }
+  .terminal { height: 220px; }
+  #p-logs .card-head { flex-wrap: wrap; row-gap: 10px; }
+  #p-logs .card-head .spacer { flex-basis: 100%; height: 0; }
+  .mob-only:not([hidden]) { display: flex !important; }
+  /* Speed reads as a compact figure on the right, leaving the panel to the graph. */
+  #p-speed .kpi-row { justify-content: flex-end; margin-bottom: -6px; }
+  #p-speed .kpi-row .spacer { display: none; }
+  /* One size for every figure on the phone: the speed and the torrent counters read alike. */
+  #p-speed .kpi, #p-torrents .kpi-s { font-size: 26px; letter-spacing: -.02em; font-weight: 300; }
+  .content { padding-bottom: 96px; }
+  .topbar .brand .word { font-size: 15px; }
+  .chart { height: 120px; }
+  .dash.net-view #p-torrents .card-body { flex-direction: column; align-items: stretch; gap: 20px; }
+}
 </style>
 </head>
-<body class="text-slate-100 p-4 md:p-8">
-<div class="max-w-7xl mx-auto">
-
-<!-- Header -->
-<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
-  <div class="flex items-center gap-3">
-    <h1 class="text-lg sm:text-xl md:text-2xl font-bold">Tiramisu Health Monitor</h1>
-    <a id="updateBadge" href="https://github.com/MrRobotoGit/tiramisu/releases/latest" target="_blank" rel="noopener" class="hidden no-underline whitespace-nowrap"></a>
-  </div>
-  <div class="flex items-center gap-3">
-    <button onclick="doRestart()" class="bg-slate-700 hover:bg-red-600 text-white text-xs py-1.5 px-3 rounded transition whitespace-nowrap">Restart</button>
-  </div>
-</div>
-
-<!-- Speed + Torrents -->
-<div class="grid md:grid-cols-2 gap-4 mb-6">
-  <div class="glass rounded-xl p-4">
-    <div class="flex items-center justify-between mb-3">
-      <span class="text-xs text-slate-400 uppercase tracking-wider">Download Speed</span>
-      <span class="text-2xl font-bold"><span id="speed">0</span> <span class="text-sm text-slate-400">Mbps</span></span>
-    </div>
-    <div style="height:150px;position:relative"><canvas id="speedChart"></canvas></div>
-    <canvas id="shieldTimeline" style="width:100%;height:8px;display:block;margin-top:6px"></canvas>
-    <div class="flex items-center gap-4 mt-1.5">
-      <span class="flex items-center gap-1.5 text-[10px] text-slate-500">
-        <span style="width:7px;height:7px;border-radius:50%;background:#f97316;display:inline-block;flex-shrink:0"></span>Adaptive Shield
-      </span>
-      <span class="flex items-center gap-1.5 text-[10px] text-slate-500">
-        <span style="width:16px;height:7px;border-radius:3px;background:rgba(234,179,8,0.50);display:inline-block;flex-shrink:0"></span>Strict Mode
-      </span>
-      <span class="text-[10px] text-slate-500">Banned Peers: <span id="v304BannedPeers">0</span> / Blocked List: <span id="ipBlocklistIPs" title="distinct addresses rejected">0</span></span>
-    </div>
-  </div>
-  <div class="glass rounded-xl p-4">
-    <div class="flex items-center justify-between mb-3">
-      <span class="text-xs text-slate-400 uppercase tracking-wider">Torrents</span>
-      <span class="text-sm text-slate-400"><span id="totalT">0</span> total</span>
-    </div>
-    <div class="grid grid-cols-3 gap-4 text-center mb-4">
-      <div><div class="text-3xl font-bold text-green-400" id="activeT">0</div><div class="text-xs text-slate-400">Active</div></div>
-      <div><div class="text-3xl font-bold text-blue-400" id="peersT">0</div><div class="text-xs text-slate-400">Peers</div></div>
-      <div><div class="text-3xl font-bold text-purple-400" id="seedersT">0</div><div class="text-xs text-slate-400">Seeders</div></div>
-    </div>
-    <!-- FUSE Buffer Bar -->
-    <div class="pt-3 border-t border-slate-700">
-      <div class="flex items-center justify-between mb-1">
-        <span class="text-xs text-slate-400">FUSE Buffer</span>
-        <span class="text-xs text-slate-500" id="fuseBudget">-- MB</span>
+<body>
+<div class="app">
+  <!-- ============ RAIL ============ -->
+  <aside class="rail" aria-label="Navigation">
+    <a class="brand" href="/dashboard">
+      <span class="grille" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      <span><span class="word">tiramisu</span><br><span class="sub">unified engine</span></span>
+    </a>
+    <nav class="nav">
+      <span class="label">Monitor</span>
+      <a href="/dashboard" class="active"><span class="num">◉</span>Dashboard</a>
+    </nav>
+    <nav class="nav">
+      <span class="label">Settings</span>
+      <a href="/control#streaming"><span class="num">01</span>Streaming &amp; FUSE</a>
+      <a href="/control#network"><span class="num">02</span>Network &amp; VPN</a>
+      <a href="/control#sources"><span class="num">03</span>Sources &amp; Media</a>
+      <a href="/control#engine"><span class="num">04</span>Engine</a>
+      <a href="/control#release"><span class="num">05</span>Release Selection</a>
+      <a href="/control#scheduler"><span class="num">06</span>Scheduler</a>
+    </nav>
+    <div class="rail-foot">
+      <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Engine online</span></div>
+      <span class="mono faint small" id="rail-version">—</span>
+      <a class="row" id="rail-update" hidden href="https://github.com/MrRobotoGit/tiramisu/releases/latest" target="_blank" rel="noopener"><span class="chip-tag">Update</span><span class="txt small"></span></a>
+      <hr>
+      <div class="row" style="justify-content:space-between">
+        <span class="small faint">Theme</span>
+        <div class="seg sm" role="group" aria-label="Theme">
+          <button type="button" data-theme-choice="light" onclick="TiramisuUI.setTheme('light')">Light</button>
+          <button type="button" data-theme-choice="dark" onclick="TiramisuUI.setTheme('dark')">Dark</button>
+          <button type="button" data-theme-choice="auto" onclick="TiramisuUI.setTheme('auto')">Auto</button>
+        </div>
       </div>
-      <div class="h-2.5 bg-slate-900 rounded-full overflow-hidden flex">
-        <div id="fuseActiveBar" class="h-full bg-blue-500 transition-all duration-500" style="width:0%"></div>
-        <div id="fuseStaleBar" class="h-full bg-slate-500 transition-all duration-500" style="width:0%"></div>
+      <a href="https://github.com/sponsors/MrRobotoGit" target="_blank" rel="noopener">♥&nbsp; Support the project</a>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+    <header class="topbar">
+      <a class="brand mob-only" href="/dashboard" style="padding:0">
+        <span class="grille" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="word">tiramisu</span>
+      </a>
+      <span class="crumb hide-sm">Monitor &nbsp;/&nbsp; Overview</span>
+      <span class="scope hide-sm" style="margin-left:16px"><span class="lamp run" id="live-lamp"></span><span class="small faint" id="live-txt">Live · refresh 5 s</span></span>
+      <span class="spacer"></span>
+      <form class="search hide-sm" action="/control" method="get" role="search">
+        <div class="input"><span class="faint" aria-hidden="true">⌕</span><input type="search" name="q" placeholder="Find a setting…" autocomplete="off" aria-label="Find a setting"><span class="kbd">⌘K</span></div>
+      </form>
+      <a class="chip-tag fill mob-only" id="top-update" hidden href="https://github.com/MrRobotoGit/tiramisu/releases/latest" target="_blank" rel="noopener"></a>
+      <span class="lamp run mob-only" id="live-lamp-m" aria-hidden="true"></span>
+      <button type="button" class="btn sm" onclick="doRestart()" aria-label="Restart"><span class="ico">↻</span><span class="hide-sm">Restart</span></button>
+    </header>
+
+    <nav class="tabbar mob-only" aria-label="Sections">
+      <a href="/dashboard" class="active"><span>◉</span>Monitor</a>
+      <a href="/control"><span>≡</span>Settings</a>
+      <a href="#p-logs"><span>▤</span>Logs</a>
+    </nav>
+    <div class="content">
+
+      <div class="dash">
+        <!-- Services -->
+        <div class="strip full" id="p-status" aria-label="Services">
+          <div class="cell"><span class="label">GoStorm</span><div class="v" id="v-gostorm"><span class="lamp off"></span><span>—</span></div><div class="sub">api :8090</div></div>
+          <div class="cell"><span class="label">FUSE</span><div class="v" id="v-fuse"><span class="lamp off"></span><span>—</span></div><div class="sub" id="sub-fuse">&nbsp;</div></div>
+          <div class="cell"><span class="label">VPN</span><div class="v" id="v-vpn"><span class="lamp off"></span><span>—</span></div><div class="sub" id="sub-vpn">&nbsp;</div></div>
+          <div class="cell"><span class="label">NAT-PMP</span><div class="v" id="v-natpmp"><span class="lamp off"></span><span>—</span></div><div class="sub" id="sub-natpmp">&nbsp;</div></div>
+          <div class="cell"><span class="label">Media Server</span><div id="l-mediaserver" style="display:flex;flex-direction:column;gap:8px"></div></div>
+          <div class="cell"><span class="label">System</span>
+            <div class="meter"><span class="k">CPU</span><span class="bar"><i id="m-cpu"></i></span><span class="n" id="cpu">--%</span></div>
+            <div class="meter"><span class="k">RAM</span><span class="bar"><i id="m-ram"></i></span><span class="n" id="ram">--%</span></div>
+            <div class="meter"><span class="k">Disk</span><span class="bar"><i id="m-disk"></i></span><span class="n" id="disk">-- GB</span></div>
+          </div>
+        </div>
+
+        <!-- Speed -->
+        <div class="card" id="p-speed">
+          <div class="card-head"><span class="label ink" id="speed-title">Download speed</span><span class="spacer"></span>
+            <span class="mono small hide-sm" style="color:var(--ink2)" id="speed-meta">last 5 min</span>
+            <div class="seg sm" role="group" aria-label="View" id="view-seg">
+              <button type="button" data-view="network">Network</button>
+              <button type="button" data-view="timeline" class="active">Timeline</button>
+            </div>
+          </div>
+          <div class="card-body" style="gap:16px">
+            <div class="kpi-row"><span class="kpi" id="speed">0</span><span class="faint">Mbps</span><span class="spacer"></span></div>
+            <div id="view-timeline" style="display:flex;flex-direction:column;gap:10px">
+              <svg class="chart" id="speedChart" preserveAspectRatio="none" aria-label="Download speed, last 5 minutes"></svg>
+              <svg class="shield" id="shieldTimeline" preserveAspectRatio="none" aria-label="Adaptive Shield timeline" style="width:calc(100% - 38px)"></svg>
+            </div>
+            <div id="view-network" hidden></div>
+            <div id="net-strip" hidden><span>−5 min</span><svg class="shield" id="shieldTimelineNet" preserveAspectRatio="none" aria-label="Adaptive Shield timeline"></svg><span>now</span></div>
+            <div class="legend" id="net-legend" hidden>
+              <span><span class="sw" style="width:7px;height:7px;border-radius:50%;background:var(--ink)"></span>seeder</span>
+              <span><span class="sw" style="width:7px;height:7px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--ink2)"></span>leecher</span>
+              <span><span class="sw" style="width:7px;height:7px;background:var(--ink)"></span>uTP</span>
+              <span><span class="sw" style="width:5px;height:5px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--hair2)"></span>half-open</span>
+              <span><span class="sw accent">✕</span>banned</span>
+              <span><span class="sw" style="width:22px;height:4px;background:var(--ink)"></span>throughput</span>
+              <span><span class="sw" style="width:22px;height:4px;background:var(--accent)"></span>Adaptive Shield · STRICT</span>
+              <span class="spacer"></span>
+              <span>pulses move at the stream's speed</span>
+            </div>
+            <div class="legend" id="tl-legend">
+              <span><span class="sw lamp err" style="width:6px;height:6px"></span>Adaptive Shield</span>
+              <span><span class="sw" style="width:14px;height:6px;border-radius:2px;background:var(--hair2)"></span>Strict mode</span>
+              <span class="spacer"></span>
+              <span class="mono" style="color:var(--ink2)">Banned peers <span id="v304BannedPeers">0</span> · Blocked list <span id="ipBlocklistIPs" title="distinct addresses rejected">0</span></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Torrents -->
+        <div class="card" id="p-torrents">
+          <div class="card-head"><span class="label ink">Torrents</span><span class="spacer"></span><span class="mono small" style="color:var(--ink2)"><span id="totalT">0</span> total</span></div>
+          <div class="card-body" style="gap:20px">
+            <div class="kpis">
+              <div><span class="kpi-s" id="activeT">0</span><span class="small faint">Active</span></div>
+              <div><span class="kpi-s" id="peersT">0</span><span class="small faint">Peers</span></div>
+              <div><span class="kpi-s" id="seedersT">0</span><span class="small faint">Seeders</span></div>
+            </div>
+            <hr class="divider">
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;align-items:center"><span class="label">FUSE buffer</span><span class="spacer" style="flex:1"></span><span class="mono small" style="color:var(--ink2)" id="fuseBudget">-- MB</span></div>
+              <div class="fbar"><i id="fuseActiveBar" style="background:var(--ink);width:0"></i><i id="fuseStaleBar" style="background:var(--hair2);width:0"></i></div>
+              <div class="fticks" id="fticks"></div>
+              <div class="legend" style="color:var(--ink3)">
+                <span><span class="sw" style="width:8px;height:8px;background:var(--ink);border-radius:1px"></span>Active <span class="mono" style="color:var(--ink)" id="fuseActivePct">0%</span></span>
+                <span><span class="sw" style="width:8px;height:8px;background:var(--hair2);border-radius:1px"></span>Stale <span class="mono" style="color:var(--ink)" id="fuseStalePct">0%</span></span>
+                <span class="spacer"></span>
+                <span>Hit rate <span class="mono" style="color:var(--ink);font-weight:600" id="cacheHitRatePct">0%</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Streams -->
+        <div class="card full" id="p-streams">
+          <div class="card-head"><span class="label ink">Active streams</span><span class="num" id="streamCount"></span><span class="spacer"></span><span class="small faint" id="streamSummary"></span></div>
+          <div class="card-body flush" id="streams"><div class="empty" style="padding:16px 24px">No active streams</div></div>
+        </div>
+
+        <div class="half-row">
+          <!-- Scheduler -->
+          <div class="card" id="p-sched">
+            <div class="card-head"><span class="label ink">Sync scheduler</span><span class="spacer"></span><a href="/control#scheduler" class="small" style="text-decoration:none;color:var(--ink2);font-weight:500">Configure →</a></div>
+            <div class="card-body flush" id="scheduler"><div class="empty" style="padding:16px 24px">Loading…</div></div>
+          </div>
+          <!-- Logs -->
+          <div class="card" id="p-logs">
+            <div class="card-head"><span class="label ink">Logs</span><span class="spacer"></span>
+              <div class="seg sm" role="group" aria-label="Log file" id="log-seg">
+                <button type="button" data-log="tiramisu" class="active">tiramisu</button>
+                <button type="button" data-log="movies-sync">movies</button>
+                <button type="button" data-log="tv-sync">tv</button>
+                <button type="button" data-log="watchlist-sync">watchlist</button>
+                <button type="button" data-log="music-sync">music</button>
+              </div>
+            </div>
+            <div class="card-body" style="gap:12px">
+              <div class="terminal" id="logView"><div>Loading…</div></div>
+              <div class="legend"><span id="log-meta">auto-scroll · last 80 lines</span><span class="spacer"></span><button type="button" class="btn ghost sm" id="log-more" style="padding:0">Open full log →</button></div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="flex items-center gap-4 mt-1 text-xs text-slate-500">
-        <span><span class="inline-block w-2 h-2 bg-blue-500 rounded mr-1"></span>Active <span class="text-blue-400" id="fuseActivePct">0%</span></span>
-        <span><span class="inline-block w-2 h-2 bg-slate-500 rounded mr-1"></span>Stale <span id="fuseStalePct">0%</span></span>
-        <span><span class="inline-block w-2 h-2 bg-blue-500 rounded mr-1"></span>Hit Rate <span class="text-blue-400" id="cacheHitRatePct">0%</span></span>
-      </div>
+
+      <div class="foot"><span class="mono">Uptime <span id="uptime">--</span></span><span>Tiramisu Unified Engine<span id="foot-ver"></span></span></div>
     </div>
   </div>
 </div>
 
-<!-- Active Streams -->
-<div class="glass rounded-xl p-4 mb-6">
-  <div class="text-xs text-slate-400 uppercase tracking-wider mb-3">Active Streams</div>
-  <div id="streams" class="space-y-2 max-h-64 overflow-y-auto"><div class="text-slate-500 text-sm">No active streams</div></div>
-</div>
-
-<!-- Service Cards -->
-<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-  <div class="glass rounded-xl p-4" id="c-gostorm">
-    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">GoStorm</div>
-    <div class="flex items-center gap-2"><span id="s-gostorm" class="text-base sm:text-lg">&#9679;</span><span id="l-gostorm" class="text-sm sm:text-base font-bold">--</span></div>
-  </div>
-  <div class="glass rounded-xl p-4" id="c-fuse">
-    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">FUSE</div>
-    <div class="flex items-center gap-2"><span id="s-fuse" class="text-base sm:text-lg">&#9679;</span><span id="l-fuse" class="text-sm sm:text-base font-bold">--</span></div>
-  </div>
-  <div class="glass rounded-xl p-4" id="c-vpn">
-    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">VPN</div>
-    <div class="flex items-center gap-2"><span id="s-vpn" class="text-base sm:text-lg">&#9679;</span><span id="l-vpn" class="text-sm sm:text-base font-bold">--</span></div>
-  </div>
-  <div class="glass rounded-xl p-4" id="c-natpmp">
-    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">NAT-PMP</div>
-    <div class="flex items-center gap-2"><span id="s-natpmp" class="text-base sm:text-lg">&#9679;</span><span id="l-natpmp" class="text-sm sm:text-base font-bold">--</span></div>
-  </div>
-  <div class="glass rounded-xl p-4" id="c-mediaserver">
-    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Media Server</div>
-    <div id="l-mediaserver" class="space-y-1"></div>
-  </div>
-  <div class="glass rounded-xl p-4">
-    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">System</div>
-    <div class="space-y-1 text-sm">
-      <div class="flex justify-between"><span class="text-slate-400">CPU</span><span id="cpu" class="font-mono">--%</span></div>
-      <div class="flex justify-between"><span class="text-slate-400">RAM</span><span id="ram" class="font-mono">--%</span></div>
-      <div class="flex justify-between"><span class="text-slate-400">Disk</span><span id="disk" class="font-mono">-- GB</span></div>
-    </div>
-  </div>
-</div>
-
-<!-- Sync Scheduler -->
-<div class="grid md:grid-cols-2 gap-4 mb-6">
-  <div class="glass rounded-xl p-4">
-    <div class="flex items-center justify-between mb-3">
-      <span class="text-xs text-slate-400 uppercase tracking-wider">Sync Scheduler</span>
-      <a href="/control" class="text-xs text-blue-400 hover:text-blue-300">Control Panel &rarr;</a>
-    </div>
-    <div id="scheduler" class="space-y-2"><div class="text-slate-500 text-sm">Loading...</div></div>
-  </div>
-  <!-- Logs -->
-  <div class="glass rounded-xl p-4">
-    <div class="flex items-center justify-between mb-3">
-      <span class="text-xs text-slate-400 uppercase tracking-wider">Logs</span>
-      <select id="logFile" onchange="loadLogs()" class="bg-slate-700 text-xs text-slate-300 rounded px-2 py-1 border border-slate-600">
-        <option value="tiramisu">tiramisu</option>
-        <option value="movies-sync">movies-sync</option>
-        <option value="tv-sync">tv-sync</option>
-        <option value="watchlist-sync">watchlist-sync</option>
-        <option value="music-sync">music-sync</option>
-      </select>
-    </div>
-    <div id="logView" class="bg-slate-900/80 rounded-lg p-3 max-h-48 overflow-y-auto text-xs font-mono text-slate-400">
-      <div>Loading...</div>
-    </div>
-  </div>
-</div>
-
-<!-- Footer -->
-<div class="flex items-center justify-between text-xs text-slate-600 mt-4">
-  <span>Uptime: <span id="uptime">--</span></span>
-  <span>Tiramisu Unified Engine</span>
-</div>
-
-</div>
 <script>
-let chart;
-const svcKeys=['gostorm','fuse','vpn','natpmp'];
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const SVGNS = 'http://www.w3.org/2000/svg';
+let lastHistory = [], lastShield = [];
 
-function initChart(){
-  const ctx=document.getElementById('speedChart').getContext('2d');
-  chart=new Chart(ctx,{
-    type:'line',
-    data:{labels:[],datasets:[{data:[],borderColor:'#3b82f6',backgroundColor:'rgba(59,130,246,0.1)',fill:true,tension:.3,pointRadius:0,borderWidth:2}]},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{display:false},y:{beginAtZero:true,grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',callback:v=>v.toFixed(0)}}},animation:{duration:300}}
-  });
-}
+function setLamp(lamp, cls) { lamp.className = 'lamp ' + cls; }
 
-function svc(el,st){
-  const dot=document.getElementById('s-'+el),lbl=document.getElementById('l-'+el);
-  if(st.ok){dot.style.color='#22c55e';dot.className='text-2xl pulse-ok';lbl.textContent=st.latency_ms+'ms';}
-  else{dot.style.color='#ef4444';dot.className='text-2xl pulse-err';lbl.textContent=st.message||'down';}
-  if(el==='gostorm'&&st.ok)lbl.textContent='Online';
-  if(el==='fuse'&&st.ok&&st.message)lbl.textContent=st.message;
-  if(el==='vpn'&&st.ok&&st.message)lbl.textContent=st.message;
-  if(el==='natpmp'&&st.ok&&st.message)lbl.textContent=st.message;
+function svc(key, st) {
+  const box = $('v-' + key);
+  if (!box || !st) return;
+  const [lamp, txt] = box.children;
+  let label, sub = '\u00a0';
+  if (st.ok) {
+    label = st.latency_ms + ' ms';
+    if (key === 'gostorm') label = 'Online';
+    if (key === 'fuse') { label = 'Mounted'; sub = st.message || sub; }
+    if (key === 'vpn') { label = st.latency_ms ? 'Connected · ' + st.latency_ms + ' ms' : 'Connected'; sub = st.message || sub; }
+    if (key === 'natpmp' && st.message) label = st.message.charAt(0).toUpperCase() + st.message.slice(1);
+  } else { label = st.message || 'down'; sub = 'check logs'; }
+  setLamp(lamp, st.ok ? '' : 'err pulse');
+  box.classList.toggle('err', !st.ok);
+  txt.textContent = label;
+  const subEl = $('sub-' + key);
+  if (subEl) subEl.textContent = sub;
 }
 
 // One line per server: the user can run Plex and Jellyfin side by side.
-function mediaServers(list){
-  const box=document.getElementById('l-mediaserver');
-  if(!box)return;
-  box.innerHTML='';
-  if(!list){
-    // Before the collector's first cycle there is no answer yet, which is not the same
-    // as having looked and found nothing.
-    box.innerHTML='<div class="flex items-center gap-2"><span class="text-base sm:text-lg" style="color:#64748b">&#9679;</span>'
-      +'<span class="text-sm sm:text-base text-slate-500">checking...</span></div>';
-    return;
-  }
-  if(!list.length){
-    box.innerHTML='<div class="flex items-center gap-2"><span class="text-base sm:text-lg" style="color:#64748b">&#9679;</span>'
-      +'<span class="text-sm sm:text-base text-slate-500">not active</span></div>';
-    return;
-  }
-  for(const m of list){
-    const detail=m.ok?(m.latency_ms?m.latency_ms+'ms':(m.message||'')):(m.message||'down');
-    const row=document.createElement('div');
-    row.className='flex items-center gap-2';
-    row.innerHTML='<span class="text-base sm:text-lg '+(m.ok?'pulse-ok':'pulse-err')+'" style="color:'
-      +(m.ok?'#22c55e':'#ef4444')+'">&#9679;</span>'
-      +'<span class="text-sm sm:text-base font-bold"></span>'
-      +'<span class="text-xs text-slate-400"></span>';
-    row.children[1].textContent=m.product||'Media Server';
-    row.children[2].textContent=detail;
+function mediaServers(list) {
+  const box = $('l-mediaserver');
+  box.innerHTML = '';
+  const line = (cls, name, detail, bad) => {
+    const row = document.createElement('div');
+    row.className = 'v' + (bad ? ' err' : '');
+    row.innerHTML = `<span class="lamp ${cls}"></span><span></span>`;
+    row.lastChild.textContent = name + (detail ? '  ' + detail : '');
     box.appendChild(row);
-  }
-}
-
-function fmtSize(b){if(!b||b<1024)return'0 B';const u=['B','KB','MB','GB','TB'];let i=0,v=b;while(v>=1024&&i<u.length-1){v/=1024;i++}return v.toFixed(1)+' '+u[i]}
-function trunc(t,n){return t&&t.length>n?t.slice(0,n)+'...':t||'--'}
-
-function drawShieldTimeline(events,history){
-  const canvas=document.getElementById('shieldTimeline');
-  if(!canvas)return;
-  const W=canvas.offsetWidth||canvas.parentElement.offsetWidth||300;
-  const H=8;
-  canvas.width=W;canvas.height=H;
-  const ctx=canvas.getContext('2d');
-  ctx.clearRect(0,0,W,H);
-  ctx.fillStyle='rgba(15,23,42,0.5)';
-  ctx.fillRect(0,0,W,H);
-  if(!history||history.length<2)return;
-  const tMin=history[0].t,tMax=history[history.length-1].t;
-  if(tMax<=tMin)return;
-  const toX=t=>Math.round((t-tMin)/(tMax-tMin)*W);
-  const sorted=[...(events||[])].sort((a,b)=>a.t-b.t);
-  // Draw STRICT segments as oblongs (rounded rect)
-  const drawOblong=(x1,x2,alpha)=>{
-    const w=Math.max(6,x2-x1),r=3;
-    ctx.fillStyle=`rgba(234,179,8,${alpha})`;
-    ctx.beginPath();
-    if(ctx.roundRect){ctx.roundRect(x1,1,w,H-2,r);}
-    else{ctx.rect(x1,1,w,H-2);}
-    ctx.fill();
   };
-  let strictAt=null;
-  for(const ev of sorted){
-    if(ev.type==='strict'){strictAt=ev.t;}
-    else if(ev.type==='restore'&&strictAt!==null){
-      drawOblong(Math.max(0,toX(strictAt)),Math.min(W,toX(ev.t)),0.50);
-      strictAt=null;
-    }
-  }
-  if(strictAt!==null){drawOblong(Math.max(0,toX(strictAt)),W,0.55);}
-  // Draw corruption/strict-start dots (orange)
-  for(const ev of sorted){
-    if(ev.type==='corruption'||ev.type==='strict'){
-      const x=toX(ev.t);
-      if(x<0||x>W)continue;
-      ctx.beginPath();ctx.arc(x,H/2,3,0,Math.PI*2);
-      ctx.fillStyle='#f97316';ctx.fill();
-    }
+  // Before the collector's first cycle there is no answer yet, which is not the same
+  // as having looked and found nothing.
+  if (!list) return line('off', 'checking…');
+  if (!list.length) return line('off', 'not active');
+  for (const m of list) {
+    const detail = m.ok ? (m.latency_ms ? m.latency_ms + ' ms' : (m.message || '')) : (m.message || 'down');
+    line(m.ok ? '' : 'err pulse', m.product || 'Media Server', detail, !m.ok);
   }
 }
 
-async function load(){
-  try{
-    const[hR,tR,sR,shR]=await Promise.all([fetch('/api/health'),fetch('/api/torrents'),fetch('/api/speed-history'),fetch('/api/shield-events')]);
-    const h=await hR.json(),torrents=await tR.json(),history=await sR.json(),shieldEvts=await shR.json();
+function fmtSize(b) { if (!b || b < 1024) return '0 B'; const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0, v = b; while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; } return v.toFixed(1) + ' ' + u[i]; }
+function trunc(t, n) { return t && t.length > n ? t.slice(0, n) + '…' : t || '--'; }
 
-    document.getElementById('uptime').textContent=h.uptime;
-    document.getElementById('speed').textContent=h.download_mbps.toFixed(1);
-    document.getElementById('totalT').textContent=h.total_torrents;
-    document.getElementById('activeT').textContent=h.active_count;
-    document.getElementById('peersT').textContent=h.total_peers;
-    document.getElementById('seedersT').textContent=h.total_seeders;
-    document.getElementById('cpu').textContent=h.cpu_pct.toFixed(1)+'%';
-    document.getElementById('ram').textContent=h.ram_pct.toFixed(1)+'%';
-    document.getElementById('disk').textContent=h.disk_free_gb.toFixed(1)+' GB free';
+function el(tag, attrs, parent) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+
+// Axis maximum = 3 round steps, so the grid reads 0 / 40 / 80 / 120 rather than 33 / 67.
+function niceMax(v) {
+  const raw = Math.max(v, 3) / 3;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 4, 5, 10]) if (m * mag >= raw) return 3 * m * mag;
+  return 30 * mag;
+}
+
+function drawChart(history) {
+  const svg = $('speedChart');
+  const W = svg.clientWidth || 600, H = svg.clientHeight || 170;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = '';
+  const labW = 32, pw = W - labW, top = 6, bot = H - 6;
+  const vals = history.map(p => p.v);
+  const ymax = niceMax(Math.max(10, ...vals) * 1.1);
+  const y = v => bot - v / ymax * (bot - top);
+  for (let i = 0; i <= 3; i++) {
+    const v = ymax * i / 3, yy = y(v);
+    el('line', { x1: 0, x2: pw - 6, y1: yy, y2: yy, class: 'grid' }, svg);
+    const t = el('text', { x: W - 2, y: yy + 3, 'text-anchor': 'end', class: 'ylab' }, svg);
+    t.textContent = Math.round(v);
+  }
+  if (history.length < 2) return;
+  const x = i => i / (history.length - 1) * (pw - 6);
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+  el('path', { d: `M${pts.join(' L')} L${x(vals.length - 1)},${bot} L0,${bot} Z`, class: 'area' }, svg);
+  el('path', { d: `M${pts.join(' L')}`, class: 'line' }, svg);
+  el('circle', { cx: x(vals.length - 1), cy: y(vals[vals.length - 1]), r: 3.5, style: 'fill:var(--ink)' }, svg);
+}
+
+function drawShieldTimeline(events, history, id) {
+  const svg = $(id || 'shieldTimeline');
+  const W = svg.clientWidth || 600, H = 10;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = '';
+  el('rect', { x: 0, y: 0, width: W, height: H, rx: 2, style: 'fill:var(--well)' }, svg);
+  if (!history || history.length < 2) return;
+  const tMin = history[0].t, tMax = history[history.length - 1].t;
+  if (tMax <= tMin) return;
+  const toX = t => (t - tMin) / (tMax - tMin) * W;
+  const sorted = [...(events || [])].sort((a, b) => a.t - b.t);
+  // STRICT spans: from a strict event to the next restore (or to now).
+  let strictAt = null;
+  const seg = (a, b) => {
+    const x1 = Math.max(0, toX(a)), x2 = Math.min(W, b == null ? W : toX(b));
+    if (x2 > 0 && x1 < W) el('rect', { x: x1, y: 0, width: Math.max(6, x2 - x1), height: H, rx: 2, style: 'fill:var(--hair2)' }, svg);
+  };
+  for (const ev of sorted) {
+    if (ev.type === 'strict') strictAt = ev.t;
+    else if (ev.type === 'restore' && strictAt !== null) { seg(strictAt, ev.t); strictAt = null; }
+  }
+  if (strictAt !== null) seg(strictAt, null);
+  for (const ev of sorted) {
+    if (ev.type !== 'corruption' && ev.type !== 'strict') continue;
+    const x = toX(ev.t);
+    if (x < 0 || x > W) continue;
+    el('circle', { cx: x, cy: H / 2, r: 3, style: 'fill:var(--accent)' }, svg);
+  }
+}
+
+function renderStreams(torrents) {
+  const active = (torrents || []).filter(t => t.status !== 'idle').sort((a, b) => b.speed_mbs - a.speed_mbs);
+  const box = $('streams');
+  const moving = active.filter(t => t.speed_mbs > 0.01 || t.is_priority).length;
+  $('streamCount').textContent = active.length || '';
+  $('streamSummary').textContent = active.length ? `${moving} streaming · ${active.length - moving} idle` : '';
+  if (!active.length) { box.innerHTML = '<div class="empty" style="padding:16px 24px">No active streams</div>'; return; }
+  box.innerHTML = active.map(t => {
+    const fast = t.speed_mbs > 0.01;
+    const speedTxt = fast ? `${t.speed_mbs.toFixed(1)} MB/s` : (t.status === 'streaming' ? 'streaming' : 'idle');
+    const chips = [];
+    if (t.is_4k) chips.push('4K'); else if (t.is_1080p) chips.push('1080p');
+    if (t.is_dv) chips.push('DV'); else if (t.is_hdr) chips.push('HDR');
+    if (t.audio) chips.push(t.audio + (t.channels ? ' ' + t.channels : ''));
+    const chipHtml = chips.map(c => `<span class="chip-tag">${esc(c)}</span>`).join('')
+      + (t.is_priority ? '<span class="chip-tag fill">Priority</span>' : '');
+    const poster = t.poster
+      ? `<img class="poster" src="${esc(t.poster)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'poster'}))">`
+      : '<span class="poster"></span>';
+    const title = t.clean_title || t.title || '--';
+    const year = t.year ? ` <span>(${esc(t.year)})</span>` : '';
+    const idle = !(fast || t.is_priority);
+    return `<div class="stream${idle ? ' idle' : ''}">
+      ${poster}
+      <div class="b">
+        <div class="t" title="${esc(title)}">${esc(trunc(title, 60))}${year}</div>
+        <div class="meta">${esc((t.hash || '').slice(0, 8))}… · ${fmtSize(t.size)}</div>
+        <div class="chips">${chipHtml}</div>
+        <div class="meta mob-spd" style="display:none;color:var(--ink)">${speedTxt} · ${t.peers} peers · ${t.seeders} seeds</div>
+      </div>
+      <div class="spd"><span class="n">${speedTxt}</span><span class="small faint">${t.peers} peers · ${t.seeders} seeds</span></div>
+      <button type="button" class="key" title="Kill stream" aria-label="Kill stream" data-kill="${esc(t.hash)}">✕</button>
+    </div>`;
+  }).join('');
+}
+
+let lastHealth = null;
+function updateSpeedMeta() {
+  const net = !$('view-network').hidden, h = lastHealth;
+  $('speed-meta').textContent = net && h ? `${h.download_mbps.toFixed(1)} Mbps · ${h.total_peers} peers · ${h.total_seeders} seeders` : 'last 5 min';
+}
+
+function setMeter(id, pct) { $(id).style.width = Math.max(0, Math.min(100, pct || 0)) + '%'; }
+
+async function load() {
+  let ok = true;
+  try {
+    const [hR, tR, sR, shR] = await Promise.all([fetch('/api/health'), fetch('/api/torrents'), fetch('/api/speed-history'), fetch('/api/shield-events')]);
+    const h = await hR.json(), torrents = await tR.json(), history = await sR.json(), shieldEvts = await shR.json();
+    lastHistory = history || []; lastShield = shieldEvts || []; lastHealth = h;
+    updateSpeedMeta();
+
+    $('uptime').textContent = h.uptime;
+    TiramisuUI.setUptime(h.uptime);
+    $('speed').textContent = h.download_mbps.toFixed(1);
+    $('totalT').textContent = (h.total_torrents ?? 0).toLocaleString('en-US');
+    $('activeT').textContent = h.active_count;
+    $('peersT').textContent = h.total_peers;
+    $('seedersT').textContent = h.total_seeders;
+    $('cpu').textContent = h.cpu_pct.toFixed(1) + '%';
+    $('ram').textContent = h.ram_pct.toFixed(1) + '%';
+    $('disk').textContent = h.disk_free_gb.toFixed(1) + ' GB';
+    $('disk').title = h.disk_free_gb.toFixed(1) + ' GB free';
+    setMeter('m-cpu', h.cpu_pct); setMeter('m-ram', h.ram_pct); setMeter('m-disk', h.disk_used_pct);
 
     // FUSE buffer
-    document.getElementById('fuseActiveBar').style.width=Math.min(100,h.fuse_active_pct).toFixed(1)+'%';
-    document.getElementById('fuseStaleBar').style.width=Math.min(100,h.fuse_stale_pct).toFixed(1)+'%';
-    document.getElementById('fuseActivePct').textContent=h.fuse_active_pct.toFixed(1)+'%';
-    document.getElementById('fuseStalePct').textContent=h.fuse_stale_pct.toFixed(1)+'%';
-    document.getElementById('fuseBudget').textContent=h.fuse_budget_mb.toFixed(0)+' MB budget';
-    document.getElementById('cacheHitRatePct').textContent=(h.cache_hit_rate_pct==null)?'—':h.cache_hit_rate_pct.toFixed(1)+'%';
-    document.getElementById('v304BannedPeers').textContent=h.v304_banned_peers ?? 0;
-    const ipk=document.getElementById('ipBlocklistIPs');
-    ipk.textContent=h.ip_blocklist_ips ?? 0;
-    ipk.title=`${h.ip_blocklist_ips ?? 0} distinct addresses, ${h.ip_blocklist_rejections ?? 0} rejections`;
+    $('fuseActiveBar').style.width = Math.min(100, h.fuse_active_pct).toFixed(1) + '%';
+    $('fuseStaleBar').style.width = Math.min(100, h.fuse_stale_pct).toFixed(1) + '%';
+    $('fuseActivePct').textContent = h.fuse_active_pct.toFixed(1) + '%';
+    $('fuseStalePct').textContent = h.fuse_stale_pct.toFixed(1) + '%';
+    $('fuseBudget').textContent = h.fuse_budget_mb.toFixed(0) + ' MB budget';
+    $('cacheHitRatePct').textContent = (h.cache_hit_rate_pct == null) ? '—' : h.cache_hit_rate_pct.toFixed(1) + '%';
+    $('v304BannedPeers').textContent = h.v304_banned_peers ?? 0;
+    const ipk = $('ipBlocklistIPs');
+    ipk.textContent = h.ip_blocklist_ips ?? 0;
+    ipk.title = `${h.ip_blocklist_ips ?? 0} distinct addresses, ${h.ip_blocklist_rejections ?? 0} rejections`;
 
-    svcKeys.forEach(k=>svc(k,h[k]));
+    ['gostorm', 'fuse', 'vpn', 'natpmp'].forEach(k => svc(k, h[k]));
     mediaServers(h.media_servers);
+    setLamp($('rail-lamp'), h.gostorm && h.gostorm.ok ? 'run' : 'err pulse');
+    $('rail-state').textContent = h.gostorm && h.gostorm.ok ? 'Engine online' : 'Engine unreachable';
 
-    if(chart&&history.length){
-      chart.data.labels=history.map((_,i)=>i);
-      chart.data.datasets[0].data=history.map(p=>p.v);
-      chart.update('none');
-    }
-    drawShieldTimeline(shieldEvts,history);
-
-    // Active streams
-    const active=(torrents||[]).filter(t=>t.status!=='idle').sort((a,b)=>b.speed_mbs-a.speed_mbs);
-    const el=document.getElementById('streams');
-    if(!active.length){el.innerHTML='<div class="text-slate-500 text-sm">No active streams</div>';}
-    else{el.innerHTML=active.map(t=>{
-      const speedTxt=t.speed_mbs>0.01?`${(t.speed_mbs*8).toFixed(1)} Mbps`:(t.status==='streaming'?'Streaming':'Idle');
-      const speedCls=t.speed_mbs>0.01?'text-green-400':(t.status==='streaming'?'text-blue-400':'text-slate-500');
-      const badges=[];
-      if(t.is_4k)badges.push('<span class="bg-purple-600/30 text-purple-300 px-1.5 py-0.5 rounded">4K</span>');
-      else if(t.is_1080p)badges.push('<span class="bg-blue-600/30 text-blue-300 px-1.5 py-0.5 rounded">1080p</span>');
-      if(t.is_dv)badges.push('<span class="bg-pink-600/30 text-pink-300 px-1.5 py-0.5 rounded">DV</span>');
-      else if(t.is_hdr)badges.push('<span class="bg-amber-600/30 text-amber-300 px-1.5 py-0.5 rounded">HDR</span>');
-      if(t.audio)badges.push('<span class="bg-cyan-600/30 text-cyan-300 px-1.5 py-0.5 rounded">'+t.audio+(t.channels?' '+t.channels:'')+'</span>');
-      if(t.is_priority)badges.push('<span class="bg-yellow-600/30 text-yellow-400 px-1.5 py-0.5 rounded">Priority</span>');
-      const badgeHtml=badges.length?'<div class="flex gap-1 mt-1 text-xs">'+badges.join('')+'</div>':'';
-      const poster=t.poster?`<img src="${t.poster}" class="w-12 h-16 object-cover rounded flex-shrink-0" onerror="this.style.display='none'">`:'';
-      const title=t.clean_title||(t.title||'--');
-      const year=t.year?` (${t.year})`:'';
-      const isStreaming=t.speed_mbs>0.01||t.is_priority;
-      const dimStyle=isStreaming?'':'opacity:0.5;filter:grayscale(70%)';
-      return`<div class="relative flex items-center gap-3 py-2 px-3 bg-slate-800/50 rounded-lg" style="${dimStyle}">
-      <button onclick="killStream('${t.hash}')" class="absolute top-2 right-2 text-slate-500 hover:text-red-400 hover:bg-red-900/30 rounded p-0.5 transition-colors leading-none text-xs" title="Kill stream">&#x2715;</button>
-      ${poster}
-      <div class="flex-1 min-w-0">
-        <div class="text-sm font-semibold truncate">${trunc(title,60)}${year}</div>
-        <div class="text-xs text-slate-500">${t.hash.slice(0,8)}... &middot; ${fmtSize(t.size)}</div>
-        ${badgeHtml}
-      </div>
-      <div class="text-right flex-shrink-0 pr-5">
-        <div class="text-sm font-bold ${speedCls}">${speedTxt}</div>
-        <div class="text-xs text-slate-500 mt-0.5"><span class="text-blue-400">${t.peers}</span> · <span class="text-purple-400">${t.seeders}</span></div>
-        <div class="text-[10px] text-slate-600">peers · seeds</div>
-      </div>
-    </div>`;}).join('');}
-  }catch(e){console.error('Dashboard update failed:',e);}
+    drawChart(lastHistory);
+    drawShieldTimeline(lastShield, lastHistory);
+    drawShieldTimeline(lastShield, lastHistory, 'shieldTimelineNet');
+    renderStreams(torrents);
+    if (window.Swarm) Swarm.update({ health: h, torrents, shield: lastShield, history: lastHistory });
+  } catch (e) { ok = false; console.error('Dashboard update failed:', e); }
+  setLamp($('live-lamp'), ok ? 'run' : 'err');
+  $('live-lamp-m').className = 'lamp mob-only ' + (ok ? 'run' : 'err');
+  $('live-txt').textContent = ok ? 'Live · refresh 5 s' : 'Monitor unreachable';
 
   // Scheduler
-  try{
-    const sr=await fetch('/api/scheduler/status');
-    if(sr.ok){
-      const sched=await sr.json();const el=document.getElementById('scheduler');
-      const order=['movies','tv','watchlist','music'];
-      const rank=n=>{const i=order.indexOf(n);return i<0?order.length:i;};
-      const jobs=Object.entries(sched).sort(([a],[b])=>rank(a)-rank(b));
-      if(!jobs.length){el.innerHTML='<div class="text-slate-500 text-sm">No jobs configured</div>';return;}
-      el.innerHTML=jobs.map(([name,st])=>{
-        const running=st.running;
-        const dot=running?'<span class="text-green-400 pulse-ok">&#9679;</span>':'<span class="text-slate-500">&#9679;</span>';
-        const status=running?'Running':(st.last_status==='ok'?'OK':(st.last_status||'Idle'));
-        const next=st.next_run?new Date(st.next_run).toLocaleTimeString():'--';
-        const err=st.last_error?`<div class="text-xs text-red-400 mt-1">${st.last_error}</div>`:'';
-        return`<div class="flex items-center justify-between bg-slate-800/50 rounded-lg px-3 py-2">
-          <div class="flex items-center gap-2">${dot}<span class="text-sm font-semibold capitalize">${name}</span>
-            <span class="text-xs text-slate-500">${status} &middot; Next: ${next}</span>${err}</div>
+  try {
+    const sr = await fetch('/api/scheduler/status');
+    if (sr.ok) {
+      const sched = await sr.json(); const box = $('scheduler');
+      const order = ['movies', 'tv', 'watchlist', 'music'];
+      const rank = n => { const i = order.indexOf(n); return i < 0 ? order.length : i; };
+      const jobs = Object.entries(sched).sort(([a], [b]) => rank(a) - rank(b));
+      if (!jobs.length) { box.innerHTML = '<div class="empty" style="padding:16px 24px">No jobs configured</div>'; return; }
+      box.innerHTML = jobs.map(([name, st]) => {
+        const running = st.running;
+        const failed = !running && st.last_status && st.last_status !== 'ok';
+        const status = running ? 'Running' : (st.last_status === 'ok' ? 'OK' : (st.last_status || 'Idle'));
+        const next = st.next_run ? new Date(st.next_run).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--';
+        const err = st.last_error ? `<div class="e">${esc(st.last_error)}</div>` : '';
+        return `<div class="job">
+          <span class="lamp ${running ? 'run' : (failed || st.last_error) ? 'err' : st.last_status ? '' : 'off'}"></span>
+          <div class="c"><div class="t"><b>${esc(JOB_NAMES[name] || name)}</b><span class="small faint">${esc(status)} · next ${esc(next)}</span></div>${err}</div>
           ${running
-            ?`<button onclick="stopSync('${name}')" class="bg-red-700 hover:bg-red-600 text-white text-xs py-1 px-3 rounded transition">Stop</button>`
-            :`<button onclick="triggerSync('${name}')" class="bg-slate-600 hover:bg-blue-600 text-white text-xs py-1 px-3 rounded transition">Run</button>`}
+            ? `<button type="button" class="btn sm danger" data-stop="${esc(name)}">■ Stop</button>`
+            : `<button type="button" class="btn sm" data-run="${esc(name)}">▶ Run</button>`}
         </div>`;
       }).join('');
     }
-  }catch(e){}
+  } catch (e) { }
 }
 
-async function loadLogs(){
-  const file=document.getElementById('logFile').value;
-  const el=document.getElementById('logView');
-  try{
-    const r=await fetch(`/api/logs?file=${file}&lines=80`);
-    const d=await r.json();
-    const lines=d.lines||[];
-    if(!lines.length){el.innerHTML='<div class="text-slate-500">No logs</div>';return;}
-    el.innerHTML=lines.map(l=>{
-      let cls='text-slate-400';
-      if(/\bERROR\b/i.test(l))cls='text-red-400';
-      else if(/\bWARN/i.test(l))cls='text-yellow-400';
-      else if(/\bSUCCESS|Created|✅/i.test(l))cls='text-green-400';
-      return`<div class="log-line ${cls}">${l.replace(/</g,'&lt;')}</div>`;
+const JOB_NAMES = { movies: 'Movies', tv: 'TV', watchlist: 'Watchlist', music: 'Music' };
+let logFile = 'tiramisu', logLines = 80;
+$('log-more').addEventListener('click', () => {
+  logLines = logLines === 80 ? 200 : 80;
+  $('logView').style.height = logLines === 200 ? '560px' : '';
+  $('log-more').textContent = logLines === 200 ? '← Back to 80 lines' : 'Open full log →';
+  $('log-meta').textContent = `auto-scroll · last ${logLines} lines`;
+  loadLogs();
+});
+async function loadLogs() {
+  const box = $('logView');
+  try {
+    const r = await fetch(`/api/logs?file=${encodeURIComponent(logFile)}&lines=${logLines}`);
+    const d = await r.json();
+    const lines = d.lines || [];
+    if (!lines.length) { box.innerHTML = '<div class="ts">No logs</div>'; return; }
+    box.innerHTML = lines.map(l => {
+      let cls = '';
+      if (/\bERROR\b/i.test(l)) cls = 'err';
+      else if (/\bWARN/i.test(l)) cls = 'warn';
+      else if (/\bSUCCESS|Created|✅/i.test(l)) cls = 'ok';
+      // Optional "[Prefix] " before the standard logger date; the time is lifted to the left either way.
+      const m = l.match(/^(\[[^\]]+\]\s)?(\d{4}\/\d{2}\/\d{2}\s)?(\d{2}:\d{2}:\d{2})(?:\.\d+)?\s?(.*)$/);
+      const body = m ? `<span class="ts">${esc(m[3])}</span>  ${esc((m[1] || '') + m[4])}` : esc(l);
+      return `<div class="ln ${cls}">${body}</div>`;
     }).join('');
-    el.scrollTop=el.scrollHeight;
-  }catch(e){el.innerHTML='<div class="text-red-400">Failed to load logs</div>';}
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { box.innerHTML = '<div class="err">Failed to load logs</div>'; }
 }
 
-async function triggerSync(name){
-  try{const r=await fetch(`/api/scheduler/${name}/run`,{method:'POST'});
-    if(r.status===409)alert(name+' is already running');
-    else if(r.ok)setTimeout(load,1000);
-  }catch(e){}
+document.querySelectorAll('#log-seg button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#log-seg button').forEach(x => { x.classList.toggle('active', x === b); x.setAttribute('aria-pressed', x === b); });
+  logFile = b.dataset.log;
+  loadLogs();
+}));
+
+document.querySelectorAll('#view-seg button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#view-seg button').forEach(x => { x.classList.toggle('active', x === b); x.setAttribute('aria-pressed', x === b); });
+  const net = b.dataset.view === 'network';
+  $('view-network').hidden = !net;
+  $('view-timeline').hidden = net;
+  $('net-legend').hidden = !net;
+  $('net-strip').hidden = !net;
+  $('tl-legend').hidden = net;
+  $('speed-title').textContent = net ? 'Live swarm' : 'Download speed';
+  updateSpeedMeta();
+  document.querySelector('.dash').classList.toggle('net-view', net);
+  try { localStorage.setItem('gs-dash-view', b.dataset.view); } catch (_) { }
+  if (net && window.Swarm) Swarm.redraw();
+  if (!net) { drawChart(lastHistory); drawShieldTimeline(lastShield, lastHistory); }
+  else drawShieldTimeline(lastShield, lastHistory, 'shieldTimelineNet');
+}));
+
+// Actions come from data attributes, never from strings spliced into handler code.
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-kill],[data-run],[data-stop]');
+  if (!b) return;
+  if (b.dataset.kill) killStream(b.dataset.kill);
+  else if (b.dataset.run) triggerSync(b.dataset.run);
+  else if (b.dataset.stop) stopSync(b.dataset.stop);
+});
+
+async function triggerSync(name) {
+  try {
+    const r = await fetch(`/api/scheduler/${name}/run`, { method: 'POST' });
+    if (r.status === 409) alert(name + ' is already running');
+    else if (r.ok) setTimeout(load, 1000);
+  } catch (e) { }
 }
 
-async function stopSync(name){
-  if(!confirm(`Stop ${name} sync?`))return;
-  try{await fetch(`/api/scheduler/${name}/stop`,{method:'POST'});}catch(e){}
-  setTimeout(load,1000);
+async function stopSync(name) {
+  if (!confirm(`Stop ${name} sync?`)) return;
+  try { await fetch(`/api/scheduler/${name}/stop`, { method: 'POST' }); } catch (e) { }
+  setTimeout(load, 1000);
 }
 
-async function killStream(hash){
-  if(!confirm('Kill this stream? Playback will stop.'))return;
-  try{
-    const r=await fetch(`/api/kill-stream/${hash}`,{method:'POST'});
-    const d=await r.json();
-    if(d.status==='ok'){setTimeout(load,500);}
-    else alert('Kill failed: '+(d.message||'unknown error'));
-  }catch(e){alert('Connection error');}
+async function killStream(hash) {
+  if (!confirm('Kill this stream? Playback will stop.')) return;
+  try {
+    const r = await fetch(`/api/kill-stream/${hash}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.status === 'ok') { setTimeout(load, 500); }
+    else alert('Kill failed: ' + (d.message || 'unknown error'));
+  } catch (e) { alert('Connection error'); }
 }
 
-function doRestart(){
-  if(!confirm('Restart Tiramisu? Active streams will be interrupted.'))return;
-  fetch('/api/restart',{method:'POST'}).then(()=>{
-    document.body.innerHTML='<div class="flex items-center justify-center h-screen text-2xl text-slate-400">Restarting... please wait</div>';
-    setTimeout(()=>location.reload(),8000);
-  }).catch(()=>{});
+function doRestart() {
+  if (!confirm('Restart Tiramisu? Active streams will be interrupted.')) return;
+  fetch('/api/restart', { method: 'POST' }).then(() => {
+    document.querySelector('.content').innerHTML = '<div class="empty" style="padding:80px 0;font-size:20px;text-align:center">Restarting… please wait</div>';
+    setTimeout(() => location.reload(), 8000);
+  }).catch(() => { });
 }
 
-async function checkUpdate(){
-  try{
-    const r=await fetch('/metrics');if(!r.ok)return;
-    const d=await r.json();
-    if(d.update_available&&d.latest_version){
-      const b=document.getElementById('updateBadge');
-      const isDev=!d.version||d.version==='dev';
-      if(isDev){
-        // Dev build: can't confirm the running code actually matches the latest tag, so show
-        // plain text (not the amber "update available" badge, which would be a false alarm).
-        b.className='hidden no-underline whitespace-nowrap text-xs text-slate-500';
-        b.textContent='Stable: '+d.latest_version;
-        b.title='Dev build — latest stable: '+d.latest_version;
-      }else{
-        b.className='hidden bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-medium py-0.5 px-2 rounded-full transition no-underline whitespace-nowrap';
-        b.textContent='Update '+d.latest_version;
-        b.title='Current: '+d.version+' → '+d.latest_version;
-      }
-      b.classList.remove('hidden');
-    }
-  }catch(_){}
-}
+// FUSE buffer scale: a tick every 10%, longer every 50%.
+(function () {
+  const t = $('fticks');
+  for (let i = 0; i <= 10; i++) {
+    const k = document.createElement('i');
+    k.style.left = `calc(${i * 10}% - ${i === 10 ? 1 : 0}px)`;
+    k.style.height = (i % 5 === 0 ? 4 : 2) + 'px';
+    t.appendChild(k);
+  }
+})();
 
-initChart();
+window.addEventListener('resize', () => {
+  drawChart(lastHistory); drawShieldTimeline(lastShield, lastHistory); drawShieldTimeline(lastShield, lastHistory, 'shieldTimelineNet');
+  if (window.Swarm) Swarm.redraw();
+});
+document.addEventListener('themechange', () => { if (window.Swarm) Swarm.redraw(); });
+
+if (window.Swarm) Swarm.mount($('view-network'));
+(function () {
+  let v = 'network';
+  try { v = localStorage.getItem('gs-dash-view') || 'network'; } catch (_) { }
+  document.querySelector(`#view-seg button[data-view="${v}"]`)?.click();
+})();
 load();
 loadLogs();
-checkUpdate();
-setInterval(load,5000);
-setInterval(loadLogs,15000);
-setInterval(checkUpdate,300000);
+TiramisuUI.checkUpdate().then(() => {
+  const v = document.getElementById('rail-version')?.textContent.split(' · ')[0];
+  if (v && v !== '—') $('foot-ver').textContent = ' · ' + v;
+});
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); document.querySelector('.search input')?.focus(); }
+});
+setInterval(load, 5000);
+setInterval(loadLogs, 15000);
+setInterval(() => TiramisuUI.checkUpdate(), 300000);
 </script>
 </body>
 </html>

@@ -46,6 +46,7 @@ import (
 	"tiramisu/internal/lockmgr"
 	"tiramisu/internal/mcp"
 	"tiramisu/internal/metadb"
+	"tiramisu/internal/monitor/clients"
 	"tiramisu/internal/monitor/collector"
 	"tiramisu/internal/monitor/dashboard"
 	"tiramisu/internal/natpmp"
@@ -62,6 +63,7 @@ import (
 	"tiramisu/internal/updater"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
+	"tiramisu/internal/webui"
 
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
@@ -5143,11 +5145,12 @@ func main() {
 		// Gradient2 closed-loop state: the dry run reads backing_off/limit_max to see the loop
 		// react to queueing before its 32-request ceiling is raised.
 		g2Stats := torr.CollectGradient2Stats()
+		shieldOn, shieldLastCorr, shieldNeed := torrstor.ShieldStatus()
 
 		shortStream, shortFetch := native.ShortReadCounts()
 		repairedStream, unfilledStream := native.ShortReadRepairCounts()
 
-		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d, "peer_conns_tcp":%d, "peer_conns_utp":%d, "peer_rated_tcp":%d, "peer_rated_utp":%d, "peer_useful_bps_tcp":%.0f, "peer_useful_bps_utp":%.0f, "peer_eject_count_utp":%d, "peer_churn_count":%d, "peer_churn_count_utp":%d, "deadline_pieces":%d, "audio_namespace_state":"%s", "audio_namespace_entries":%d, "gradient2_peers":%d, "gradient2_backing_off":%d, "gradient2_limit_min":%d, "gradient2_limit_max":%d}`,
+		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d, "peer_conns_tcp":%d, "peer_conns_utp":%d, "peer_rated_tcp":%d, "peer_rated_utp":%d, "peer_useful_bps_tcp":%.0f, "peer_useful_bps_utp":%.0f, "peer_eject_count_utp":%d, "peer_churn_count":%d, "peer_churn_count_utp":%d, "deadline_pieces":%d, "audio_namespace_state":"%s", "audio_namespace_entries":%d, "gradient2_peers":%d, "gradient2_backing_off":%d, "gradient2_limit_min":%d, "gradient2_limit_max":%d, "shield_active":%t, "shield_last_corruption":%d, "shield_need_s":%d}`,
 			AppVersion,
 			gc().ConfigPath,
 			time.Since(startTime),
@@ -5172,7 +5175,8 @@ func main() {
 			peerStats.UsefulBpsTCP, peerStats.UsefulBpsUTP,
 			peerStats.EjectUTP, peerStats.ChurnTotal, peerStats.ChurnUTP, deadlinePieces,
 			audioNamespaceState(), audioNamespaceEntries(),
-			g2Stats.Peers, g2Stats.BackingOff, g2Stats.LimitMin, g2Stats.LimitMax)
+			g2Stats.Peers, g2Stats.BackingOff, g2Stats.LimitMin, g2Stats.LimitMax,
+			shieldOn, shieldLastCorr, shieldNeed)
 	})
 
 	// Which blocklist ranges are actually rejecting peers. The aggregate counters say
@@ -5218,6 +5222,8 @@ func main() {
 			histJSON(&ttffStats.raCacheHit), histJSON(&ttffStats.fetchBlock),
 			ttffStats.stallCount.Load(), ttffStats.maxStallMS.Load())
 	})
+
+	http.Handle("/ui/", http.StripPrefix("/ui/", webui.Handler()))
 
 	http.HandleFunc("/control", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -5618,6 +5624,40 @@ func main() {
 	http.HandleFunc("/api/logs", dashHandler.Logs)
 	http.HandleFunc("/api/plex-thumb", dashHandler.PlexThumb)
 	http.HandleFunc("/api/kill-stream/", dashHandler.KillStream)
+	clientSvc := clients.New(func() clients.Config {
+		return clients.Config{
+			ServerType: gc().MediaServerType,
+			URL:        gc().Plex.URL,
+			Token:      gc().Plex.Token,
+			Active: func() (playing bool) {
+				activeHandles.Range(func(_, _ interface{}) bool { playing = true; return false })
+				return playing
+			},
+			// Only files open right now: playbackRegistry keeps entries for minutes after close.
+			Resolve: func(base string) (hash string) {
+				open := false
+				activeHandles.Range(func(key, _ interface{}) bool {
+					if filepath.Base(key.(*MkvHandle).path) == base {
+						open = true
+						return false
+					}
+					return true
+				})
+				if !open {
+					return ""
+				}
+				playbackRegistry.Range(func(key, value interface{}) bool {
+					if filepath.Base(key.(string)) == base {
+						hash = value.(*PlaybackState).Hash
+						return false
+					}
+					return true
+				})
+				return hash
+			},
+		}
+	})
+	http.HandleFunc("/api/clients", clientSvc.Handler)
 	safeGo(func() {
 		monCollector.Run(backgroundStopChan)
 	})

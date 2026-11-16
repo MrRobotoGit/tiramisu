@@ -9,6 +9,9 @@
 
 <h1><sub><sub><strong>Tiramisu</strong> is the most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex or Jellyfin library. MCP ready for Hermes, OpenClaw and Claude Code. Forget Real-Debrid.</sub></sub></h1>
 
+<p align="center"><img src="docs/screenshots/ui-swarm-dark.png" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
+<p align="center"><sub>The live swarm, as it happens: every peer, torrent, cache and player in one graph, with Adaptive Shield lighting up the pipes it protects.</sub></p>
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MrRobotoGit/tiramisu)
 [![Mentioned in Awesome Selfhosted](https://awesome.re/mentioned-badge.svg)](https://github.com/awesome-selfhosted/awesome-selfhosted)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
@@ -99,7 +102,12 @@ All of it, engine included, ships as a single `tiramisu` binary.
 ---
 ## Control Panel
 
-![Tiramisu Control Panel overview](docs/screenshots/control_1.png)
+<p align="center"><img src="docs/screenshots/ui-control-panel-dark.png" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></p>
+<p align="center"><img src="docs/screenshots/ui-control-panel-light.png" alt="Control Panel, Streaming and FUSE section in light mode"></p>
+
+One section per page, a setting search (<kbd>⌘K</kbd>), Simple and Advanced modes,
+and a single change bar that lists every pending edit (before → after), says which
+ones need a restart, and applies them together. Light, dark or automatic theme.
 
 ---
 
@@ -845,7 +853,9 @@ Settings are pushed **live via API**: no restart needed. **Apply All Core Settin
 
 ## Health Monitor Dashboard
 
-<p align="center"><img src="docs/screenshots/health_monitor_1.png" alt="Health Monitor, Status grid and sync controls" width="500"></p>
+<p align="center"><img src="docs/screenshots/ui-dashboard-light.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></p>
+<p align="center"><img src="docs/screenshots/ui-swarm-light.png" alt="Live swarm in light mode during an Adaptive Shield STRICT episode"></p>
+<p align="center"><img src="docs/screenshots/ui-mobile.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="560"></p>
 
 Embedded Go service at port **`:9080`**. Real-time operational view of the entire
 stack: one page that answers "is it healthy right now, and what is it doing",
@@ -855,13 +865,24 @@ without reading a log.
 http://<your-pi-ip>:9080/dashboard
 ```
 
+### Live Swarm
+
+The default view of the speed panel (switch to **Timeline** for the classic chart).
+One graph from left to right: **peers → torrents → piece cache → FUSE buffer → clients**.
+
+- **Peers**: seeders, leechers, uTP and half-open connections; newcomers pulse in, departures fade out; banned peers are marked with a cross.
+- **Torrents**: pipe width follows the download speed; a torrent that is downloading pulses, an idle one stays still.
+- **FUSE buffer**: the pipe between cache and FUSE works as a level meter of the read-ahead buffer (active / stale).
+- **Clients**: the device that is watching, from Plex or Jellyfin sessions (`Apple TV · Plex`), or the SMB client address when the player reads the share directly.
+- **Adaptive Shield**: a hash failure travels down the affected pipe; in STRICT the live pipes turn orange with a clean-streak ring on GoStorm, and the colour drains toward the clients when FAST mode returns.
+
 ### Status Grid
 
-Six cards in a 2×3 grid:
+Six tiles:
 
 | Card | What it shows |
 |------|--------------| 
-| **GOSTORM** | API ping latency (green = responding). Restart button. |
+| **GOSTORM** | API ping latency (green = responding). |
 | **FUSE MOUNT** | Number of virtual `.mkv` files currently exposed. |
 | **VPN (WG0)** | WireGuard interface status: VPN IP and gateway. |
 | **NAT-PMP** | Active external port assigned by VPN gateway. |
@@ -870,7 +891,7 @@ Six cards in a 2×3 grid:
 
 ### Download Speed Graph
 
-**15-minute rolling chart** of GoStorm download speed in Mbps. Samples every 5 seconds with auto-scroll.
+**Rolling chart** (last 5 minutes) of GoStorm download speed in Mbps, sampled every 5 seconds, with the Adaptive Shield timeline underneath.
 
 ### Active Stream Panel
 
@@ -882,9 +903,7 @@ Appears automatically during playback:
 
 ### Sync Controls
 
-Two panels for manual sync execution without SSH:
-- **MOVIES SYNC**: Triggers the Go movie sync engine with live log streaming
-- **TV SYNC**: Triggers the Go TV sync engine with Start/Idle status
+The **Sync scheduler** card runs or stops each sync by hand (Movies, TV, Watchlist, Music) and shows its last result and next run; the **Logs** card next to it tails `tiramisu`, `movies`, `tv`, `watchlist` and `music` logs.
 
 ### MKV Creation Scheduler
 
