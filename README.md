@@ -27,7 +27,7 @@
 </p>
 
 <p align="center"><img src="docs/screenshots/ui-swarm-dark.png" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
-<p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph, with Adaptive Shield lighting up the pipes it protects.</sub></p>
+<p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph. When a peer sends bad data, Adaptive Shield lights up the pipes it protects (see Screenshots).</sub></p>
 
 ---
 
