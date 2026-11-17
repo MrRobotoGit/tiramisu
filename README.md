@@ -57,6 +57,8 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
   </tr>
 </table>
 
+<p align="center"><img src="docs/screenshots/ui-piece-map-light.png" alt="Active streams with the piece map open: a fixed playhead over a strip of pieces, ready, arriving and not yet requested, up to the download frontier"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
+
 <p align="center"><img src="docs/screenshots/ui-mobile.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
 
 ---
@@ -68,7 +70,7 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 - **Music and audiobooks too.** `music/` and `audiobooks/` sit next to `movies/` and `tv/`, read-only, with MusicBrainz or ASIN identities, ready for Plex and Plexamp.
 - **Playback protection.** Adaptive Shield guards against corrupt data and bans bad peers, TailHedge races a second peer when one stalls, PEXChurn frees slots held by useless peers, and the read-ahead adapts to the bitrate.
 - **Native Plex and Jellyfin integration.** Playback webhooks switch the stream to Priority Mode, and titles are matched by IMDb id, so localized names still match.
-- **Control Panel and Dashboard.** Every setting in one place, and a live view of the swarm, streams, services, scheduler and logs, on desktop and phone.
+- **Control Panel and Dashboard.** Every setting in one place, and a live view of the swarm, streams, services, scheduler and logs, on desktop and phone. Each stream shows its piece map: what is ready ahead of the player and where the download frontier is.
 - **Library API and MCP server.** Add or remove titles over HTTP, or let an AI agent (Hermes, OpenClaw, Claude Code) search and file releases with your own scoring profile.
 - **VPN friendly.** NAT-PMP port mapping for WireGuard and an optional IP blocklist, loaded before the engine starts when a cached copy exists.
 - **One binary.** GoStorm, a deeply patched fork of [TorrServer Matrix](https://github.com/YouROK/TorrServer) and [anacrolix/torrent](https://github.com/anacrolix/torrent), ships inside the single `tiramisu` binary.

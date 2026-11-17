@@ -270,6 +270,13 @@ curl -s http://127.0.0.1:9080/metrics/ttff | jq
 # Blocklist status
 curl -s http://127.0.0.1:9080/metrics/blocklist | jq
 
+# Piece map of a stream a player is reading (404 otherwise): read position, bytes
+# ready before the first gap, and up to 34 cells of `bucket` pieces each.
+# Cell states: r ready, d downloading with a deadline, p partly here, m not
+# requested, b played and still in memory, e played and evicted.
+curl -s 'http://127.0.0.1:9080/api/pieces?hash=<infohash>' | \
+  jq '{play, ahead_bytes, first_gap, bucket, cells: [.cells[].s] | join("")}'
+
 # Health check and scheduler state
 curl -s http://127.0.0.1:9080/api/health | jq
 curl -s http://127.0.0.1:9080/api/scheduler/status | jq
