@@ -1806,9 +1806,11 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *native.NativeRea
 			logger.Printf("[Pump] Warning: hash empty for %s, warmup disabled", filepath.Base(h.path))
 		}
 	}
+	// reachedEOF separates the normal end (the whole file is fetched) from an early exit:
+	// V306 used to warn on both, and 263 of 332 historical warnings were plain EOF.
+	reachedEOF := false
 	defer func() {
-		// V306: Check if pump exited during confirmed healthy playback — this is
-		// unexpected and usually indicates an I/O error or cancellation. Log for diagnosis.
+		// V306: an early exit during confirmed playback is unexpected; reaching EOF is not.
 		pumpExitedHealthy := false
 		if val, ok := playbackRegistry.Load(h.path); ok {
 			if ps, ok := val.(*PlaybackState); ok && ps.GetStatus() {
@@ -1827,7 +1829,9 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *native.NativeRea
 			raCache.pieceLens.Delete(h.path)
 		}
 
-		if pumpExitedHealthy {
+		if pumpExitedHealthy && reachedEOF {
+			logger.Printf("[V306] Pump reached end of file during playback for %s: download complete", filepath.Base(h.path))
+		} else if pumpExitedHealthy {
 			logger.Printf("[V306] WARNING: pump goroutine exited during healthy playback for %s — priority preserved via IsHealthy", filepath.Base(h.path))
 		}
 
@@ -2028,6 +2032,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *native.NativeRea
 				sharedState.interruptPending.Store(false)
 				continue
 			}
+			reachedEOF = true
 			return // genuine EOF
 		}
 
@@ -4962,20 +4967,7 @@ func main() {
 	globalConfig.Store(&cfg)
 	if *resetAuth {
 		// Before anything starts: a second engine next to the running service would mount FUSE twice.
-		p := gc().StateDBPath
-		if p == "" {
-			p = filepath.Join(GetStateDir(), "tiramisu.db")
-		}
-		if err := auth.ResetAt(p, GetStateDir()); errors.Is(err, auth.ErrDBUntouched) {
-			fmt.Println("reset-auth:", err)
-			fmt.Println("Only the marker was removed. Stop the service, check the DB path and permissions, and run it again.")
-			os.Exit(1)
-		} else if err != nil {
-			fmt.Println("reset-auth failed:", err)
-			os.Exit(1)
-		}
-		fmt.Println("Sign-in reset: user, sessions and tokens cleared. Run this with the service stopped, then start it.")
-		os.Exit(0)
+		os.Exit(auth.RunResetFlag(gc().StateDBPath, GetStateDir()))
 	}
 	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
 	telemetry.SendHeartbeat(*gc(), AppVersion)
@@ -5009,15 +5001,7 @@ func main() {
 	if settings.Args == nil {
 		settings.Args = &settings.ExecArgs{}
 	}
-	bindIP, bindWarn := gc().GoStormBindIP()
-	settings.Args.IP = bindIP
-	if bindWarn != "" {
-		logger.Printf("[GoStorm] WARNING: %s", bindWarn)
-	} else if bindIP == "" {
-		logger.Printf("[GoStorm] API :8090 open on every interface (gostorm_listen_ip)")
-	} else {
-		logger.Printf("[GoStorm] API :8090 listening on %s only", bindIP)
-	}
+	settings.Args.IP = gc().ApplyGoStormBind(logger.Printf)
 
 	go func() {
 		logger.Println("Starting Embedded GoStorm Engine...")
@@ -5225,30 +5209,7 @@ func main() {
 	}()
 
 	// Sign-in on :9080 (opt-in). The state lives in tiramisu.db, never in config.json.
-	resetEnv := os.Getenv("TIRAMISU_RESET_AUTH") == "1"
-	var authStore auth.Store // stays a nil interface when the StateDB is off
-	if stateDB != nil {
-		authStore = stateDB
-	}
-	if resetEnv {
-		if err := auth.Reset(authStore, GetStateDir()); err != nil {
-			logger.Printf("[Auth] reset failed: %v", err)
-		} else if authStore == nil {
-			logger.Printf("[Auth] reset: marker removed, but the state DB is unavailable; the user and tokens in it are untouched")
-		} else {
-			logger.Printf("[Auth] reset: user, sessions and tokens cleared, sign-in off")
-		}
-		logger.Printf("[Auth] WARNING: TIRAMISU_RESET_AUTH=1 is set: remove it, sign-in cannot be enabled while it is")
-	}
-	authSvc := auth.New(authStore, GetStateDir(), resetEnv)
-	authSvc.SetLogger(logger.Printf)
-	authTrusted := auth.ParseTrusted(gc().AuthTrustedProxies)
-	if st := authSvc.State(); st.FailClosed {
-		logger.Printf("[Auth] sign-in was on but its state is unavailable: :9080 answers 503 until it is back, or stop the service, run tiramisu --reset-auth and start it again")
-	} else {
-		logger.Printf("[Auth] sign-in %s", map[bool]string{true: "on", false: "off"}[st.Enabled])
-	}
-	auth.Register(http.DefaultServeMux, authSvc, authTrusted)
+	authSvc, authTrusted := auth.Start(http.DefaultServeMux, stateDB, GetStateDir(), gc().AuthTrustedProxies, logger.Printf)
 
 	http.HandleFunc("/plex/webhook", handlePlexWebhook)
 

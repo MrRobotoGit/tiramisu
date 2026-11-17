@@ -27,3 +27,17 @@ func (c *Config) GoStormBindIP() (ip string, warn string) {
 	}
 	return "127.0.0.1", ""
 }
+
+// ApplyGoStormBind logs where :8090 will listen and returns the address for the GoStorm args.
+func (c *Config) ApplyGoStormBind(logf func(string, ...any)) string {
+	ip, warn := c.GoStormBindIP()
+	switch {
+	case warn != "":
+		logf("[GoStorm] WARNING: %s", warn)
+	case ip == "":
+		logf("[GoStorm] API :8090 open on every interface (gostorm_listen_ip)")
+	default:
+		logf("[GoStorm] API :8090 listening on %s only", ip)
+	}
+	return ip
+}
