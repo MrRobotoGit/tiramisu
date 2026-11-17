@@ -80,13 +80,28 @@
   }
 
   // A rebuild restarts every animation, so skip it when nothing visible changed.
+  const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const reducedMotion = () => motionQuery.matches;
+  motionQuery.addEventListener('change', () => { if (host) draw(true); });
+
   function signature() {
     const t = (data.torrents || []).filter(x => x.status !== 'idle')
       .map(x => [x.hash.slice(0, 8), x.speed_mbs.toFixed(1), x.peers, x.seeders, x.half_open, x.is_priority].join(':')).join('|');
     const sh = shieldState(data.shield, Date.now());
-    return [host.clientWidth, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (data.health || {}).v304_banned_peers,
+    return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (data.health || {}).v304_banned_peers,
       (data.health || {}).cache_hit_rate_pct, Math.round((data.health || {}).fuse_active_pct || 0),
-      Math.round((data.health || {}).fuse_stale_pct || 0), transport && transport.utp, clients && clients.size].join('#');
+      Math.round((data.health || {}).fuse_stale_pct || 0), transport && transport.utp, clients && clients.size, reducedMotion()].join('#');
+  }
+
+  // On phones the vertical graph is sized so the whole panel (graph, shield strip, legend) fits the
+  // first screen below the top bar, instead of a fixed 620px that needed scrolling.
+  function fitHeight() {
+    const card = host.closest('.card') || host;
+    const hr = host.getBoundingClientRect(), cr = card.getBoundingClientRect();
+    const top = hr.top + window.scrollY;
+    const below = Math.max(0, cr.bottom - hr.bottom) + 16;
+    const avail = document.documentElement.clientHeight - top - below;
+    return Math.round(Math.max(400, Math.min(620, avail)));
   }
 
   function draw(force) {
@@ -96,9 +111,19 @@
     lastSig = sig;
     const W = host.clientWidth || 600;
     const vertical = W < 560;
-    const H = vertical ? 620 : 470;
-    host.innerHTML = '';
-    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, class: 'swarm', role: 'img', 'aria-label': 'Swarm network' }, host);
+    const H = vertical ? fitHeight() : 470;
+    // Cross-fade: the previous drawing fades out on top while the new one fades in, instead of a cut.
+    // Only data updates fade; forced redraws (resize, theme, motion setting) and height changes cut.
+    const prevSvg = [...host.children].find(n => !n.classList.contains('sw-old'));
+    const fade = !force && !reducedMotion() && prevSvg && prevSvg.getAttribute('height') == H;
+    [...host.children].forEach(n => {
+      if (!fade || n.classList.contains('sw-old')) { n.remove(); return; }
+      n.classList.remove('sw-new');
+      n.classList.add('sw-old');
+      requestAnimationFrame(() => { n.style.opacity = '0'; });
+      setTimeout(() => n.remove(), 700);
+    });
+    const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, class: fade ? 'swarm sw-new' : 'swarm', role: 'img', 'aria-label': 'Swarm network' }, host);
 
     const allActive = (data.torrents || []).filter(t => t.status !== 'idle')
       .sort((a, b) => b.speed_mbs - a.speed_mbs);
@@ -122,7 +147,10 @@
       return vertical ? `M${a[0]} ${a[1]} C${a[0]} ${n} ${b[0]} ${n} ${b[0]} ${b[1]}`
         : `M${a[0]} ${a[1]} C${m} ${a[1]} ${m} ${b[1]} ${b[0]} ${b[1]}`;
     };
-    const F = { peers: 0, peersEnd: 0.33, torrent: 0.47, cache: 0.66, fuse: 0.80, client: 0.97 };
+    // Vertical: the cache → FUSE tube keeps at least ~70px whatever the height.
+    const tubeF = vertical ? Math.max(0.14, 92 / (pad.f1 - pad.f0)) : 0.14;
+    const F = { peers: 0, peersEnd: 0.33, torrent: 0.47, cache: 0.66, fuse: 0.66 + tubeF, client: 0.97 };
+    if (vertical) { F.cache = Math.min(0.66, 0.82 - tubeF); F.fuse = F.cache + tubeF; F.torrent = Math.min(0.47, F.cache - 0.17); F.peersEnd = F.torrent - 0.14; }
     const cOf = i => torrents.length === 1 ? 0.45 : 0.12 + i * (0.76 / (torrents.length - 1));
 
     // Column headings and guides.
@@ -245,61 +273,54 @@
     // Cache → FUSE trunk, and FUSE → clients.
     const totalSpeed = torrents.reduce((a, t) => a + t.speed_mbs, 0);
     const trunkW = Math.max(10, width(Math.max(totalSpeed, 0.02)) + 1);
-    // The trunk is the FUSE read-ahead buffer: a tube holding 3 rows of dots along its length.
-    // Filled = active, grey = stale, faint = free. The dots travel from the cache to FUSE.
+    // The trunk is the FUSE read-ahead buffer as a level meter: a tube with 3 rows of dots, lit
+    // from the cache end in proportion to the real fill (active dark, stale grey). Only the top of
+    // the level twitches by about one column, like a VU meter; its average is the real value.
     const tubeW = Math.max(18, trunkW + 4);
     const gauge = el('g', { class: 'sw-gauge' }, edgeLayer);
     el('title', {}, gauge).textContent = `FUSE buffer ${Math.round(h.fuse_budget_mb || 0)} MB · active ${(h.fuse_active_pct || 0).toFixed(0)}% · stale ${(h.fuse_stale_pct || 0).toFixed(0)}%`;
     const dx = fuseP[0] - cacheP[0], dy = fuseP[1] - cacheP[1];
     const len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
-    // Tube: rim and interior, between the two node gaps.
-    const inset = 16;
-    const t0 = [cacheP[0] + ux * inset, cacheP[1] + uy * inset], t1 = [fuseP[0] - ux * inset, fuseP[1] - uy * inset];
-    el('path', { d: `M${t0[0]} ${t0[1]} L${t1[0]} ${t1[1]}`, class: 'sw-gauge-rim', 'stroke-width': tubeW + 2 }, gauge);
-    el('path', { d: `M${t0[0]} ${t0[1]} L${t1[0]} ${t1[1]}`, class: 'sw-gauge-free', 'stroke-width': tubeW }, gauge);
-    const clipId = 'sw-tube-clip';
-    const defs = el('defs', {}, gauge);
-    const cp = el('clipPath', { id: clipId }, defs);
-    const half = tubeW / 2 - 1.5, inner = len - inset * 2;
-    const corners = [[0, -half], [inner, -half], [inner, half], [0, half]]
-      .map(([a2, b2]) => [t0[0] + ux * a2 + nx * b2, t0[1] + uy * a2 + ny * b2]);
-    el('path', { d: 'M' + corners.map(p => p.join(' ')).join(' L') + ' Z' }, cp);
-    const step = 7, cols = Math.max(1, Math.floor(inner / step)), rows = [-4.5, 0, 4.5];
-    const total = cols * 3;
+    // The tube is one piece of pipe from node to node, like every other pipe: its ends run under
+    // the boxes. The dots stay clear of the boxes (and of GoStorm's ring in STRICT).
+    const inA = sh.mode === 'strict' ? 25 : 18, inB = 18;
+    const t0 = [cacheP[0] + ux * inA, cacheP[1] + uy * inA];
+    el('path', { d: `M${cacheP[0]} ${cacheP[1]} L${fuseP[0]} ${fuseP[1]}`, class: 'sw-gauge-rim', 'stroke-width': tubeW + 2 }, gauge);
+    el('path', { d: `M${cacheP[0]} ${cacheP[1]} L${fuseP[0]} ${fuseP[1]}`, class: 'sw-gauge-free', 'stroke-width': tubeW }, gauge);
+    const inner = Math.max(0, len - inA - inB);
+    const step = vertical ? 6 : 7, cols = Math.max(1, Math.floor(inner / step)), rows = [-4.5, 0, 4.5];
     const act = Math.max(0, Math.min(1, (h.fuse_active_pct || 0) / 100));
     const stale = Math.max(0, Math.min(1 - act, (h.fuse_stale_pct || 0) / 100));
-    const nAct = Math.round(total * act), nStale = Math.round(total * stale);
-    const dots = el('g', { 'clip-path': `url(#${clipId})` }, gauge);
-    // VU meter. Left half: fixed lit dots. Right half: peaks rising and falling in a loop, their
-    // height following the real fill (active + stale): an empty buffer barely moves.
-    const halfCols = Math.max(1, Math.floor(cols / 2));
-    const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const CYCLE = 3.2, N = 32, span = cols - halfCols;
+    const fill = act + stale;
+    const level = cols * fill, actLevel = cols * act;   // in columns
+    const animate = fill >= 0.01 && !reducedMotion();
+    const CYCLE = 2.4, N = 24;
     const levels = [];
     for (let i = 0; i < N; i++) {
       const x = i / N * Math.PI * 2;
-      const f = 0.5 + 0.3 * Math.sin(x * 2) + 0.15 * Math.sin(x * 5 + 1.3) + 0.08 * Math.sin(x * 11 + 0.4);
-      levels.push(span * Math.max(0, Math.min(1, f)) * Math.min(1, 0.25 + (act + stale) * 1.25));
+      // Mean-zero twitch, at most ±1 column and never pushed past either end (keeps the average true).
+      const amp = Math.min(1, cols * 0.08, level, cols - level);
+      levels.push(level + amp * (0.7 * Math.sin(x * 3) + 0.3 * Math.sin(x * 7 + 1.1)));
     }
     const keyTimes = levels.map((_, i) => (i / N).toFixed(4)).join(';');
     const phase = ((now / 1000) % CYCLE).toFixed(2);
     for (let c = 0; c < cols; c++) {
+      // A column is lit when the level covers most of it; it is stale past the active share.
+      const cls = c + 0.5 <= actLevel ? 'sw-dot act' : 'sw-dot stale';
+      const steady = c + 0.5 <= level - 1;
+      const near = !steady && c + 0.5 <= level + 1;
       rows.forEach(r => {
         const along = c * step + step / 2;
         const pos = { cx: t0[0] + ux * along + nx * r, cy: t0[1] + uy * along + ny * r, r: 1.6 };
-        if (c < halfCols) {
-          el('circle', { ...pos, class: 'sw-dot act' }, dots);
-          return;
-        }
-        const dot = el('circle', { ...pos, class: 'sw-dot act' }, dots);
-        if (animate) {
-          const values = levels.map(l => (l >= c - halfCols + 1 ? '1' : '0.15')).join(';');
-          el('animate', { attributeName: 'opacity', values, keyTimes, calcMode: 'discrete', dur: `${CYCLE}s`,
-            repeatCount: 'indefinite', begin: `-${phase}s` }, dot);
-        }
+        if (steady) { el('circle', { ...pos, class: cls }, gauge); return; }
+        if (!near || fill < 0.01) { el('circle', { ...pos, class: 'sw-dot off' }, gauge); return; }
+        if (!animate) { el('circle', { ...pos, class: c + 0.5 <= level ? cls : 'sw-dot off' }, gauge); return; }
+        const dot = el('circle', { ...pos, class: cls }, gauge);
+        el('animate', { attributeName: 'opacity', values: levels.map(l => (l >= c + 0.5 ? '1' : '0.15')).join(';'), keyTimes,
+          calcMode: 'discrete', dur: `${CYCLE}s`, repeatCount: 'indefinite', begin: `-${phase}s` }, dot);
       });
     }
-    const mid = [(t0[0] + t1[0]) / 2, (t0[1] + t1[1]) / 2];
+    const mid = [(cacheP[0] + fuseP[0]) / 2, (cacheP[1] + fuseP[1]) / 2];
     txt(gauge, vertical ? mid[0] + tubeW / 2 + 8 : mid[0], vertical ? mid[1] + 3 : mid[1] + tubeW / 2 + 13,
       `${(h.fuse_active_pct || 0).toFixed(0)}% active · ${(h.fuse_stale_pct || 0).toFixed(0)}% stale`, 'sw-sub', vertical ? 'start' : 'middle');
 
@@ -453,6 +474,7 @@
   window.Swarm = {
     mount(node) {
       host = node;
+      host.classList.add('sw-host');
       fetchMetrics().then(() => draw());
       fetchExtras().then(() => draw());
       setInterval(() => { if (!host.hidden) fetchMetrics().then(() => draw()); }, 5000);

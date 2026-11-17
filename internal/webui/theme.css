@@ -29,6 +29,10 @@
   --ink3: #7F8991;
   --inv: #F6F7F8;
   --accent: #E5482B;
+  --ok: #2E9E5B;
+  --sig-yellow: #9A6E00; --sig-yellow-bg: rgba(237, 184, 46, .26);
+  --sig-blue: #2F64A8;   --sig-blue-bg: rgba(63, 111, 182, .14);
+  --sig-green: #2E7A4C;  --sig-green-bg: rgba(46, 158, 91, .15);
   --accent-hi: #F8B6A4;
   --term: #15181B;
   --term-text: #C6CDD2;
@@ -51,6 +55,10 @@
   --ink3: #6B757D;
   --inv: #0F1113;
   --accent: #FF5733;
+  --ok: #3DCB74;
+  --sig-yellow: #F2C94C; --sig-yellow-bg: rgba(242, 201, 76, .16);
+  --sig-blue: #8DB4E8;   --sig-blue-bg: rgba(125, 165, 225, .16);
+  --sig-green: #6FD39A;  --sig-green-bg: rgba(61, 203, 116, .14);
   --accent-hi: #FFC2B0;
   --term: #08090A;
   --term-text: #B6BEC4;
@@ -216,6 +224,9 @@ button, input, select { font: inherit; color: inherit; }
 }
 .lamp.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
 .lamp.err { background: var(--accent); }
+/* Engine health in the rail: green when online (the only place green is used). */
+#rail-lamp.run { background: var(--ok); }
+#rail-lamp.run::after { border-color: var(--ok); }
 .lamp.run::after {
   content: "";
   position: absolute;
@@ -312,6 +323,10 @@ button, input, select { font: inherit; color: inherit; }
 .chip-tag.fill { background: var(--ink); border-color: var(--ink); color: var(--inv); }
 .chip-tag.accent { border-color: var(--accent); color: var(--accent); }
 .chip-tag.soft { background: var(--well); border-color: transparent; }
+/* Signal chips (stream badges): tinted fill, coloured text, no frame. */
+.chip-tag.sig-yellow { background: var(--sig-yellow-bg); border-color: transparent; color: var(--sig-yellow); }
+.chip-tag.sig-blue { background: var(--sig-blue-bg); border-color: transparent; color: var(--sig-blue); }
+.chip-tag.sig-green { background: var(--sig-green-bg); border-color: transparent; color: var(--sig-green); }
 
 /* ---------- fields ---------- */
 .field { display: flex; flex-direction: column; min-width: 0; }
@@ -537,13 +552,16 @@ input.danger, .input input.danger { color: var(--accent); }
 @keyframes sw-torrent-pulse { from { transform: scale(1); opacity: .55; } to { transform: scale(2.1); opacity: 0; } }
 .sw-hit { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: .7; }
 .sw-box { fill: var(--ink); stroke: var(--panel); stroke-width: 5px; paint-order: stroke fill; }
-.sw-gauge > path { fill: none; stroke-linecap: round; }
+.sw-gauge > path { fill: none; stroke-linecap: butt; }
 .sw-gauge-rim { stroke: var(--hair2); }
 .sw-gauge-free { stroke: var(--well); }
 .sw-dot.act { fill: var(--ink); }
 .sw-dot.stale { fill: var(--ink3); }
-.sw-dot.free { fill: var(--hair2); opacity: .45; }
-.sw-dot.peak { fill: var(--ink2); }
+.sw-host { position: relative; }
+.sw-old { position: absolute; left: 0; top: 0; width: 100%; pointer-events: none; transition: opacity .6s ease; }
+.sw-new { animation: sw-fade-in .6s ease; }
+@keyframes sw-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.sw-dot.off { fill: var(--hair2); opacity: .45; }
 
 .sw-box.strict { fill: var(--accent); }
 /* Nodes sit on the pipes with a gap in the panel colour, the same cut in light and dark. */
@@ -582,7 +600,7 @@ input.danger, .input input.danger { color: var(--accent); }
 @keyframes sw-drain { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
 @media (prefers-reduced-motion: reduce) {
   .sw-pulse, .sw-peer-flow { animation: none; opacity: 0; }
-  .sw-born, .sw-dying, .sw-death-ring, .sw-birth-ring, .sw-torrent-pulse, .sw-peer-flow.sw-born, .sw-gauge-flow { animation: none; }
+  .sw-born, .sw-dying, .sw-death-ring, .sw-birth-ring, .sw-torrent-pulse, .sw-peer-flow.sw-born { animation: none; }
   .sw-torrent-pulse, .sw-birth-ring { opacity: 0; }
   .sw-dying { opacity: 0; }
   .sw-front, .sw-drain { animation: none; stroke-dasharray: none; }
@@ -614,7 +632,10 @@ input.danger, .input input.danger { color: var(--accent); }
   }
   .rail.open { transform: none; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .35); }
   .topbar .menu-btn { display: inline-flex; }
-  .topbar { padding: 0 16px; gap: 10px; }
+  .topbar { padding: 0 8px; gap: 6px; height: 48px; }
+  /* Phone top bar: icon buttons without a frame, larger glyphs, 40px tap targets. */
+  .topbar .btn.sm { border: 0; background: transparent; box-shadow: none; width: 40px; height: 40px; padding: 0; justify-content: center; font-size: 22px; line-height: 1; }
+  .topbar .btn.sm .ico { font-size: 22px; }
   .hide-sm { display: none !important; }
   .content { padding: 20px 16px 24px; gap: 16px; }
   .changebar { padding: 12px 16px; flex-wrap: wrap; }

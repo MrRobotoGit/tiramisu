@@ -87,6 +87,10 @@
 
         /* search */
         .search { position: relative; }
+        .rail-search:empty { display: none; }
+        /* "Custom" is a state, not a choice: it lights up when values no longer match a preset. */
+        .seg .preset-custom { cursor: default; font-style: italic; }
+        .seg .preset-custom:not(.active) { opacity: .45; }
         .search .input { width: 300px; }
         .search .kbd { font-family: var(--mono); font-size: 10px; color: var(--ink3); border: 1px solid var(--hair2); border-radius: 3px; padding: 0 4px; }
         .search-results { display: none; position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 30; background: var(--panel); border: 1px solid var(--hair2); border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
@@ -98,8 +102,11 @@
         @keyframes flash { 0%, 40% { box-shadow: 0 0 0 3px var(--ink); } 100% { box-shadow: 0 0 0 3px transparent; } }
 
         @media (max-width: 900px) {
-            .search .input { width: 100%; }
-            .search { flex: 1; }
+            .rail-search .search .input { width: 100%; }
+            .rail-search .search .kbd { display: none; }
+            .page-intro > .row { flex-wrap: wrap; row-gap: 6px; }
+            .page-intro > .row > .spacer { display: none; }
+            .page-intro > .row > .scope { flex-basis: 100%; }
             .job { gap: 16px; }
             .job .who { width: 100%; }
             .quality-preview-row { padding: 12px 16px; gap: 12px; flex-wrap: wrap; }
@@ -116,6 +123,7 @@
                 <span class="grille" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
                 <span><span class="word">tiramisu</span><br><span class="sub">unified engine</span></span>
             </a>
+            <div id="rail-search-slot" class="rail-search"></div>
             <nav class="nav">
                 <span class="label">Monitor</span>
                 <a href="/dashboard"><span class="num">◉</span>Dashboard</a>
@@ -152,8 +160,8 @@
             <header class="topbar">
                 <button type="button" class="btn sm menu-btn" onclick="TiramisuUI.toggleRail(true)" aria-label="Open navigation">≡</button>
                 <span class="crumb hide-sm">Control Panel &nbsp;/&nbsp; <span id="crumb-sec">Streaming &amp; FUSE</span></span>
-                <span class="spacer hide-sm"></span>
-                <div class="search">
+                <span class="spacer"></span>
+                <div class="search" id="setting-search-box">
                     <div class="input">
                         <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" style="flex:0 0 13px"><circle cx="5.5" cy="5.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/><path d="M9 9l3.2 3.2" stroke="currentColor" stroke-width="1.3" opacity=".6"/></svg>
                         <input type="search" id="setting-search" placeholder="Find a setting…" autocomplete="off" aria-label="Find a setting">
@@ -663,9 +671,9 @@
                                     <button type="button" class="quality-preset-btn" data-preset="1080p" onclick="applyQualityPreset('1080p')">1080p</button>
                                     <button type="button" class="quality-preset-btn" data-preset="fast" onclick="applyQualityPreset('fast')">Fast Swarms</button>
                                     <button type="button" class="quality-preset-btn" data-preset="max" onclick="applyQualityPreset('max')">Max Quality</button>
+                                    <button type="button" class="quality-preset-btn preset-custom" data-preset="" tabindex="-1" aria-disabled="true" title="Values edited by hand: pick a preset to replace them">Custom</button>
                                 </div>
                                 <span class="chip-tag" id="preset-default" hidden>Default</span>
-                                <span class="chip-tag" id="preset-custom" hidden>Custom</span>
                                 <span class="spacer" style="flex:1"></span>
                                 <span class="hint" style="margin:0">Edited values turn the preset into Custom</span>
                             </div>
@@ -1190,10 +1198,10 @@
 
         function markPreset(name) {
             document.querySelectorAll('.quality-preset-btn').forEach(b => {
-                b.classList.toggle('active', b.dataset.preset === name);
-                b.setAttribute('aria-pressed', b.dataset.preset === name);
+                const on = b.dataset.preset === (name || '');
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-pressed', on);
             });
-            document.getElementById('preset-custom').hidden = !!name;
             document.getElementById('preset-default').hidden = name !== 'best';
         }
 
@@ -2048,6 +2056,8 @@
             const n = changes.length;
             const restartN = changes.filter(c => GROUPS[c.group].scope === 'restart').length;
             bar.classList.toggle('dirty', n > 0);
+            // Nothing pending, nothing saved this visit, no error: the bar has nothing to say.
+            bar.hidden = !n && !applying && !restartPending && !savedAt && !lastError;
             document.getElementById('cb-lamp').className = 'lamp' + (n ? ' err' : lastError ? ' err' : restartPending ? ' off' : '');
             document.getElementById('cb-title').textContent = applying ? 'Applying…'
                 : n ? `${n} unsaved change${n > 1 ? 's' : ''}`
@@ -2202,6 +2212,16 @@
             const hint = el.querySelector('.hint')?.textContent || '';
             searchIndex.push({ el, text, sec: sec?.dataset.title || '', hay: (text + ' ' + hint).toLowerCase() });
         });
+        // On phones the search lives in the navigation drawer, not in the top bar.
+        const narrow = window.matchMedia('(max-width: 900px)');
+        const searchBox = document.getElementById('setting-search-box');
+        const searchHome = searchBox.parentNode, searchNext = searchBox.nextSibling;
+        function placeSearch() {
+            if (narrow.matches) document.getElementById('rail-search-slot').appendChild(searchBox);
+            else searchHome.insertBefore(searchBox, searchNext);
+        }
+        placeSearch();
+        narrow.addEventListener('change', placeSearch);
         const sInput = document.getElementById('setting-search');
         const sBox = document.getElementById('search-results');
         let sHits = [], sSel = 0;
@@ -2238,11 +2258,12 @@
             h.el.querySelector('input, select')?.focus({ preventScroll: true });
             sInput.value = '';
             sBox.classList.remove('open');
+            TiramisuUI.toggleRail(false);
         }
         sInput.addEventListener('input', renderSearch);
         (function () {
             const q = new URLSearchParams(location.search).get('q');
-            if (q) { sInput.value = q; renderSearch(); sInput.focus(); }
+            if (q) { if (narrow.matches) TiramisuUI.toggleRail(true); sInput.value = q; renderSearch(); sInput.focus(); }
         })();
         sInput.addEventListener('keydown', e => {
             if (!sHits.length) return;
@@ -2254,7 +2275,7 @@
             else if (e.key === 'Escape') { sInput.value = ''; sBox.classList.remove('open'); }
         });
         document.addEventListener('keydown', e => {
-            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); sInput.focus(); }
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (narrow.matches) TiramisuUI.toggleRail(true); sInput.focus(); }
         });
         document.addEventListener('click', e => { if (!e.target.closest('.search')) sBox.classList.remove('open'); });
     </script>

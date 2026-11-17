@@ -16,6 +16,7 @@
 /* The network view needs the room: speed and torrents each take a full row. */
 .dash.net-view #p-speed, .dash.net-view #p-torrents { grid-column: 1 / -1; }
 @media (min-width: 901px) { .dash.net-view #p-speed .kpi-row { display: none; } }
+#speed-head { display: none; margin-left: 10px; color: var(--ink2); }
 #net-strip { display: flex; align-items: center; gap: 12px; font: 400 10px var(--mono); color: var(--ink3); }
 #net-strip svg { flex: 1; }
 .dash.net-view #p-torrents .card-body { flex-direction: row; align-items: center; gap: 40px; }
@@ -79,10 +80,6 @@
 .foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink3); padding-top: 4px; }
 
 .mob-only { display: none !important; }
-.tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; justify-content: space-around; padding: 10px 24px 24px; background: var(--panel); border-top: 1px solid var(--hair); }
-.tabbar a { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; font-weight: 500; color: var(--ink3); text-decoration: none; }
-.tabbar a span { font-size: 15px; }
-.tabbar a.active { color: var(--ink); }
 .search .input { width: 300px; }
 .search .kbd { font-family: var(--mono); font-size: 10px; color: var(--ink3); border: 1px solid var(--hair2); border-radius: 3px; padding: 0 4px; }
 
@@ -108,14 +105,18 @@
   .terminal { height: 220px; }
   #p-logs .card-head { flex-wrap: wrap; row-gap: 10px; }
   #p-logs .card-head .spacer { flex-basis: 100%; height: 0; }
+  #log-seg { flex: 1 1 100%; display: flex; }
+  #log-seg button { flex: 1; padding-left: 4px; padding-right: 4px; }
   .mob-only:not([hidden]) { display: flex !important; }
   /* Speed reads as a compact figure on the right, leaving the panel to the graph. */
   #p-speed .kpi-row { justify-content: flex-end; margin-bottom: -6px; }
   #p-speed .kpi-row .spacer { display: none; }
+  /* Network view on a phone: the speed moves into the header so the graph fits the first screen. */
+  .dash.net-view #p-speed .kpi-row { display: none; }
+  .dash.net-view #speed-head { display: inline; }
+  .dash.net-view #net-legend { gap: 4px 12px; font-size: 11px; }
   /* One size for every figure on the phone: the speed and the torrent counters read alike. */
   #p-speed .kpi, #p-torrents .kpi-s { font-size: 26px; letter-spacing: -.02em; font-weight: 300; }
-  .content { padding-bottom: 96px; }
-  .topbar .brand .word { font-size: 15px; }
   .chart { height: 120px; }
   .dash.net-view #p-torrents .card-body { flex-direction: column; align-items: stretch; gap: 20px; }
 }
@@ -162,10 +163,7 @@
   <!-- ============ MAIN ============ -->
   <div class="main">
     <header class="topbar">
-      <a class="brand mob-only" href="/dashboard" style="padding:0">
-        <span class="grille" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
-        <span class="word">tiramisu</span>
-      </a>
+      <button type="button" class="btn sm menu-btn" onclick="TiramisuUI.toggleRail(true)" aria-label="Open navigation">≡</button>
       <span class="crumb hide-sm">Monitor &nbsp;/&nbsp; Overview</span>
       <span class="scope hide-sm" style="margin-left:16px"><span class="lamp run" id="live-lamp"></span><span class="small faint" id="live-txt">Live · refresh 5 s</span></span>
       <span class="spacer"></span>
@@ -177,11 +175,6 @@
       <button type="button" class="btn sm" onclick="doRestart()" aria-label="Restart"><span class="ico">↻</span><span class="hide-sm">Restart</span></button>
     </header>
 
-    <nav class="tabbar mob-only" aria-label="Sections">
-      <a href="/dashboard" class="active"><span>◉</span>Monitor</a>
-      <a href="/control"><span>≡</span>Settings</a>
-      <a href="#p-logs"><span>▤</span>Logs</a>
-    </nav>
     <div class="content">
 
       <div class="dash">
@@ -201,7 +194,7 @@
 
         <!-- Speed -->
         <div class="card" id="p-speed">
-          <div class="card-head"><span class="label ink" id="speed-title">Download speed</span><span class="spacer"></span>
+          <div class="card-head"><span class="label ink" id="speed-title">Download speed</span><span class="mono small" id="speed-head"></span><span class="spacer"></span>
             <span class="mono small hide-sm" style="color:var(--ink2)" id="speed-meta">last 5 min</span>
             <div class="seg sm" role="group" aria-label="View" id="view-seg">
               <button type="button" data-view="network">Network</button>
@@ -224,8 +217,8 @@
               <span><span class="sw accent">✕</span>banned</span>
               <span><span class="sw" style="width:22px;height:4px;background:var(--ink)"></span>throughput</span>
               <span><span class="sw" style="width:22px;height:4px;background:var(--accent)"></span>Adaptive Shield · STRICT</span>
-              <span class="spacer"></span>
-              <span>pulses move at the stream's speed</span>
+              <span class="spacer hide-sm"></span>
+              <span class="hide-sm">pulses move at the stream's speed</span>
             </div>
             <div class="legend" id="tl-legend">
               <span><span class="sw lamp err" style="width:6px;height:6px"></span>Adaptive Shield</span>
@@ -425,12 +418,13 @@ function renderStreams(torrents) {
   box.innerHTML = active.map(t => {
     const fast = t.speed_mbs > 0.01;
     const speedTxt = fast ? `${t.speed_mbs.toFixed(1)} MB/s` : (t.status === 'streaming' ? 'streaming' : 'idle');
+    // Signal colours: resolution blue, HDR/DV green, audio neutral, priority yellow.
     const chips = [];
-    if (t.is_4k) chips.push('4K'); else if (t.is_1080p) chips.push('1080p');
-    if (t.is_dv) chips.push('DV'); else if (t.is_hdr) chips.push('HDR');
-    if (t.audio) chips.push(t.audio + (t.channels ? ' ' + t.channels : ''));
-    const chipHtml = chips.map(c => `<span class="chip-tag">${esc(c)}</span>`).join('')
-      + (t.is_priority ? '<span class="chip-tag fill">Priority</span>' : '');
+    if (t.is_4k) chips.push(['4K', 'sig-blue']); else if (t.is_1080p) chips.push(['1080p', 'sig-blue']);
+    if (t.is_dv) chips.push(['DV', 'sig-green']); else if (t.is_hdr) chips.push(['HDR', 'sig-green']);
+    if (t.audio) chips.push([t.audio + (t.channels ? ' ' + t.channels : ''), '']);
+    if (t.is_priority) chips.push(['Priority', 'sig-yellow']);
+    const chipHtml = chips.map(([c, k]) => `<span class="chip-tag ${k}">${esc(c)}</span>`).join('');
     const poster = t.poster
       ? `<img class="poster" src="${esc(t.poster)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'poster'}))">`
       : '<span class="poster"></span>';
@@ -470,6 +464,7 @@ async function load() {
     $('uptime').textContent = h.uptime;
     TiramisuUI.setUptime(h.uptime);
     $('speed').textContent = h.download_mbps.toFixed(1);
+    $('speed-head').textContent = h.download_mbps.toFixed(1) + ' Mbps';
     $('totalT').textContent = (h.total_torrents ?? 0).toLocaleString('en-US');
     $('activeT').textContent = h.active_count;
     $('peersT').textContent = h.total_peers;
