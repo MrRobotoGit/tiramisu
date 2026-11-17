@@ -79,7 +79,10 @@
 .pm-ov .ph { top: -5px; height: 16px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; transition: left .9s linear; }
 .pm-ah { font-family: var(--mono); font-size: 12px; white-space: nowrap; min-width: 92px; text-align: right; }
 .pm-ah.warn { color: var(--accent-ink); }
-.pm-chev { color: var(--ink2); font-size: 12px; width: 12px; text-align: center; }
+.pm-chev { flex: 0 0 26px; width: 26px; height: 26px; display: grid; place-items: center; color: var(--ink); }
+.pm-chev svg { width: 16px; height: 16px; transition: transform .25s ease; }
+.pm-line[aria-expanded="true"] .pm-chev svg { transform: rotate(180deg); }
+.pm-line:hover .pm-chev { color: var(--ink2); }
 .pm-track { position: relative; padding-bottom: 16px; }
 .pm-cells { position: relative; height: 14px; overflow: hidden; }
 .pm-tape { position: absolute; inset: 0; will-change: transform; }
@@ -523,7 +526,7 @@ const pmPct = v => (Math.max(0, Math.min(1, v)) * 100).toFixed(2) + '%';
 function pmSkeleton(el, open) {
   el.innerHTML = `<div class="pm-line" role="button" tabindex="0" aria-expanded="${open}" title="Pieces from the player's read position to the download frontier">
       <div class="pm-ov"><i class="pl"></i><i class="win"></i><i class="ph"></i></div>
-      <span class="pm-ah" title="Video ready after the player's last read, up to the first missing piece"></span><span class="pm-chev">${open ? '⌃' : '⌄'}</span></div>` +
+      <span class="pm-ah" title="Video ready after the player's last read, up to the first missing piece"></span><span class="pm-chev" aria-hidden="true"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg></span></div>` +
     (open ? `<svg class="pm-zoom" aria-hidden="true"><line/><line/></svg><div class="pm-track"><div class="pm-cells"></div><i class="pm-head"></i><div class="pm-ticks"></div></div><div class="pm-foot"></div>` : '');
   el.dataset.open = open ? '1' : '';
 }
