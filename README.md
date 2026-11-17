@@ -1,39 +1,76 @@
-```
-████████╗ ██╗ ██████╗   █████╗  ███╗   ███╗ ██╗ ███████╗ ██╗   ██╗
-╚══██╔══╝ ██║ ██╔══██╗ ██╔══██╗ ████╗ ████║ ██║ ██╔════╝ ██║   ██║
-   ██║    ██║ ██████╔╝ ███████║ ██╔████╔██║ ██║ ███████╗ ██║   ██║
-   ██║    ██║ ██╔══██╗ ██╔══██║ ██║╚██╔╝██║ ██║ ╚════██║ ██║   ██║
-   ██║    ██║ ██║  ██║ ██║  ██║ ██║ ╚═╝ ██║ ██║ ███████║ ╚██████╔╝
-   ╚═╝    ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝     ╚═╝ ╚═╝ ╚══════╝  ╚═════╝
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/tiramisu-logo-dark.svg">
+    <img src="docs/screenshots/tiramisu-logo-light.svg" alt="Tiramisu" width="240">
+  </picture>
+</p>
 
-<h1><sub><sub><strong>Tiramisu</strong> is the most advanced BitTorrent engine and FUSE virtual filesystem for live streaming to your private Plex or Jellyfin library. MCP ready for Hermes, OpenClaw and Claude Code. Forget Real-Debrid.</sub></sub></h1>
+<p align="center"><strong>BitTorrent engine and FUSE virtual filesystem that streams your torrents to Plex, Jellyfin and Infuse, live.</strong><br>
+4K HDR Dolby Vision, fully seekable, starting in under a second, even on a Raspberry Pi 4. MCP ready for Hermes, OpenClaw and Claude Code. No Real-Debrid.</p>
+
+<p align="center">
+  <a href="https://github.com/MrRobotoGit/tiramisu/releases/latest"><img src="https://img.shields.io/github/v/release/MrRobotoGit/tiramisu?label=Release&color=121518" alt="Latest release"></a>
+  <a href="https://hub.docker.com/r/mrrobotogit/tiramisu"><img src="https://img.shields.io/docker/pulls/mrrobotogit/tiramisu?logo=docker&label=Docker%20Pulls&color=121518" alt="Docker pulls"></a>
+  <a href="https://hub.docker.com/r/mrrobotogit/tiramisu"><img src="https://img.shields.io/docker/image-size/mrrobotogit/tiramisu/latest?logo=docker&label=Image%20Size&color=121518" alt="Docker image size"></a>
+  <a href="LICENSE.md"><img src="https://img.shields.io/badge/License-GPLv3-121518" alt="License: GPL v3"></a>
+  <a href="https://github.com/awesome-selfhosted/awesome-selfhosted"><img src="https://awesome.re/mentioned-badge.svg" alt="Mentioned in Awesome Selfhosted"></a>
+  <a href="https://deepwiki.com/MrRobotoGit/tiramisu"><img src="https://img.shields.io/badge/Ask-DeepWiki-121518" alt="Ask DeepWiki"></a>
+</p>
+
+<p align="center">
+  <a href="#quick-install"><b>Install</b></a> ·
+  <a href="#docker"><b>Docker</b></a> ·
+  <a href="#how-to-guide"><b>How-To Guide</b></a> ·
+  <a href="#configuration-reference"><b>Configuration</b></a> ·
+  <a href="#faq"><b>FAQ</b></a> ·
+  <a href="https://github.com/MrRobotoGit/tiramisu/releases"><b>Releases</b></a>
+</p>
 
 <p align="center"><img src="docs/screenshots/ui-swarm-dark.png" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
-<p align="center"><sub>The live swarm, as it happens: every peer, torrent, cache and player in one graph, with Adaptive Shield lighting up the pipes it protects.</sub></p>
-
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MrRobotoGit/tiramisu)
-[![Mentioned in Awesome Selfhosted](https://awesome.re/mentioned-badge.svg)](https://github.com/awesome-selfhosted/awesome-selfhosted)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.md)
-[![Docker Pulls](https://img.shields.io/docker/pulls/mrrobotogit/tiramisu?logo=docker&label=Docker+Pulls)](https://hub.docker.com/r/mrrobotogit/tiramisu)
-[![Docker Image Size](https://img.shields.io/docker/image-size/mrrobotogit/tiramisu/latest?logo=docker&label=Image+Size)](https://hub.docker.com/r/mrrobotogit/tiramisu)
-
-> [!NOTE]
-> This project used to be called GoStream. It is now Tiramisu, same project, same codebase, just a new name. Nothing about how it works has changed, and everything in this README still applies. If you are upgrading from an older install, note that the binary name, config paths, and systemd service name have all changed too, so a fresh run of the install script is the easiest way to pick up the new layout.
+<p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph, with Adaptive Shield lighting up the pipes it protects.</sub></p>
 
 ---
 
-![Tiramisu: click play on a torrent, streaming starts in about a second](docs/screenshots/tiramisu-demo.gif)
+## Why Tiramisu
 
 Tiramisu exposes a **custom FUSE virtual filesystem** where every `.mkv` file is a perfect illusion: it looks like a real file on disk, but every byte is served live from a BitTorrent swarm on demand. No downloading. No temp files. No storage quota.
 
 The BitTorrent engine runs **inside the same OS process** as the FUSE layer, connected by an in-memory `io.Pipe()`. When Plex/Jellyfin reads a byte range, there is no HTTP round-trip, no serialization, no proxy overhead, just bytes, flowing directly from peers through RAM to the media server at full speed.
 
-The result: **4K HDR Dolby Vision**, fully seekable, starting in 0.1 seconds, even on a **Raspberry Pi 4**.
+The result: **4K HDR Dolby Vision**, fully seekable, starting in under a second (0.1 s from the warmup cache), even on a **Raspberry Pi 4**.
 
 This is not a torrent client with a media server bolted on. The FUSE filesystem *is* the product, custom-built from scratch around the constraints of torrent streaming: non-sequential byte-range requests, multi-gigabyte files that must be seekable at any position, and a Plex/Jellyfin scanner that probes every file in a library of hundreds of titles on startup.
 
-### What's included
+---
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/ui-dashboard-light.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
+    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark.png" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Dashboard</b>: speed, torrents, streams, services, scheduler and logs</sub></td>
+    <td align="center"><sub><b>Control Panel</b>: every setting, with a change bar that applies them together</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/ui-swarm-light.png" alt="Live swarm in light mode during an Adaptive Shield STRICT episode"></td>
+    <td><img src="docs/screenshots/ui-control-panel-light.png" alt="Control Panel, Streaming and FUSE section in light mode"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>Adaptive Shield</b>: a STRICT episode, live</sub></td>
+    <td align="center"><sub><b>Light, dark or automatic theme</b></sub></td>
+  </tr>
+</table>
+
+<p align="center"><img src="docs/screenshots/ui-mobile.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
+
+<p align="center"><img src="docs/screenshots/tiramisu-demo.gif" alt="Click Play on a torrent in Infuse: streaming starts in under a second" width="720"><br><sub>Click Play in Infuse: the film starts in under a second</sub></p>
+
+---
+
+## Features
 
 **The virtual filesystem is the product.** Every `.mkv` in the library is a live
 torrent that the media server sees as an ordinary file: the correct size,
@@ -82,9 +119,9 @@ unpredictable swarm into something a media player can trust:
   pinning one fixed size for every bitrate.
 
 **Everything else is built in, not bolted on.** The **Control Panel** at
-`:9080/control` adjusts every FUSE and engine setting live, and the **Health
-Monitor Dashboard** at `:9080/dashboard` shows a real-time speed graph, the
-active stream with poster and quality badges, sync controls and system stats.
+`:9080/control` edits every setting (engine settings apply live, the rest on
+restart), and the **Dashboard** at `:9080/dashboard` shows the live swarm, the
+active streams with quality badges, service health, the sync scheduler and logs.
 **Plex and Jellyfin webhooks** are handled natively: `media.play` switches the
 stream to Priority Mode with aggressive piece prioritization, and the IMDB id is
 extracted from the raw payload, so localized titles still match. **NAT-PMP**
@@ -97,53 +134,27 @@ lets any HTTP client file or remove a title, movies, series, music and
 audiobooks alike, without touching the filesystem, and an
 [MCP server](#mcp-server) at `/mcp` lets an AI agent search, pick and file
 releases with the deployment's own scoring profile.
+
 All of it, engine included, ships as a single `tiramisu` binary.
 
 ---
-## Control Panel
 
-<p align="center"><img src="docs/screenshots/ui-control-panel-dark.png" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></p>
-<p align="center"><img src="docs/screenshots/ui-control-panel-light.png" alt="Control Panel, Streaming and FUSE section in light mode"></p>
+## Contents
 
-One section per page, a setting search (<kbd>⌘K</kbd>), Simple and Advanced modes,
-and a single change bar that lists every pending edit (before → after), says which
-ones need a restart, and applies them together. Light, dark or automatic theme.
+**Get started**: [How It Fits Together](#how-it-fits-together-plex-jellyfin-and-infuse) · [Requirements](#requirements) · [Quick Install](#quick-install) · [Docker](#docker) · [Plex/Jellyfin and Samba Setup](#plexjellyfin-and-samba-setup)
 
----
+**Use**: [How-To Guide](#how-to-guide) · [Control Panel](#control-panel) · [Dashboard](#dashboard) · [Sync Engine](#sync-engine-go-native) · [Library API](#library-api-9080) · [MCP Server](#mcp-server) · [Configuration Reference](#configuration-reference)
 
-## Table of Contents
+**Under the hood**: [How the Magic Works](#how-the-magic-works) · [Architecture](#architecture) · [Core Engineering](#core-engineering) · [Performance](#performance)
 
-- [The Setup: Tiramisu + Plex/Jellyfin/Infuse on Apple TV](#the-setup-tiramisu--plexjellyfininfuse-on-apple-tv)
-- [How the Magic Works](#how-the-magic-works)
-- [Architecture](#architecture)
-- [Core Engineering](#core-engineering)
-- [Performance](#performance)
-- [Requirements](#requirements)
-- [Quick Install](#quick-install)
-- [How-To Guide](#how-to-guide)
-- [Control Panel](#tiramisu-control-panel)
-- [Health Monitor](#health-monitor-dashboard)
-- [Configuration Reference](#configuration-reference)
-- [Sync Engine](#sync-engine-go-native)
-- [Library API](#library-api-9080)
-- [MCP Server](#mcp-server)
-- [Prowlarr Integration](#prowlarr-integration-resilience)
-- [Plex/Jellyfin & Samba Setup](#plexjellyfin-and-samba-setup)
-- [Build from Source](#build-from-source)
-- [Docker](#docker)
-- [API Reference](#api-quick-reference)
-- [FAQ](#faq)
-- [Troubleshooting](#troubleshooting)
-- [Donate](#support)
-- [License](#license)
+**Reference**: [Build from Source](#build-from-source) · [API Quick Reference](#api-quick-reference) · [Key File Locations](#key-file-locations) · [FAQ](#faq) · [Troubleshooting](#troubleshooting)
 
 ---
 
-## The Setup: Tiramisu + Plex/Jellyfin/Infuse on Apple TV
+## How It Fits Together: Plex, Jellyfin and Infuse
 
 > Not a developer? This section explains what you actually get and why it works so well.
 
-![Plex library populated by sync scripts](docs/screenshots/library.png)
 
 
 **The end result**: you open Infuse on your Apple TV, your entire movie library appears with posters and metadata, you press Play on a 4K Dolby Vision film and it starts in under a second. No buffering. No "downloading...". No subscription to Real-Debrid or any external service. Everything runs on a single board computer or any always-on Linux box in your home.
@@ -171,6 +182,7 @@ If a better version of a film becomes available later (for example a 4K HDR rele
 TV series work the same way: the sync engine finds new seasons and episodes, organises them in the Plex/Jellyfin-compatible folder structure (`Show Name (Year)/Season.01/`), and they appear in your library within the week.
 
 You can also add a title to your **Plex Watchlist** from any device and it will appear in your library within the hour.
+
 ### Prowlarr Integration (Resilience)
 
 To ensure the system remains functional even when public aggregators like Torrentio are down, Tiramisu includes a **Prowlarr Adapter**. This allows you to use your own self-hosted Prowlarr instance as the primary source for torrents.
@@ -217,6 +229,978 @@ path they ever take: from BitTorrent peers into Tiramisu's memory, through the
 FUSE layer to Plex, from Plex to Infuse, and onto the TV. If you seek, the same
 machinery jumps straight to the new position in the torrent instead of
 re-buffering from the beginning.
+
+---
+
+## Requirements
+
+| Component | Details |
+|-----------|---------|
+| **Hardware** | Any `linux/amd64` or `linux/arm64` device, **Raspberry Pi 4 is the minimum tested baseline** (4 GB RAM recommended). Runs on NAS, VPS, mini-PC, or any always-on Linux box. **On amd64, AVX2 is strongly recommended** (any x86_64 CPU from ~2013 onward, Intel Haswell or AMD Excavator and later). Without it, Go's SHA1 piece verification falls back to its slowest scalar path and may not sustain real playback bitrates; Tiramisu still starts, logging a warning at boot so high CPU and stuttering have a visible cause. arm64 has no equivalent requirement: NEON is mandatory on every ARMv8-A chip, so any real arm64 device, the Pi 4 included, already clears the floor. |
+| **Go** | 1.26+ (`linux/amd64` or `linux/arm64`), do **not** use the 32-bit `linux/arm` toolchain. Build with `CGO_ENABLED=1`: the SQLite piece-completion layer is cgo |
+| **FUSE 3** | `sudo apt install fuse3 libfuse3-dev` |
+| **systemd** | For service management |
+| **Samba** | `sudo apt install samba` |
+| **Plex/Jellyfin** | Media Server (on Synology or any network host) |
+| **TMDB API key** | Free at [themoviedb.org](https://developer.themoviedb.org/docs/getting-started) |
+| **Plex token** | Settings → Account → XML API |
+
+---
+
+## Quick Install
+
+> [!NOTE]
+> This project used to be called GoStream. It is now Tiramisu, same project, same codebase, just a new name. Nothing about how it works has changed, and everything in this README still applies. If you are upgrading from an older install, note that the binary name, config paths, and systemd service name have all changed too, so a fresh run of the install script is the easiest way to pick up the new layout.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MrRobotoGit/tiramisu/main/install.sh -o install.sh
+chmod +x install.sh
+./install.sh
+```
+
+![Tiramisu interactive installer](docs/screenshots/install.png?v=2)
+
+The interactive installer handles everything end-to-end:
+1. Installs system dependencies (`fuse3`, `libfuse3-dev`, `gcc`, `samba`, `git`)
+2. Prompts for all required paths, Plex credentials, TMDB key, and NAT-PMP settings
+3. Generates `config.json` from `config.json.example`
+4. Creates `Tiramisu/STATE/`, `logs/`, and FUSE mount point directories
+5. **Compiles the Tiramisu binary** (downloads Go if needed, detects architecture automatically)
+6. Writes and enables the systemd service for `tiramisu`
+
+Once complete:
+
+```bash
+sudo systemctl start tiramisu
+```
+
+---
+
+## Docker
+
+> [!IMPORTANT]
+> Tiramisu mounts a FUSE filesystem at startup. Docker blocks this syscall by default. The container requires elevated privileges to run.
+
+Pre-built images for `linux/amd64` and `linux/arm64` are published automatically on every release to Docker Hub and GitHub Container Registry:
+
+| Registry | Image |
+|----------|-------|
+| **Docker Hub** | `mrrobotogit/tiramisu:latest` |
+| **GHCR** | `ghcr.io/mrrobotogit/tiramisu:latest` |
+
+**Pull:**
+
+```bash
+docker pull mrrobotogit/tiramisu:latest
+# or
+docker pull ghcr.io/mrrobotogit/tiramisu:latest
+```
+
+**Run:**
+
+```bash
+docker run -d \
+  --name tiramisu \
+  --restart unless-stopped \
+  --device /dev/fuse \
+  --cap-add SYS_ADMIN \
+  --cap-add NET_ADMIN \
+  -v /path/to/config.json:/config.json \
+  -v /path/to/state:/state \
+  -v /mnt/tiramisu-mkv-real:/mnt/tiramisu-mkv-real \
+  -v /mnt/tiramisu-mkv-virtual:/mnt/tiramisu-mkv-virtual:rshared \
+  -p 8090:8090 \
+  -p 9080:9080 \
+  mrrobotogit/tiramisu:latest
+```
+
+Or use `--privileged` as a simpler alternative to the individual capabilities (e.g. on a Raspberry Pi where the container is fully trusted). In practice `--cap-add SYS_ADMIN`/`NET_ADMIN` alone have been reported insufficient on some Ubuntu hosts — if the container starts cleanly but the virtual directory stays empty, use `--privileged`.
+
+`config.json` must be volume-mounted at `/config.json` (the default `MKV_PROXY_CONFIG_PATH`). Use `config.json.example` as the starting point. Do not mount it `:ro`: the Control Panel writes settings back to this file, and a read-only mount makes every save fail.
+
+**Mount a volume on `/state`.** Everything that must outlive the container lives there:
+
+| Path | Holds |
+|------|-------|
+| `/state/config.db` | Torrent list, and GoStorm settings when `StoreSettingsInJson` is off |
+| `/state/settings.json` | GoStorm settings: peer port, cache size, connection limit |
+| `/state/STATE/` | Inode map and sync caches |
+| `/state/logs/` | Log files the Control Panel tails |
+| `/state/blocklist` | The downloaded IP blocklist |
+
+Mount a host directory there and everything survives `docker rm`. Without that volume the peer port, the torrent list and every other setting are discarded when the container is removed, and the next `docker run` starts from the defaults; the container prints a warning on startup when it detects this. `/state` is the default, so `TIRAMISU_ROOT_PATH` only needs setting to move the whole directory elsewhere, and `TIRAMISU_STATE_DIR` / `TIRAMISU_LOG_DIR` default to `STATE/` and `logs/` underneath it.
+
+Do not mount a named or anonymous Docker volume expecting the warning to catch a mistake: an anonymous volume looks mounted, but a fresh `docker run` attaches a new empty one. Use a host path.
+
+**Updating the container.** Unmount the virtual directory between removing the old container and starting the new one: Docker refuses to bind-mount over the FUSE mount the previous container left behind.
+
+```bash
+docker pull mrrobotogit/tiramisu:latest
+docker rm -f tiramisu
+sudo fusermount3 -uz /mnt/tiramisu-mkv-virtual
+docker run -d ...   # same flags as above
+```
+
+> [!TIP]
+> **Troubleshooting: real directory fills up, virtual stays empty.** If `docker logs` shows `FUSE mounted at ... all systems active` and the InodeMap saving files, but `/mnt/tiramisu-mkv-virtual` is empty on the host, the FUSE mount succeeded *inside* the container but never propagated out — Docker bind mounts default to private propagation, so a mount created inside the container isn't visible outside it. Fix: add `:rshared` to the virtual volume's `-v` flag (as above). If Docker then refuses to start with an error like *"must be shared or slave"*, the host mountpoint itself isn't shared yet - run `sudo mount --make-rshared /mnt` (or whichever parent directory holds it) once, then restart the container.
+
+**Build from source** (from the repository root):
+
+```bash
+docker build -f docker/Dockerfile -t tiramisu .
+```
+
+### Windows Docker Installer
+
+For Windows users, a dedicated installer generates a ready-to-use [Dockge](https://github.com/louislam/dockge) stack with Tiramisu + Plex **or** Jellyfin in a single container:
+
+👉 **[docker-windows/](https://github.com/MrRobotoGit/tiramisu/tree/main/docker-windows)**
+
+- Run `docker-windows\install-rebuild.bat` for interactive setup (flavor, paths, ports)
+- Auto port conflict resolution
+- Idempotent rebuild: never deletes existing media or config data
+
+> **Requires:** Docker Desktop with WSL2 (Linux containers) and FUSE support (`/dev/fuse` available inside containers).
+
+---
+
+## Plex/Jellyfin and Samba Setup
+
+### Connecting a Media Server
+
+Point the **Media Server** card in the Control Panel at your server, and Tiramisu
+identifies which product answers, showing it as verified with its latency. It
+also broadcasts on the LAN, Plex GDM on UDP 32414 and Jellyfin on UDP 7359, and
+lists whatever replies, so a server on the same network appears without
+configuration. A broadcast does not cross a Docker bridge network, and Jellyfin
+lets you switch its discovery off, so setting the URL is the reliable way.
+
+| Setting | Plex | Jellyfin |
+|---------|------|----------|
+| `media_server_type` | `plex` | `jellyfin` |
+| `plex.url` | `http://host:32400` | `http://host:8096` |
+| `plex.token` | [X-Plex-Token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/) | API key: Dashboard → Advanced → API Keys → **+** |
+| `plex.library_id` / `plex.tv_library_id` | Section IDs to refresh after a sync | Leave at `0` |
+
+The token drives the library refresh Tiramisu issues when the movies, TV and
+watchlist syncs finish, and the field names keep the `plex.` prefix for backward
+compatibility: they hold whichever server `media_server_type` names. Plex
+refreshes the section named by `library_id` and does nothing without one;
+Jellyfin refreshes every library, which is why its section IDs stay at `0`.
+Without a token the media server finds new files on its own scan schedule
+instead. The playback sessions and posters on the dashboard are Plex-only.
+
+### Samba Configuration
+
+Critical parameters in `/etc/samba/smb.conf` to prevent FUSE deadlocks during Plex/Jellyfin library scans:
+
+```ini
+[tiramisu-mkv-virtual]
+   path = /mnt/tiramisu-mkv-virtual
+   browseable = yes
+   read only = yes
+   oplocks = no           # CRITICAL: prevents kernel exclusive locks on FUSE files
+   aio read size = 1      # CRITICAL: forces async I/O, prevents smbd D-state
+   deadtime = 15          # cleans inactive SMB connections every 15 minutes
+   vfs objects = fileid   # CRITICAL: transmits 64-bit inodes to Synology/Plex/Jellyfin
+```
+
+> [!WARNING]
+> **`oplocks = no` is non-negotiable.** With oplocks enabled, the kernel requests exclusive locks on FUSE-backed files, causing `smbd` threads to enter D-state indefinitely during concurrent Plex/Jellyfin scans.
+
+> [!IMPORTANT]
+> **`vfs objects = fileid`** ensures 64-bit inode transmission. Without it, Synology receives truncated 32-bit inodes, causing Plex to misidentify files.
+
+### Synology CIFS Mount
+
+```
+Source:  //pi-ip/tiramisu-mkv-virtual
+Target:  /volume1/Tiramisu
+Options: serverino,vers=3.0,uid=1024,gid=100,file_mode=0777,dir_mode=0777
+```
+
+`serverino` must remain active. Synology may silently drop it after network timeouts. Schedule a Task Scheduler job (every 5 min) to verify and remount if needed.
+
+---
+
+## How-To Guide
+
+> [!CAUTION]
+> **Attention:** After the first run of the Movie and TV sync engine, hundreds of `.mkv` files will be created. Plex/Jellyfin will then begin scanning these files to populate its UI. During this initial scan, playback will be extremely slow or may time out. This is because the media server opens and closes files hundreds of times during analysis, which congests the BitTorrent engine. Please wait for Plex/Jellyfin to complete its scan before starting any streams. Enjoy!
+
+
+<details>
+<summary><b>Step 1: Configure the Webhook (Plex or Jellyfin)</b></summary>
+
+Required for Priority Mode (bitrate boost during playback), fast-drop on stop, and IMDB-ID-based file matching.
+
+**Plex**: Settings → Webhooks → Add Webhook:
+```
+http://192.168.1.2:9080/plex/webhook
+```
+
+**Jellyfin**: Install the Webhook plugin, add one webhook (events: `PlaybackStart`, `PlaybackStop`, `PlaybackProgress`):
+- URL: `http://192.168.1.2:9080/plex/webhook`
+- Header: Key `Content-Type` / Value `application/json`
+- Template:
+```
+{"event":"{{NotificationType}}","Metadata":{"title":"{{{Name}}}","grandparentTitle":"{{{SeriesName}}}","librarySectionType":"{{ItemType}}","guid":"imdb://{{Provider_imdb}}","Guid":[{"id":"imdb://{{Provider_imdb}}"}]}}
+```
+
+Music needs a second Generic destination with its own template, same URL and events:
+
+```
+{"event":"{{NotificationType}}","Metadata":{"title":"{{{Name}}}","grandparentTitle":"{{{Artist}}}","librarySectionType":"{{ItemType}}","ProviderIds":{"MusicBrainzTrack":"{{Provider_musicbrainztrack}}","MusicBrainzReleaseGroup":"{{Provider_musicbrainzreleasegroup}}","MusicBrainzAlbum":"{{Provider_musicbrainzalbum}}","MusicBrainzArtist":"{{Provider_musicbrainzartist}}"}}}
+```
+
+Test connectivity:
+```bash
+curl -X POST http://192.168.1.2:9080/plex/webhook \
+  -H 'Content-Type: application/json' \
+  -d '{"event":"media.play"}'
+```
+
+</details>
+
+<details>
+<summary><b>Step 2: Configure the Plex/Jellyfin Library</b></summary>
+
+Add a Movies library in Plex/Jellyfin pointing to the Samba share:
+```
+smb://192.168.1.2/tiramisu-mkv-virtual/movies
+```
+Or, if using Synology, point Plex/Jellyfin to the CIFS mount: `/volume1/Tiramisu/movies`.
+
+Run a library scan after adding the library. Plex/Jellyfin reads the first megabyte of every `.mkv` file during the scan, this automatically populates the SSD warmup head cache for every title. Subsequent plays will start in under 0.5 seconds.
+
+</details>
+
+<details>
+<summary><b>Step 3: Add Your First Movie</b></summary>
+
+**Manually via API:**
+```bash
+curl -X POST http://127.0.0.1:8090/torrents \
+  -H "Content-Type: application/json" \
+  -d '{"action":"add","link":"magnet:?xt=urn:btih:...","title":"Interstellar (2014)"}'
+```
+
+**Via sync engine (recommended):**
+Trigger from the Control Panel (`:9080/control`) → Scheduler → Movies → "Run now", or via API:
+```bash
+curl -X POST http://127.0.0.1:9080/api/scheduler/movies/run
+```
+The engine fetches popular films from TMDB, finds the best available torrent for each via Prowlarr/Torrentio, adds them to GoStorm, and writes virtual `.mkv` stub files.
+
+</details>
+
+<details>
+<summary><b>Step 4: Watch a Film (What Happens Internally)</b></summary>
+
+```
+1. Plex/Jellyfin requests /mnt/tiramisu-mkv-virtual/movies/Interstellar.mkv
+2. FUSE Open() triggers Wake(), GoStorm activates the torrent
+3. Plex/Jellyfin metadata probes → served from SSD warmup cache if enabled, otherwise from the torrent pump
+4. Plex/Jellyfin probes MKV Cues at end → served from SSD tail cache if enabled
+5. Plex or Jellyfin sends media.play webhook → Tiramisu activates Priority Mode
+6. Streaming reads → served from Read-Ahead Cache or Native Bridge pump
+7. Playback begins (0.1–0.5 s with warmup, 2–4 s cold) ✨
+```
+
+</details>
+
+<details>
+<summary><b>Step 5: Seek in 4K</b></summary>
+
+When Plex/Jellyfin seeks to a new timestamp:
+
+1. `Read()` is called at the new offset, `lastOff` is updated immediately
+2. If the jump exceeds 256 MB: `Interrupt()` closes the pipe, pump goroutine unblocks atomically
+3. Pump detects `lastOff` is > 256 MB ahead, snaps to aligned chunk position
+4. Pump restarts via `startStream(newOff)`, GoStorm repositions torrent reader
+5. Data arrives from peers or SSD cache within seconds
+
+The pump goroutine survives `ErrInterrupted`, it sleeps 200 ms and continues the read loop, so no goroutine restart overhead.
+
+</details>
+
+<details>
+<summary><b>Step 6: Add from Your Plex Watchlist</b></summary>
+
+Add any movie to your Plex cloud watchlist (desktop or mobile app). Within the interval configured in the Scheduler (default: 1 hour), the Go sync engine will resolve it to an IMDB ID, find the best torrent, and add it automatically.
+
+Trigger manually from the Control Panel (`:9080/control`) → Scheduler → Watchlist → "Run now", or via API:
+```bash
+curl -X POST http://127.0.0.1:9080/api/scheduler/watchlist/run
+```
+
+The engine:
+1. Queries `discover.provider.plex.tv` for your watchlist
+2. Resolves each entry to an IMDB ID (falls back to TMDB)
+3. Queries Prowlarr/Torrentio for the best stream (minimum 10 seeders)
+4. Adds to GoStorm and writes a virtual `.mkv` stub
+
+</details>
+
+<details>
+<summary><b>Step 7: Monitor in Real Time</b></summary>
+
+```bash
+# Control Panel, Tiramisu + GoStorm settings, paths, scheduler, restart button
+open http://192.168.1.2:9080/control
+
+# Dashboard: live swarm, streams, services, scheduler, logs
+open http://192.168.1.2:9080/dashboard
+
+# Raw metrics (JSON)
+curl -s http://192.168.1.2:9080/metrics | python3 -m json.tool
+
+# Scheduler status
+curl -s http://192.168.1.2:9080/api/scheduler/status | jq
+
+# Live log key events only
+ssh pi@192.168.1.2 "tail -f /home/pi/Tiramisu/logs/tiramisu.log | grep -E '(OPEN|NATIVE|Interrupt|Jump|DiskWarmup|Emergency)'"
+
+# Active torrents in RAM with speed
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"active"}' http://192.168.1.2:8090/torrents | \
+  jq '.[] | {title: .title[:60], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
+```
+
+</details>
+
+<details>
+<summary><b>Step 8: Configure the MKV Creation Scheduler</b></summary>
+
+Tiramisu includes a built-in scheduler that replaces system cron. Configure it from the Control Panel at `:9080/control` → **Scheduler** section.
+
+**Three jobs are available:**
+
+| Job | Default schedule | Log file |
+|-----|-----------------|----------|
+| Movies Library Sync | Mon + Thu at 03:00 | `logs/movies-sync.log` |
+| TV Series Libraries Sync | Wed + Fri at 04:00 | `logs/tv-sync.log` |
+| Plex Watchlist Sync | Every 1 hour | `logs/watchlist-sync.log` |
+
+Enable the scheduler with the **Enable Scheduler** toggle, pick weekdays and start time for each job, then click **Save schedule**. Changes require a service restart to take effect.
+
+> **Run now**: trigger any job immediately from the Control Panel or via `POST /api/scheduler/{type}/run` on port 9080.
+
+</details>
+
+<details>
+<summary><b>Step 9: Tune GoStorm Settings</b></summary>
+
+Via the Control Panel at `:9080/control`, or via API:
+
+```bash
+curl -X POST http://127.0.0.1:8090/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "set",
+    "sets": {
+      "CacheSize": 100663296,
+      "ReaderReadAHead": 95,
+      "PreloadCache": 0,
+      "ConnectionsLimit": 25,
+      "TorrentDisconnectTimeout": 10,
+      "UseDisk": true,
+      "ResponsiveMode": true
+    }
+  }'
+```
+
+| Setting | Value | Rationale |
+|---------|-------|-----------| 
+| `CacheSize` | 96 MB | Lean engine strategy, feed FUSE 256 MB buffer; smaller heap = lower GC. 64 MB caused buffering in testing. |
+| `ConnectionsLimit` | 25 | Matches FUSE master semaphore; prevents Samba thread exhaustion |
+| `ResponsiveMode` | `true` | Serve unverified data; Adaptive Shield corrects corruption automatically |
+| `UseDisk` | `true` | Enable SSD warmup cache |
+| `TorrentDisconnectTimeout` | 10 s | Fast peer cleanup for RAM footprint |
+
+</details>
+
+<details>
+<summary><b>Step 10: Regenerate the PGO Profile</b></summary>
+
+Capture a CPU profile during real streaming workload:
+
+```bash
+# Single profile (120 seconds while streaming a 4K film)
+curl -o ~/Tiramisu/default.pgo \
+  "http://127.0.0.1:9080/debug/pprof/profile?seconds=120"
+
+# Or merge multiple workloads for better coverage
+curl -o /tmp/pgo-stream.pprof "http://127.0.0.1:9080/debug/pprof/profile?seconds=120"
+curl -o /tmp/pgo-sync.pprof   "http://127.0.0.1:9080/debug/pprof/profile?seconds=120"
+go tool pprof -proto /tmp/pgo-stream.pprof /tmp/pgo-sync.pprof > ~/Tiramisu/default.pgo
+
+# Rebuild Go detects the changed profile and re-optimizes automatically
+cd ~/Tiramisu
+GOARCH=arm64 CGO_ENABLED=1 /usr/local/go/bin/go build -pgo=auto -o tiramisu .
+```
+
+Regenerate after significant code changes. On Pi 4 Cortex-A72, `sha1.blockGeneric` in the profile is expected: the A72 has no hardware SHA1 extensions.
+
+</details>
+
+---
+
+## Control Panel
+
+The Control Panel is where you tune the engine, point it at your paths and
+credentials, run a sync by hand and restart the service, all without opening
+`config.json` or an SSH session. It is a web UI **embedded in the Tiramisu
+binary**: no additional server, no React build step, no external dependencies.
+Served at `:9080/control`.
+
+```
+http://<your-pi-ip>:9080/control
+```
+
+### Layout
+
+Six sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
+**Sources & Media**, **Engine**, **Release Selection** and **Scheduler**. Each section says when
+its settings take effect: on restart (Tiramisu settings, written to `config.json`) or live
+(GoStorm engine settings, pushed through its API). Find any setting with <kbd>⌘K</kbd>.
+
+- **Simple / Advanced**: Simple shows the settings you change most often; Advanced shows everything, with expert cards marked as such.
+- **Change bar**: every edit is collected at the bottom of the page with its old and new value. **Apply** saves them all (live ones take effect at once) and becomes **Apply & restart** when one of them needs a restart; **Discard** reverts. Leaving the page with pending changes asks first.
+
+| Section | Settings |
+|---------|----------|
+| **Streaming & FUSE** | FUSE Cache Budget, Master Concurrency, Streaming Threshold; Physical Source Path, FUSE Mount Path; FUSE Block, Attr/Entry Timeout; Metadata Cache, Max Cache Entries, Cleanup Interval |
+| **Network & VPN** | NAT-PMP (enable, Gateway IP, VPN Interface, Local Port, Refresh/Lifetime); GoStorm URL, Rescue Grace/Cooldown, Metrics Port, Proxy Port, Log Level; IP BlockList (enable, URL, filter) |
+| **Sources & Media** | Prowlarr URL and API key, Torrentio URL; TMDB API key; media server type (Plex or Jellyfin), URL, token, Movies / TV Series / Music library IDs |
+| **Engine** *(live)* | Cache Size, Readahead Cache; Warmup Cache, path and SSD quota; Connections Limit, DL/UP Rate, Disconnect Timeout; Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt; Smart Responsive Mode, Adaptive Shield, Debug Log |
+| **Release Selection** | Preferred and excluded language flags, preferred terms; quality scoring preset and bonuses for Movies and TV Series, with a preview of what wins right now |
+| **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule from `config.json`) |
+
+---
+
+## Dashboard
+
+Embedded Go service at port **`:9080`**. Real-time operational view of the entire
+stack: one page that answers "is it healthy right now, and what is it doing",
+without reading a log.
+
+```
+http://<your-pi-ip>:9080/dashboard
+```
+
+### Live Swarm
+
+The default view of the speed panel (switch to **Timeline** for the classic chart).
+One graph from left to right: **peers → torrents → piece cache → FUSE buffer → clients**.
+
+- **Peers**: seeders, leechers, uTP and half-open connections; newcomers pulse in, departures fade out; banned peers are marked with a cross.
+- **Torrents**: pipe width follows the download speed; a torrent that is downloading pulses, an idle one stays still.
+- **FUSE buffer**: the pipe between cache and FUSE works as a level meter of the read-ahead buffer (active / stale).
+- **Clients**: the device that is watching, from Plex or Jellyfin sessions (`Apple TV · Plex`), or the SMB client address when the player reads the share directly.
+- **Adaptive Shield**: a hash failure travels down the affected pipe; in STRICT the live pipes turn orange with a clean-streak ring on GoStorm, and the colour drains toward the clients when FAST mode returns.
+
+### Status Grid
+
+Six tiles:
+
+| Card | What it shows |
+|------|--------------| 
+| **GOSTORM** | API ping latency (green = responding). |
+| **FUSE** | Number of virtual `.mkv` files currently exposed. |
+| **VPN** | WireGuard interface status: VPN IP and gateway. |
+| **NAT-PMP** | Active external port assigned by VPN gateway. |
+| **MEDIA SERVER** | Plex and/or Jellyfin reachability and latency. |
+| **SYSTEM** | CPU %, RAM %, free disk space, live via gopsutil. |
+
+### Download Speed Graph
+
+**Rolling chart** (last 5 minutes) of GoStorm download speed in Mbps, sampled every 5 seconds, with the Adaptive Shield timeline underneath.
+
+### Active Streams
+
+Every torrent in use, with poster, title and year, hash and size, quality chips (`4K`/`1080p`,
+`DV`/`HDR`, audio codec and channels, `PRIORITY`), current speed and peer/seed count, and a ✕
+to stop the stream.
+
+### Sync Controls
+
+The **Sync scheduler** card runs or stops each sync by hand (Movies, TV, Watchlist, Music) and shows its last result and next run; the **Logs** card next to it tails `tiramisu`, `movies`, `tv`, `watchlist` and `music` logs.
+
+### MKV Creation Scheduler
+
+Built into the Go binary. Configured from the **Scheduler** section of the Control Panel:
+- **Movies Library Sync**: select weekdays + start time
+- **TV Series Libraries Sync**: select weekdays + start time
+- **Plex Watchlist Sync**: interval-based (1 h, 2 h … 24 h)
+
+Last/next run times and live status are shown in the card. State persists across restarts in `STATE/tiramisu.db`.
+
+---
+
+## Sync Engine (Go Native)
+
+All sync logic runs natively inside the Go binary. No Python, no external scripts, no subprocess overhead. Configure schedules from the Control Panel at `:9080/control` → **Scheduler**.
+
+### Movies Sync
+
+Queries TMDB Discover + Popular (Italian + English, region IT+US), evaluates Prowlarr/Torrentio results, adds the best torrent.
+
+Trigger from Control Panel → Scheduler → Movies → "Run now", or via API:
+```bash
+curl -X POST http://127.0.0.1:9080/api/scheduler/movies/run
+```
+
+- Quality: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`
+- Min seeders: 15 · Min size: 10 GB (4K), 4 GB (1080p)
+- Skips existing films (by TMDB ID) · Upgrades lower-quality entries
+
+### TV Sync
+
+```bash
+curl -X POST http://127.0.0.1:9080/api/scheduler/tv/run
+```
+
+Fullpack-first approach, prefers complete season packs. Plex/Jellyfin-compatible directory structure:
+```
+Show Name (Year)/
+  Season.01/
+    Show_Name_S01E01_<hash8>.mkv
+    Show_Name_S01E02_<hash8>.mkv
+```
+
+### Dead-Release Reaper
+
+A torrent can die without anyone noticing: the release stays in the library, but
+its swarm stops answering. The engine counts the metadata timeouts of each
+release, and when a title crosses the threshold it is re-searched in later syncs
+instead of being left as a file that can never play.
+
+On movies the dead release is skipped, the title is looked up again even outside
+the usual discovery window, and either a live release replaces it or the stub is
+removed. On TV the decision is per pack, because one season pack stands behind
+up to twenty episodes: the pack is removed only when every season it covers was
+searched end to end, and an episode that simply could not be checked is kept
+rather than guessed away. Every episode removed this way is also recorded as a
+hole, so a show the discovery feed no longer returns can still be repaired later
+(see [Episode gaps](#episode-gaps-v1971) in the Library API).
+
+### Watchlist Sync
+
+```bash
+curl -X POST http://127.0.0.1:9080/api/scheduler/watchlist/run
+```
+
+Reads Plex cloud watchlist → IMDB ID resolution → Prowlarr/Torrentio (min 15 seeders, the movie profile) → GoStorm.
+
+### Music Sync
+
+```bash
+curl -X POST http://127.0.0.1:9080/api/scheduler/music/run
+```
+
+Weekly, Sunday 15:00 by default (`scheduler.music_sync`). Every album is filed
+through the Library API as FLAC projections, one per track. Three passes:
+
+- **New albums of your artists.** Every artist of Tiramisu's music library with a
+  MusicBrainz id is followed: albums and EPs whose first edition came out in the
+  last `window_days` (30) and that the library lacks are imported, with no cap.
+  Live, compilation and remix groups, reissues, undated and future releases never
+  qualify. An album with no torrent yet is retried on every run while it stays in
+  the window. MusicBrainz is asked in batches of 40 artists, so 800 artists cost
+  about 20 requests.
+- **New artists close to yours.** The sitewide ListenBrainz fresh-releases feed is
+  filtered down to artists you do not have whose nearest artists on ListenBrainz
+  include yours, and whose first album or EP is at most `debut_years` (3) old;
+  more of your artists among the neighbours ranks higher. Only about a third of new
+  artists have similarity data yet, so expect a handful a month. The first run
+  looks up every artist of the window (about an hour for 30 days); the answers are
+  cached in the discovery state for 30 days, so later runs look up only the week's
+  new names.
+- **Niche artists of your genres (Plex only).** The genres of your seed artists
+  (below) pick the pools: the least played recordings of each genre on ListenBrainz,
+  resolved to artists you do not have. An artist is kept when one of your artists is
+  among its nearest neighbours and its first album or EP is at most `debut_years`
+  (15) old; one of your seeds among the neighbours ranks it highest. Its latest
+  studio album already released is imported.
+- **Similar artists (Plex only).** The Deezer related artists of your seed artists
+  (public endpoints, no key), pooled and ranked by how many of your seeds point at
+  them. Artists any library already holds, artists outside `min_fans`-`max_fans`
+  (10,000-100,000) Deezer fans and artists whose first album or EP is older than
+  `debut_years` (15) are dropped; the latest studio album comes from MusicBrainz.
+
+The seeds come from the Plex server owner's plays of the last 60 days (the users the
+server is shared with do not count), weighted by age: a play of
+the last day counts 1, of the last week 0.5, of the last month 0.25, of the last two
+months 0.125. With no plays in 60 days the genre and similar-artist passes find
+nothing.
+
+The last three passes share `max_albums_per_run` (20), in order new artists, genres,
+similar artists, one album per artist.
+
+The new-album pass reads only Tiramisu's own music library, for the artists and
+for the duplicate check: on Plex the section in `plex.music_library_id` (0 turns
+the pass off), on Jellyfin the music library that holds the albums Tiramisu filed.
+Jellyfin keeps no play history, so there the genre and similar-artist passes are
+skipped and the other two run. It reads `/Library/VirtualFolders` and `/Items` with the `Authorization: MediaBrowser`
+header, which Jellyfin 10.x and 12.x both accept, and needs MusicBrainz ids on the
+albums (tagged files, or the bundled MusicBrainz metadata provider).
+
+---
+
+## Library API (`:9080`)
+
+The HTTP way to add or remove a title, for clients that cannot touch the
+filesystem: an AI agent, a script on another machine, or simply `curl`. One
+request does what the sync engine does for a single release: it registers the
+torrent, waits for the file list, picks the video file, writes the virtual
+`.mkv` with the same naming convention, registers TV episodes in the state DB,
+and asks the media server to rescan.
+
+```bash
+# Add a movie. release_title is the raw release name: the quality tags in the
+# filename (_DV, _Atmos, _REMUX) are read from it.
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"type":"movie","hash":"<infohash>","title":"Dummy Bunny","year":2024,
+       "release_title":"Dummy.Bunny.2024.2160p.UHD.BluRay.REMUX.DV.Atmos-GRP",
+       "imdb":"tt1234567"}' \
+  http://127.0.0.1:9080/api/library/add
+
+# Add one episode, or a whole season pack by leaving "episode" out
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"type":"tv","hash":"<infohash>","title":"Dummy Bunny","first_air_date":"2015-06-24",
+       "season":1,"episode":2,"release_title":"Dummy.Bunny.S01E02.1080p"}' \
+  http://127.0.0.1:9080/api/library/add
+```
+
+`add` answers `201` with the path, `fuse_path` and declared size of every stub
+it wrote, or `200` with `"already_present": true` when the release was already
+filed. A season pack is never short-circuited that way, because which episodes
+it contains is only known once the file list arrives; re-adding one rewrites the
+episodes it names and replaces the releases they came from. Failures follow the
+same rule as the sync: every error removes the torrent it added, so a failed
+call leaves nothing behind.
+
+For TV, `first_air_date` puts the year in the series folder, and `quality_score`
+is what the next sync compares against before replacing the episode. `imdb` is
+written into movie stubs only; episode stubs carry no id, the same convention
+the sync follows. `magnet` can replace `hash`; `is_4k`, `file_index` and
+`quality_score` override what would otherwise be inferred, and `metadata_wait`
+(default 60 seconds, capped at 300) is how long the call waits for the swarm to
+answer, so keep the client timeout above it.
+
+Errors say which half broke: `400` the request, `422` the torrent holds no video
+file, `502` the engine refused it, `503` the state DB is unavailable, `504` no
+metadata in time. Every failure removes the torrent it added, so a failed call
+leaves nothing behind.
+
+```bash
+# What the library already holds, one entry per stub. type is a filter: movie
+# lists the movie library, tv the series one, gaps the open holes. Any other
+# value silently falls back to the movie list, so a typo reads as a wrong answer.
+curl -s 'http://127.0.0.1:9080/api/library/list?type=movie' | jq '.[] | {fuse_path, size, hash, imdb}'
+curl -s 'http://127.0.0.1:9080/api/library/list?type=tv'    | jq '.[] | {fuse_path, season, episode}'
+
+# Remove. blacklist:true records the release the way the FUSE unlink handler
+# does, so the sync will not add the title back.
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"path":"movies/Dummy_Bunny_2024_2160p_DV_Atmos_REMUX_e7f8a9b0.mkv","blacklist":true}' \
+  http://127.0.0.1:9080/api/library/remove
+```
+
+Removing a stub drops its torrent only when no other stub still points at it:
+one season pack is a single torrent behind many episodes.
+
+### Music and audiobooks (v1.10.0)
+
+`music/` and `audiobooks/` use the same endpoints with their own rules. The caller
+supplies the final path and Tiramisu validates what the engine owns: section
+containment, extension agreement, the mandatory `_<hash8>` suffix (the last eight
+hex digits of the infohash, before the extension) and collision rules. Music admits
+`.flac` only; audiobooks admit `.m4b`, `.m4a` and `.mp3`.
+
+```bash
+# 1. Inspect hydrates the magnet and returns the file list. The engine adds the
+# torrent itself, so a magnet is enough; metadata_wait works as in add.
+curl -s -X POST -H 'Content-Type: application/json' --max-time 300 \
+  -d '{"magnet":"magnet:?xt=urn:btih:...","title":"Dummy Album"}' \
+  http://127.0.0.1:9080/api/library/inspect
+
+# 2. Add an album, one projection per file. external_id is the caller's identity
+# (a MusicBrainz release group, an ASIN) and external_id_ns its namespace: it is
+# stored verbatim, written into the stub, and returned by list.
+curl -s -X POST -H 'Content-Type: application/json' --max-time 300 \
+  -d '{"type":"music","hash":"<infohash>","title":"Dummy Album",
+       "files":[{"source_path":"Release/01 - One.flac",
+                 "path":"Artist/Album/01 - One_e7f8a9b0.flac",
+                 "external_id":"<release-group-mbid>","external_id_ns":"musicbrainz"}]}' \
+  http://127.0.0.1:9080/api/library/add
+
+# 3. List pages instead of returning an array, and shows the identity per row.
+# prefix filters the section; failures=1 adds the reachability counters.
+curl -s 'http://127.0.0.1:9080/api/library/list?type=music&limit=200' | \
+  jq '{next_cursor, items: [.items[] | {path, external_id, external_id_ns}]}'
+curl -s 'http://127.0.0.1:9080/api/library/list?type=music&prefix=Artist/Album&failures=1'
+
+# 4. Remove one projection by exact path, or a whole album by prefix.
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"type":"music","path":"Artist/Album/01 - One_e7f8a9b0.flac"}' \
+  http://127.0.0.1:9080/api/library/remove
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"type":"music","prefix":"Artist/Album"}' \
+  http://127.0.0.1:9080/api/library/remove
+```
+
+`add` answers `201` for the projections it created, or `200` with
+`"already_present": true` when they are already filed. On a replay the stored
+identity wins and a disagreement is logged, so changing an identity means removing
+and adding again. `remove` is idempotent: an absent path answers `removed: false`
+with `state: "absent"`. Prefix removal takes a whole album in one call and answers
+`409` when the rows under it do not share exactly one torrent, which is the engine
+saying that directory is not an album. `blacklist` is not audio lifecycle state and
+is rejected. Hash-wide, directory and batch removal remain out of Phase 1. A
+torrent is never dropped while another projection still references it.
+
+Projections are read-only to their clients: files answer `0444`, directories
+`0555`, and the mutations a scanner never needs (write open, truncate, rename,
+mkdir, chmod) are refused with `EROFS`, while a direct unlink gets `EPERM`. Adding,
+re-filing and removing happen only through the API.
+
+Two things worth knowing before scripting against it. The `type` must be exactly
+`music` or `audiobook`: `list` keeps the legacy fallback for unknown values, so the
+plural `audiobooks` answers `200` with the movie library instead of an error. And a
+music add or removal asks the media server to rescan the section in
+`plex.music_library_id` (Jellyfin refreshes every library, audiobooks included).
+On Plex, audiobooks have no library id yet, so the `audiobooks/` section is scanned
+manually, once, when the batch is done.
+
+### Episode gaps (v1.9.71)
+
+When the TV reaper removes an episode whose release died, it does not just
+delete the stub: it records the hole, so a show the discovery feed no longer
+returns can still be repaired later. `type=gaps` lists those holes, oldest
+first.
+
+```bash
+curl -s -D- 'http://127.0.0.1:9080/api/library/list?type=gaps' | \
+  jq '.[] | {episode_key, show, season, path, dead_hash, removed_at, last_attempt}'
+```
+
+`last_attempt` is when the repair pass last re-searched the hole, and it stays
+`0` when it never has, which is why it carries no `omitempty`: `0` means "never
+tried", not "tried at epoch". The listing is capped at 500 entries and the true
+count travels in the `X-Total-Count` header, so a client reading a full page can
+tell it is not the whole backlog.
+
+The TV sync repairs gaps on its own: one search per affected season, at most 5
+shows per run, and no sooner than 6 hours after the last attempt on the same
+hole. Filing the episode yourself with `/api/library/add` closes its gap too: a
+gap is cleared whenever the episode has a live release again, whoever put it
+there.
+
+> [!WARNING]
+> Nothing on `:9080` is authenticated. `/api/config` returns the whole
+> configuration, keys and tokens included, and accepts a POST that rewrites it;
+> `/api/library/add` and `/api/library/remove` write and delete files in the
+> library. Keep the port on a trusted network, or behind a reverse proxy that
+> requires authentication.
+
+---
+
+## MCP Server
+
+Tiramisu serves its library tools over MCP at `http://<host>:9080/mcp`
+(Streamable HTTP). An agent searches releases with the deployment's own scoring
+profile, the same pipeline the sync uses, files the one you pick, lists and
+removes entries:
+
+- Claude Code: `claude mcp add --transport http tiramisu http://<host>:9080/mcp`
+- Any MCP client that speaks Streamable HTTP: point it at the same URL.
+
+| Tool | What it does |
+|------|--------------|
+| `resolve_title` | Title → IMDb id (and TMDB id, first-air date for shows) |
+| `search_releases` | Prowlarr + Torrentio search, gated and scored like the sync; returns a job |
+| `get_job` | Polls a search, add or inspect job |
+| `add_release` | Files the candidate you chose; TV releases are checked against the show's names |
+| `resolve_album` | Artist → discography from MusicBrainz, or one album; flags what is already in the library |
+| `search_album`, `add_album` | The music sync's own search (lossless only) and filing: MusicBrainz track ids, cue images split per track |
+| `inspect_torrent`, `add_audio` | A torrent you name, and audiobooks: list its files, file its tracks |
+| `list_library`, `list_gaps` | What the library holds; TV episodes the reaper removed |
+| `remove_entries` | Preview first; removes only with `confirm`, for good or to replace |
+
+Searches and adds run as jobs: indexer searches can take minutes. The agent
+always asks before adding or removing. It changes the scoring profile only for
+one search and only when you ask, and never writes it to `config.json`.
+
+```
+add the latest Dummy Bunny movie in 4K
+add Dummy Bunny's discography
+season 2 of Dummy Bunny is missing episodes 4 to 8, fill them in
+is Dummy Bunny (2024) already in the library, and in what quality?
+```
+
+The MCP server needs v1.11.5 or later.
+
+> **Trust model:** like the rest of `:9080`, `/mcp` has no authentication.
+> Keep the port on your LAN.
+
+---
+
+## Configuration Reference
+
+`config.json` is resolved relative to the binary's path (`os.Executable()`), so
+no path argument is needed, and it is not tracked by git because it holds
+credentials. In practice you rarely edit it by hand: the Control Panel writes
+the same file, with FUSE and path settings applied at the next restart and
+engine settings applied live.
+
+```bash
+cp config.json.example /home/pi/Tiramisu/config.json
+nano /home/pi/Tiramisu/config.json
+```
+
+### Full Field Reference
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `physical_source_path` | *(none)* | Directory where virtual `.mkv` stubs are created |
+| `fuse_mount_path` | *(none)* | FUSE mount point, seekable virtual files served here |
+| `read_ahead_budget_mb` | `256` | In-memory read-ahead budget |
+| `disk_warmup_quota_gb` | `15` | SSD warmup cache quota; the reference Raspberry Pi deployment raises it to 32 GB |
+| `warmup_head_size_mb` | `64` | Per-file SSD warmup size |
+| `master_concurrency_limit` | `25` | Max concurrent data slots |
+| `metadata_cache_size_mb` | `50` | Metadata LRU cache budget |
+| `fuse_max_inflight_mb` | `0` | Cap on the RAM go-fuse checks out for in-flight requests; `0` leaves go-fuse's own default |
+| `gostorm_url` | `http://127.0.0.1:8090` | GoStorm internal API URL |
+| `proxy_listen_port` | `8080` | Legacy field kept for config compatibility: no listener uses it today |
+| `metrics_port` | `9080` | Metrics, Control Panel, Webhook port |
+| `media_server_type` | `plex` | `plex` or `jellyfin`; selects how the post-sync library refresh is issued and which API the music sync reads |
+| `torrentio_url` | `https://torrentio.strem.fun` | Torrentio base URL, the fallback when Prowlarr is disabled or finds nothing |
+| `blocklist_enabled` | `false` | Load the peer IP blocklist (not needed behind a VPN) |
+| `blocklist_url` | *(iblocklist Level 1)* | Gzipped blocklist URL, refreshed every 24 h; compression is detected from the content |
+| `blocklist_filter` | `(?i)\bap2p\b\|anti-?p2p` | Keep only ranges whose description matches this regexp; empty loads the list whole |
+| `plex.url` | *(none)* | Media server URL: Plex or Jellyfin |
+| `plex.token` | *(none)* | Plex token, or Jellyfin API key |
+| `plex.library_id` | `0` | Plex movies library section ID (0 = skip the refresh) |
+| `plex.tv_library_id` | `0` | Plex TV series library section ID (0 = skip the refresh) |
+| `plex.music_library_id` | `0` | Plex music library section Tiramisu files into: rescanned after an audio add or removal, and the only library the music sync follows new albums from (0 = both off). Jellyfin setups leave it at 0 |
+| `scheduler.music_sync` | Sunday 15:00 | Weekly music sync slot (`config.json` only: the Control Panel Scheduler has no music row; the Dashboard can still run it) |
+| `music_discovery.new_releases.enabled` | `true` | Follow the new albums of the artists in Tiramisu's music library |
+| `music_discovery.new_releases.window_days` | `30` | How recent an album's first edition must be to count as new |
+| `music_discovery.new_artists.enabled` | `true` | Import recent albums of new artists whose nearest artists you own |
+| `music_discovery.new_artists.window_days` | `30` | How far back the fresh-releases feed is read (at most 90) |
+| `music_discovery.new_artists.debut_years` | `3` | An artist counts as new when its first album or EP is at most this old (0 = any age) |
+| `music_discovery.max_albums_per_run` | `20` | Cap shared by the new-artist, genre and similar-artist passes (new albums of your own artists are uncapped) |
+| `music_discovery.seeds_recency_days` | `[1, 7, 30, 60]` | Age tiers of the plays that pick your seed artists: a play weighs 1 in the first tier and half as much in each next one; older plays do not count, and with no plays in the last tier the genre and similar-artist passes find nothing |
+| `music_discovery.seeds_min_plays` | `3` | Plays an artist needs inside the tiers to become a seed |
+| `music_discovery.genres.enabled` | `true` | Import niche artists of the genres you listen to now, close to your artists |
+| `music_discovery.genres.count` | `8` | How many of your genres are explored |
+| `music_discovery.genres.debut_years` | `15` | An artist of the genre pass counts as new when its first album or EP is at most this old (0 = any age) |
+| `music_discovery.similar.min_fans` | `10000` | Similar artists with fewer Deezer fans are too obscure to suggest (0 = no floor) |
+| `music_discovery.similar.max_fans` | `100000` | Similar artists with more Deezer fans are too known to suggest (0 = no limit) |
+| `music_discovery.similar.debut_years` | `15` | A similar artist's first album or EP must be at most this old (0 = any age) |
+| `tmdb_api_key` | *(none)* | TMDB API key |
+| `prowlarr.enabled` | `false` | Use Prowlarr as primary indexer (falls back to Torrentio if disabled) |
+| `prowlarr.api_key` | *(none)* | Prowlarr API key (Settings → General → API Key) |
+| `prowlarr.url` | *(none)* | Prowlarr base URL (e.g. `http://192.168.1.x:9696`) |
+| `natpmp.enabled` | `false` | Enable NAT-PMP |
+| `natpmp.gateway` | *(none)* | VPN gateway IP |
+| `natpmp.vpn_interface` | `wg0` | WireGuard interface |
+
+### Quality Scoring
+
+Every candidate release, film or episode, is scored before it is chosen:
+resolution, HDR and Dolby Vision, the audio track, remux, your preferred
+language, the seeder count and the size gates all add up to a single number, and
+the highest one wins. Those weights used to be fixed in the code; they now live
+in an optional `quality_scoring` block in `config.json`, editable live from the
+**Release Selection** card in the Control Panel.
+
+Omitting the block keeps the shipped defaults, so an existing install changes
+nothing until you add it deliberately. `movies` and `tv` are independent: you
+can set one without the other, and any field you leave out falls back to that
+profile's default.
+
+```json
+{
+  "quality_scoring": {
+    "movies": {
+      "res_4k": 1000,
+      "res_1080p": 200,
+      "hdr": 60,
+      "dolby_vision": 100,
+      "atmos": 50,
+      "audio_5_1": 25,
+      "stereo_penalty": -50,
+      "remux": 30,
+      "preferred_language": 60,
+      "unknown_size_4k_penalty": -5,
+      "seeder_cap": 50,
+      "min_seeders": 15,
+      "min_4k_gb": 10,
+      "max_4k_gb": 40,
+      "min_1080p_gb": 4,
+      "max_1080p_gb": 20
+    },
+    "tv": {
+      "res_4k": 1000,
+      "res_1080p": 200,
+      "hdr": 100,
+      "dolby_vision": 150,
+      "atmos": 50,
+      "audio_5_1": 25,
+      "preferred_language": 40,
+      "fullpack": 500,
+      "seeder_tier_100": 100,
+      "seeder_tier_50": 50,
+      "seeder_tier_20": 10,
+      "min_seeders": 5,
+      "min_seeders_4k": 5,
+      "season_skip_score": 1000
+    }
+  }
+}
+```
+
+The **Release Selection** card ships four presets that fill both profiles at
+once and then let you fine-tune single fields:
+
+- **Best Quality (default)**: the values above; resolution, HDR and Atmos weigh
+  the most, and both syncs use this scale unless you pick another preset.
+- **1080p**: for setups that should stop treating 4K as automatically better, a
+  NAS that cannot transcode it for instance: `res_1080p` outweighs `res_4k`.
+- **Fast Swarms**: favors releases with more seeders over marginal quality gains,
+  for when cold starts matter more than a Dolby Vision bump.
+- **Max Quality**: pushes resolution, HDR, Atmos and remux higher and tightens
+  the seeder floor, for a library where quality always wins.
+
+### Language
+
+Release-name language signals, used by the scoring and by the rejection gates:
+
+```json
+"language": {
+  "preferred_terms": ["ita", "multi", "dual"],
+  "preferred_flags": ["IT"],
+  "excluded_flags": ["ES", "FR", "DE", "RU", "CN", "JP", "KR", "TH", "PT", "BR",
+                     "UA", "PL", "NL", "TR", "SA", "IN", "CZ", "HU", "RO"]
+}
+```
+
+`preferred_terms` are case-insensitive, word-boundary-matched release-name terms
+(e.g. `ita`, `multi`, `dual`); `preferred_flags` and `excluded_flags` are ISO
+3166-1 alpha-2 codes matched against the flag emoji in indexer result lines. The
+block is optional, and omitting it keeps these defaults.
+
+### Runtime Environment Variables
+
+```ini
+Environment="GOMEMLIMIT=2200MiB"
+Environment="GOGC=100"
+```
+
+`GOMEMLIMIT=2200MiB` leaves headroom for OS and Samba on a 4 GB Pi 4.
 
 ---
 
@@ -541,891 +1525,6 @@ those two.
 
 ---
 
-## Requirements
-
-| Component | Details |
-|-----------|---------|
-| **Hardware** | Any `linux/amd64` or `linux/arm64` device, **Raspberry Pi 4 is the minimum tested baseline** (4 GB RAM recommended). Runs on NAS, VPS, mini-PC, or any always-on Linux box. **On amd64, AVX2 is strongly recommended** (any x86_64 CPU from ~2013 onward, Intel Haswell or AMD Excavator and later). Without it, Go's SHA1 piece verification falls back to its slowest scalar path and may not sustain real playback bitrates; Tiramisu still starts, logging a warning at boot so high CPU and stuttering have a visible cause. arm64 has no equivalent requirement: NEON is mandatory on every ARMv8-A chip, so any real arm64 device, the Pi 4 included, already clears the floor. |
-| **Go** | 1.26+ (`linux/amd64` or `linux/arm64`), do **not** use the 32-bit `linux/arm` toolchain. Build with `CGO_ENABLED=1`: the SQLite piece-completion layer is cgo |
-| **FUSE 3** | `sudo apt install fuse3 libfuse3-dev` |
-| **systemd** | For service management |
-| **Samba** | `sudo apt install samba` |
-| **Plex/Jellyfin** | Media Server (on Synology or any network host) |
-| **TMDB API key** | Free at [themoviedb.org/settings/api](https://www.themoviedb.org/settings/api) |
-| **Plex token** | Settings → Account → XML API |
-
----
-
-## Quick Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MrRobotoGit/tiramisu/main/install.sh -o install.sh
-chmod +x install.sh
-./install.sh
-```
-
-![Tiramisu interactive installer](docs/screenshots/install.png?v=2)
-
-The interactive installer handles everything end-to-end:
-1. Installs system dependencies (`fuse3`, `libfuse3-dev`, `gcc`, `samba`, `git`)
-2. Prompts for all required paths, Plex credentials, TMDB key, and NAT-PMP settings
-3. Generates `config.json` from `config.json.example`
-4. Creates `Tiramisu/STATE/`, `logs/`, and FUSE mount point directories
-5. **Compiles the Tiramisu binary** (downloads Go if needed, detects architecture automatically)
-6. Writes and enables the systemd service for `tiramisu`
-
-Once complete:
-
-```bash
-sudo systemctl start tiramisu
-```
-
----
-
-## How-To Guide
-
-> [!CAUTION]
-> **Attention:** After the first run of the Movie and TV sync engine, hundreds of `.mkv` files will be created. Plex/Jellyfin will then begin scanning these files to populate its UI. During this initial scan, playback will be extremely slow or may time out. This is because the media server opens and closes files hundreds of times during analysis, which congests the BitTorrent engine. Please wait for Plex/Jellyfin to complete its scan before starting any streams. Enjoy!
-
-
-<details>
-<summary><b>Step 1: Configure the Webhook (Plex or Jellyfin)</b></summary>
-
-Required for Priority Mode (bitrate boost during playback), fast-drop on stop, and IMDB-ID-based file matching.
-
-**Plex**: Settings → Webhooks → Add Webhook:
-```
-http://192.168.1.2:9080/plex/webhook
-```
-
-**Jellyfin**: Install the Webhook plugin, add one webhook (events: `PlaybackStart`, `PlaybackStop`, `PlaybackProgress`):
-- URL: `http://192.168.1.2:9080/plex/webhook`
-- Header: Key `Content-Type` / Value `application/json`
-- Template:
-```
-{"event":"{{NotificationType}}","Metadata":{"title":"{{{Name}}}","grandparentTitle":"{{{SeriesName}}}","librarySectionType":"{{ItemType}}","guid":"imdb://{{Provider_imdb}}","Guid":[{"id":"imdb://{{Provider_imdb}}"}]}}
-```
-
-Music needs a second Generic destination with its own template, same URL and events:
-
-```
-{"event":"{{NotificationType}}","Metadata":{"title":"{{{Name}}}","grandparentTitle":"{{{Artist}}}","librarySectionType":"{{ItemType}}","ProviderIds":{"MusicBrainzTrack":"{{Provider_musicbrainztrack}}","MusicBrainzReleaseGroup":"{{Provider_musicbrainzreleasegroup}}","MusicBrainzAlbum":"{{Provider_musicbrainzalbum}}","MusicBrainzArtist":"{{Provider_musicbrainzartist}}"}}}
-```
-
-Test connectivity:
-```bash
-curl -X POST http://192.168.1.2:9080/plex/webhook \
-  -H 'Content-Type: application/json' \
-  -d '{"event":"media.play"}'
-```
-
-</details>
-
-<details>
-<summary><b>Step 2: Configure the Plex/Jellyfin Library</b></summary>
-
-Add a Movies library in Plex/Jellyfin pointing to the Samba share:
-```
-smb://192.168.1.2/tiramisu-mkv-virtual/movies
-```
-Or, if using Synology, point Plex/Jellyfin to the CIFS mount: `/volume1/Tiramisu/movies`.
-
-Run a library scan after adding the library. Plex/Jellyfin reads the first megabyte of every `.mkv` file during the scan, this automatically populates the SSD warmup head cache for every title. Subsequent plays will start in under 0.5 seconds.
-
-</details>
-
-<details>
-<summary><b>Step 3: Add Your First Movie</b></summary>
-
-**Manually via API:**
-```bash
-curl -X POST http://127.0.0.1:8090/torrents \
-  -H "Content-Type: application/json" \
-  -d '{"action":"add","link":"magnet:?xt=urn:btih:...","title":"Interstellar (2014)"}'
-```
-
-**Via sync engine (recommended):**
-Trigger from the Control Panel (`:9080/control`) → Sync Scheduler → Movies → "Run now", or via API:
-```bash
-curl -X POST http://127.0.0.1:9080/api/scheduler/movies/run
-```
-The engine fetches popular films from TMDB, finds the best available torrent for each via Prowlarr/Torrentio, adds them to GoStorm, and writes virtual `.mkv` stub files.
-
-</details>
-
-<details>
-<summary><b>Step 4: Watch a Film (What Happens Internally)</b></summary>
-
-```
-1. Plex/Jellyfin requests /mnt/tiramisu-mkv-virtual/movies/Interstellar.mkv
-2. FUSE Open() triggers Wake(), GoStorm activates the torrent
-3. Plex/Jellyfin metadata probes → served from SSD warmup cache if enabled, otherwise from the torrent pump
-4. Plex/Jellyfin probes MKV Cues at end → served from SSD tail cache if enabled
-5. Plex or Jellyfin sends media.play webhook → Tiramisu activates Priority Mode
-6. Streaming reads → served from Read-Ahead Cache or Native Bridge pump
-7. Playback begins (0.1–0.5 s with warmup, 2–4 s cold) ✨
-```
-
-</details>
-
-<details>
-<summary><b>Step 5: Seek in 4K</b></summary>
-
-When Plex/Jellyfin seeks to a new timestamp:
-
-1. `Read()` is called at the new offset, `lastOff` is updated immediately
-2. If the jump exceeds 256 MB: `Interrupt()` closes the pipe, pump goroutine unblocks atomically
-3. Pump detects `lastOff` is > 256 MB ahead, snaps to aligned chunk position
-4. Pump restarts via `startStream(newOff)`, GoStorm repositions torrent reader
-5. Data arrives from peers or SSD cache within seconds
-
-The pump goroutine survives `ErrInterrupted`, it sleeps 200 ms and continues the read loop, so no goroutine restart overhead.
-
-</details>
-
-<details>
-<summary><b>Step 6: Add from Your Plex Watchlist</b></summary>
-
-Add any movie to your Plex cloud watchlist (desktop or mobile app). Within the interval configured in the Scheduler (default: 1 hour), the Go sync engine will resolve it to an IMDB ID, find the best torrent, and add it automatically.
-
-Trigger manually from the Control Panel (`:9080/control`) → Sync Scheduler → Watchlist → "Run now", or via API:
-```bash
-curl -X POST http://127.0.0.1:9080/api/scheduler/watchlist/run
-```
-
-The engine:
-1. Queries `discover.provider.plex.tv` for your watchlist
-2. Resolves each entry to an IMDB ID (falls back to TMDB)
-3. Queries Prowlarr/Torrentio for the best stream (minimum 10 seeders)
-4. Adds to GoStorm and writes a virtual `.mkv` stub
-
-</details>
-
-<details>
-<summary><b>Step 7: Monitor in Real Time</b></summary>
-
-```bash
-# Control Panel, Tiramisu + GoStorm settings, paths, scheduler, restart button
-open http://192.168.1.2:9080/control
-
-# Health Dashboard, speed graph, torrent stats, active stream, system stats
-open http://192.168.1.2:9080/dashboard
-
-# Raw metrics (JSON)
-curl -s http://192.168.1.2:9080/metrics | python3 -m json.tool
-
-# Scheduler status
-curl -s http://192.168.1.2:9080/api/scheduler/status | jq
-
-# Live log key events only
-ssh pi@192.168.1.2 "tail -f /home/pi/Tiramisu/logs/tiramisu.log | grep -E '(OPEN|NATIVE|Interrupt|Jump|DiskWarmup|Emergency)'"
-
-# Active torrents in RAM with speed
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"active"}' http://192.168.1.2:8090/torrents | \
-  jq '.[] | {title: .title[:60], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
-```
-
-</details>
-
-<details>
-<summary><b>Step 8: Configure the MKV Creation Scheduler</b></summary>
-
-Tiramisu includes a built-in scheduler that replaces system cron. Configure it from the Control Panel at `:9080/control` → **Sync Scheduler** card.
-
-**Three jobs are available:**
-
-| Job | Default schedule | Log file |
-|-----|-----------------|----------|
-| Movies Library Sync | Mon + Thu at 03:00 | `logs/movies-sync.log` |
-| TV Series Libraries Sync | Wed + Fri at 04:00 | `logs/tv-sync.log` |
-| Plex Watchlist Sync | Every 1 hour | `logs/watchlist-sync.log` |
-
-Enable the scheduler with the **Enable Scheduler** toggle, pick weekdays and start time for each job, then click **Save schedule**. Changes require a service restart to take effect.
-
-> **Run now**: trigger any job immediately from the Control Panel or via `POST /api/scheduler/{type}/run` on port 9080.
-
-</details>
-
-<details>
-<summary><b>Step 9: Tune GoStorm Settings</b></summary>
-
-Via the Control Panel at `:9080/control`, or via API:
-
-```bash
-curl -X POST http://127.0.0.1:8090/settings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "action": "set",
-    "sets": {
-      "CacheSize": 100663296,
-      "ReaderReadAHead": 95,
-      "PreloadCache": 0,
-      "ConnectionsLimit": 25,
-      "TorrentDisconnectTimeout": 10,
-      "UseDisk": true,
-      "ResponsiveMode": true
-    }
-  }'
-```
-
-| Setting | Value | Rationale |
-|---------|-------|-----------| 
-| `CacheSize` | 96 MB | Lean engine strategy, feed FUSE 256 MB buffer; smaller heap = lower GC. 64 MB caused buffering in testing. |
-| `ConnectionsLimit` | 25 | Matches FUSE master semaphore; prevents Samba thread exhaustion |
-| `ResponsiveMode` | `true` | Serve unverified data; Adaptive Shield corrects corruption automatically |
-| `UseDisk` | `true` | Enable SSD warmup cache |
-| `TorrentDisconnectTimeout` | 10 s | Fast peer cleanup for RAM footprint |
-
-</details>
-
-<details>
-<summary><b>Step 10: Regenerate the PGO Profile</b></summary>
-
-Capture a CPU profile during real streaming workload:
-
-```bash
-# Single profile (120 seconds while streaming a 4K film)
-curl -o ~/Tiramisu/default.pgo \
-  "http://127.0.0.1:9080/debug/pprof/profile?seconds=120"
-
-# Or merge multiple workloads for better coverage
-curl -o /tmp/pgo-stream.pprof "http://127.0.0.1:9080/debug/pprof/profile?seconds=120"
-curl -o /tmp/pgo-sync.pprof   "http://127.0.0.1:9080/debug/pprof/profile?seconds=120"
-go tool pprof -proto /tmp/pgo-stream.pprof /tmp/pgo-sync.pprof > ~/Tiramisu/default.pgo
-
-# Rebuild Go detects the changed profile and re-optimizes automatically
-cd ~/Tiramisu
-GOARCH=arm64 CGO_ENABLED=1 /usr/local/go/bin/go build -pgo=auto -o tiramisu .
-```
-
-Regenerate after significant code changes. On Pi 4 Cortex-A72, `sha1.blockGeneric` in the profile is expected: the A72 has no hardware SHA1 extensions.
-
-</details>
-
----
-
-## Tiramisu Control Panel
-
-The Control Panel is where you tune the engine, point it at your paths and
-credentials, run a sync by hand and restart the service, all without opening
-`config.json` or an SSH session. It is a web UI **embedded in the Tiramisu
-binary**: no additional server, no React build step, no external dependencies.
-Served at `:9080/control`.
-
-```
-http://<your-pi-ip>:9080/control
-```
-
-### Layout
-
-Six sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
-**Sources & Media**, **Engine**, **Release Selection** and **Scheduler**. Each section says when
-its settings take effect: on restart (Tiramisu settings, written to `config.json`) or live
-(GoStorm engine settings, pushed through its API). Find any setting with <kbd>⌘K</kbd>.
-
-- **Simple / Advanced**: Simple shows the settings you change most often; Advanced shows everything, with expert cards marked as such.
-- **Change bar**: every edit is collected at the bottom of the page with its old and new value. **Apply** saves them all (live ones take effect at once) and becomes **Apply & restart** when one of them needs a restart; **Discard** reverts. Leaving the page with pending changes asks first.
-
-| Section | Settings |
-|---------|----------|
-| **Streaming & FUSE** | FUSE Cache Budget, Master Concurrency, Streaming Threshold; Physical Source Path, FUSE Mount Path; FUSE Block, Attr/Entry Timeout; Metadata Cache, Max Cache Entries, Cleanup Interval |
-| **Network & VPN** | NAT-PMP (enable, Gateway IP, VPN Interface, Local Port, Refresh/Lifetime); GoStorm URL, Rescue Grace/Cooldown, Metrics Port, Proxy Port, Log Level; IP BlockList (enable, URL, filter) |
-| **Sources & Media** | Prowlarr URL and API key, Torrentio URL; TMDB API key; media server type (Plex or Jellyfin), URL, token, Movies / TV Series / Music library IDs |
-| **Engine** *(live)* | Cache Size, Readahead Cache; Warmup Cache, path and SSD quota; Connections Limit, DL/UP Rate, Disconnect Timeout; Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt; Smart Responsive Mode, Adaptive Shield, Debug Log |
-| **Release Selection** | Preferred and excluded language flags, preferred terms; quality scoring preset and bonuses for Movies and TV Series, with a preview of what wins right now |
-| **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule from `config.json`) |
-
----
-
-## Health Monitor Dashboard
-
-<p align="center"><img src="docs/screenshots/ui-dashboard-light.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></p>
-<p align="center"><img src="docs/screenshots/ui-swarm-light.png" alt="Live swarm in light mode during an Adaptive Shield STRICT episode"></p>
-<p align="center"><img src="docs/screenshots/ui-mobile.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="560"></p>
-
-Embedded Go service at port **`:9080`**. Real-time operational view of the entire
-stack: one page that answers "is it healthy right now, and what is it doing",
-without reading a log.
-
-```
-http://<your-pi-ip>:9080/dashboard
-```
-
-### Live Swarm
-
-The default view of the speed panel (switch to **Timeline** for the classic chart).
-One graph from left to right: **peers → torrents → piece cache → FUSE buffer → clients**.
-
-- **Peers**: seeders, leechers, uTP and half-open connections; newcomers pulse in, departures fade out; banned peers are marked with a cross.
-- **Torrents**: pipe width follows the download speed; a torrent that is downloading pulses, an idle one stays still.
-- **FUSE buffer**: the pipe between cache and FUSE works as a level meter of the read-ahead buffer (active / stale).
-- **Clients**: the device that is watching, from Plex or Jellyfin sessions (`Apple TV · Plex`), or the SMB client address when the player reads the share directly.
-- **Adaptive Shield**: a hash failure travels down the affected pipe; in STRICT the live pipes turn orange with a clean-streak ring on GoStorm, and the colour drains toward the clients when FAST mode returns.
-
-### Status Grid
-
-Six tiles:
-
-| Card | What it shows |
-|------|--------------| 
-| **GOSTORM** | API ping latency (green = responding). |
-| **FUSE** | Number of virtual `.mkv` files currently exposed. |
-| **VPN** | WireGuard interface status: VPN IP and gateway. |
-| **NAT-PMP** | Active external port assigned by VPN gateway. |
-| **MEDIA SERVER** | Plex and/or Jellyfin reachability and latency. |
-| **SYSTEM** | CPU %, RAM %, free disk space, live via gopsutil. |
-
-### Download Speed Graph
-
-**Rolling chart** (last 5 minutes) of GoStorm download speed in Mbps, sampled every 5 seconds, with the Adaptive Shield timeline underneath.
-
-### Active Streams
-
-Every torrent in use, with poster, title and year, hash and size, quality chips (`4K`/`1080p`,
-`DV`/`HDR`, audio codec and channels, `PRIORITY`), current speed and peer/seed count, and a ✕
-to stop the stream.
-
-### Sync Controls
-
-The **Sync scheduler** card runs or stops each sync by hand (Movies, TV, Watchlist, Music) and shows its last result and next run; the **Logs** card next to it tails `tiramisu`, `movies`, `tv`, `watchlist` and `music` logs.
-
-### MKV Creation Scheduler
-
-Built into the Go binary. Configured from the **Sync Scheduler** card in the Control Panel:
-- **Movies Library Sync**: select weekdays + start time
-- **TV Series Libraries Sync**: select weekdays + start time
-- **Plex Watchlist Sync**: interval-based (1 h, 2 h … 24 h)
-
-Last/next run times and live status are shown in the card. State persists across restarts in `STATE/tiramisu.db`.
-
----
-
-## Configuration Reference
-
-`config.json` is resolved relative to the binary's path (`os.Executable()`), so
-no path argument is needed, and it is not tracked by git because it holds
-credentials. In practice you rarely edit it by hand: the Control Panel writes
-the same file, with FUSE and path settings applied at the next restart and
-engine settings applied live.
-
-```bash
-cp config.json.example /home/pi/Tiramisu/config.json
-nano /home/pi/Tiramisu/config.json
-```
-
-### Full Field Reference
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `physical_source_path` | *(none)* | Directory where virtual `.mkv` stubs are created |
-| `fuse_mount_path` | *(none)* | FUSE mount point, seekable virtual files served here |
-| `read_ahead_budget_mb` | `256` | In-memory read-ahead budget |
-| `disk_warmup_quota_gb` | `15` | SSD warmup cache quota; the reference Raspberry Pi deployment raises it to 32 GB |
-| `warmup_head_size_mb` | `64` | Per-file SSD warmup size |
-| `master_concurrency_limit` | `25` | Max concurrent data slots |
-| `metadata_cache_size_mb` | `50` | Metadata LRU cache budget |
-| `fuse_max_inflight_mb` | `0` | Cap on the RAM go-fuse checks out for in-flight requests; `0` leaves go-fuse's own default |
-| `gostorm_url` | `http://127.0.0.1:8090` | GoStorm internal API URL |
-| `proxy_listen_port` | `8080` | Legacy field kept for config compatibility: no listener uses it today |
-| `metrics_port` | `9080` | Metrics, Control Panel, Webhook port |
-| `media_server_type` | `plex` | `plex` or `jellyfin`; selects how the post-sync library refresh is issued and which API the music sync reads |
-| `torrentio_url` | `https://torrentio.strem.fun` | Torrentio base URL, the fallback when Prowlarr is disabled or finds nothing |
-| `blocklist_enabled` | `false` | Load the peer IP blocklist (not needed behind a VPN) |
-| `blocklist_url` | *(iblocklist Level 1)* | Gzipped blocklist URL, refreshed every 24 h; compression is detected from the content |
-| `blocklist_filter` | `(?i)\bap2p\b\|anti-?p2p` | Keep only ranges whose description matches this regexp; empty loads the list whole |
-| `plex.url` | *(none)* | Media server URL: Plex or Jellyfin |
-| `plex.token` | *(none)* | Plex token, or Jellyfin API key |
-| `plex.library_id` | `0` | Plex movies library section ID (0 = skip the refresh) |
-| `plex.tv_library_id` | `0` | Plex TV series library section ID (0 = skip the refresh) |
-| `plex.music_library_id` | `0` | Plex music library section Tiramisu files into: rescanned after an audio add or removal, and the only library the music sync follows new albums from (0 = both off). Jellyfin setups leave it at 0 |
-| `scheduler.music_sync` | Sunday 15:00 | Weekly music sync slot (`config.json` only: the Sync Scheduler card has no music row) |
-| `music_discovery.new_releases.enabled` | `true` | Follow the new albums of the artists in Tiramisu's music library |
-| `music_discovery.new_releases.window_days` | `30` | How recent an album's first edition must be to count as new |
-| `music_discovery.new_artists.enabled` | `true` | Import recent albums of new artists whose nearest artists you own |
-| `music_discovery.new_artists.window_days` | `30` | How far back the fresh-releases feed is read (at most 90) |
-| `music_discovery.new_artists.debut_years` | `3` | An artist counts as new when its first album or EP is at most this old (0 = any age) |
-| `music_discovery.max_albums_per_run` | `20` | Cap shared by the new-artist, genre and similar-artist passes (new albums of your own artists are uncapped) |
-| `music_discovery.seeds_recency_days` | `[1, 7, 30, 60]` | Age tiers of the plays that pick your seed artists: a play weighs 1 in the first tier and half as much in each next one; older plays do not count, and with no plays in the last tier the genre and similar-artist passes find nothing |
-| `music_discovery.seeds_min_plays` | `3` | Plays an artist needs inside the tiers to become a seed |
-| `music_discovery.genres.enabled` | `true` | Import niche artists of the genres you listen to now, close to your artists |
-| `music_discovery.genres.count` | `8` | How many of your genres are explored |
-| `music_discovery.genres.debut_years` | `15` | An artist of the genre pass counts as new when its first album or EP is at most this old (0 = any age) |
-| `music_discovery.similar.min_fans` | `10000` | Similar artists with fewer Deezer fans are too obscure to suggest (0 = no floor) |
-| `music_discovery.similar.max_fans` | `100000` | Similar artists with more Deezer fans are too known to suggest (0 = no limit) |
-| `music_discovery.similar.debut_years` | `15` | A similar artist's first album or EP must be at most this old (0 = any age) |
-| `tmdb_api_key` | *(none)* | TMDB API key |
-| `prowlarr.enabled` | `false` | Use Prowlarr as primary indexer (falls back to Torrentio if disabled) |
-| `prowlarr.api_key` | *(none)* | Prowlarr API key (Settings → General → API Key) |
-| `prowlarr.url` | *(none)* | Prowlarr base URL (e.g. `http://192.168.1.x:9696`) |
-| `natpmp.enabled` | `false` | Enable NAT-PMP |
-| `natpmp.gateway` | *(none)* | VPN gateway IP |
-| `natpmp.vpn_interface` | `wg0` | WireGuard interface |
-
-### Quality Scoring
-
-Every candidate release, film or episode, is scored before it is chosen:
-resolution, HDR and Dolby Vision, the audio track, remux, your preferred
-language, the seeder count and the size gates all add up to a single number, and
-the highest one wins. Those weights used to be fixed in the code; they now live
-in an optional `quality_scoring` block in `config.json`, editable live from the
-**Release Selection** card in the Control Panel.
-
-Omitting the block keeps the shipped defaults, so an existing install changes
-nothing until you add it deliberately. `movies` and `tv` are independent: you
-can set one without the other, and any field you leave out falls back to that
-profile's default.
-
-```json
-{
-  "quality_scoring": {
-    "movies": {
-      "res_4k": 1000,
-      "res_1080p": 200,
-      "hdr": 60,
-      "dolby_vision": 100,
-      "atmos": 50,
-      "audio_5_1": 25,
-      "stereo_penalty": -50,
-      "remux": 30,
-      "preferred_language": 60,
-      "unknown_size_4k_penalty": -5,
-      "seeder_cap": 50,
-      "min_seeders": 15,
-      "min_4k_gb": 10,
-      "max_4k_gb": 40,
-      "min_1080p_gb": 4,
-      "max_1080p_gb": 20
-    },
-    "tv": {
-      "res_4k": 1000,
-      "res_1080p": 200,
-      "hdr": 100,
-      "dolby_vision": 150,
-      "atmos": 50,
-      "audio_5_1": 25,
-      "preferred_language": 40,
-      "fullpack": 500,
-      "seeder_tier_100": 100,
-      "seeder_tier_50": 50,
-      "seeder_tier_20": 10,
-      "min_seeders": 5,
-      "min_seeders_4k": 5,
-      "season_skip_score": 1000
-    }
-  }
-}
-```
-
-The **Release Selection** card ships four presets that fill both profiles at
-once and then let you fine-tune single fields:
-
-- **Best Quality (default)**: the values above; resolution, HDR and Atmos weigh
-  the most, and both syncs use this scale unless you pick another preset.
-- **1080p**: for setups that should stop treating 4K as automatically better, a
-  NAS that cannot transcode it for instance: `res_1080p` outweighs `res_4k`.
-- **Fast Swarms**: favors releases with more seeders over marginal quality gains,
-  for when cold starts matter more than a Dolby Vision bump.
-- **Max Quality**: pushes resolution, HDR, Atmos and remux higher and tightens
-  the seeder floor, for a library where quality always wins.
-
-### Language
-
-Release-name language signals, used by the scoring and by the rejection gates:
-
-```json
-"language": {
-  "preferred_terms": ["ita", "multi", "dual"],
-  "preferred_flags": ["IT"],
-  "excluded_flags": ["ES", "FR", "DE", "RU", "CN", "JP", "KR", "TH", "PT", "BR",
-                     "UA", "PL", "NL", "TR", "SA", "IN", "CZ", "HU", "RO"]
-}
-```
-
-`preferred_terms` are case-insensitive, word-boundary-matched release-name terms
-(e.g. `ita`, `multi`, `dual`); `preferred_flags` and `excluded_flags` are ISO
-3166-1 alpha-2 codes matched against the flag emoji in indexer result lines. The
-block is optional, and omitting it keeps these defaults.
-
-### Runtime Environment Variables
-
-```ini
-Environment="GOMEMLIMIT=2200MiB"
-Environment="GOGC=100"
-```
-
-`GOMEMLIMIT=2200MiB` leaves headroom for OS and Samba on a 4 GB Pi 4.
-
----
-
-## Sync Engine (Go Native)
-
-All sync logic runs natively inside the Go binary. No Python, no external scripts, no subprocess overhead. Configure schedules from the Control Panel at `:9080/control` → **Sync Scheduler**.
-
-### Movies Sync
-
-Queries TMDB Discover + Popular (Italian + English, region IT+US), evaluates Prowlarr/Torrentio results, adds the best torrent.
-
-Trigger from Control Panel → Sync Scheduler → Movies → "Run now", or via API:
-```bash
-curl -X POST http://127.0.0.1:9080/api/scheduler/movies/run
-```
-
-- Quality: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`
-- Min seeders: 15 · Min size: 10 GB (4K), 4 GB (1080p)
-- Skips existing films (by TMDB ID) · Upgrades lower-quality entries
-
-### TV Sync
-
-```bash
-curl -X POST http://127.0.0.1:9080/api/scheduler/tv/run
-```
-
-Fullpack-first approach, prefers complete season packs. Plex/Jellyfin-compatible directory structure:
-```
-Show Name (Year)/
-  Season.01/
-    Show_Name_S01E01_<hash8>.mkv
-    Show_Name_S01E02_<hash8>.mkv
-```
-
-### Dead-Release Reaper
-
-A torrent can die without anyone noticing: the release stays in the library, but
-its swarm stops answering. The engine counts the metadata timeouts of each
-release, and when a title crosses the threshold it is re-searched in later syncs
-instead of being left as a file that can never play.
-
-On movies the dead release is skipped, the title is looked up again even outside
-the usual discovery window, and either a live release replaces it or the stub is
-removed. On TV the decision is per pack, because one season pack stands behind
-up to twenty episodes: the pack is removed only when every season it covers was
-searched end to end, and an episode that simply could not be checked is kept
-rather than guessed away. Every episode removed this way is also recorded as a
-hole, so a show the discovery feed no longer returns can still be repaired later
-(see [Episode gaps](#episode-gaps-v1971) in the Library API).
-
-### Watchlist Sync
-
-```bash
-curl -X POST http://127.0.0.1:9080/api/scheduler/watchlist/run
-```
-
-Reads Plex cloud watchlist → IMDB ID resolution → Prowlarr/Torrentio (min 15 seeders, the movie profile) → GoStorm.
-
-### Music Sync
-
-```bash
-curl -X POST http://127.0.0.1:9080/api/scheduler/music/run
-```
-
-Weekly, Sunday 15:00 by default (`scheduler.music_sync`). Every album is filed
-through the Library API as FLAC projections, one per track. Three passes:
-
-- **New albums of your artists.** Every artist of Tiramisu's music library with a
-  MusicBrainz id is followed: albums and EPs whose first edition came out in the
-  last `window_days` (30) and that the library lacks are imported, with no cap.
-  Live, compilation and remix groups, reissues, undated and future releases never
-  qualify. An album with no torrent yet is retried on every run while it stays in
-  the window. MusicBrainz is asked in batches of 40 artists, so 800 artists cost
-  about 20 requests.
-- **New artists close to yours.** The sitewide ListenBrainz fresh-releases feed is
-  filtered down to artists you do not have whose nearest artists on ListenBrainz
-  include yours, and whose first album or EP is at most `debut_years` (3) old;
-  more of your artists among the neighbours ranks higher. Only about a third of new
-  artists have similarity data yet, so expect a handful a month. The first run
-  looks up every artist of the window (about an hour for 30 days); the answers are
-  cached in the discovery state for 30 days, so later runs look up only the week's
-  new names.
-- **Niche artists of your genres (Plex only).** The genres of your seed artists
-  (below) pick the pools: the least played recordings of each genre on ListenBrainz,
-  resolved to artists you do not have. An artist is kept when one of your artists is
-  among its nearest neighbours and its first album or EP is at most `debut_years`
-  (15) old; one of your seeds among the neighbours ranks it highest. Its latest
-  studio album already released is imported.
-- **Similar artists (Plex only).** The Deezer related artists of your seed artists
-  (public endpoints, no key), pooled and ranked by how many of your seeds point at
-  them. Artists any library already holds, artists outside `min_fans`-`max_fans`
-  (10,000-100,000) Deezer fans and artists whose first album or EP is older than
-  `debut_years` (15) are dropped; the latest studio album comes from MusicBrainz.
-
-The seeds come from the Plex server owner's plays of the last 60 days (the users the
-server is shared with do not count), weighted by age: a play of
-the last day counts 1, of the last week 0.5, of the last month 0.25, of the last two
-months 0.125. With no plays in 60 days the genre and similar-artist passes find
-nothing.
-
-The last three passes share `max_albums_per_run` (20), in order new artists, genres,
-similar artists, one album per artist.
-
-The new-album pass reads only Tiramisu's own music library, for the artists and
-for the duplicate check: on Plex the section in `plex.music_library_id` (0 turns
-the pass off), on Jellyfin the music library that holds the albums Tiramisu filed.
-Jellyfin keeps no play history, so there the genre and similar-artist passes are
-skipped and the other two run. It reads `/Library/VirtualFolders` and `/Items` with the `Authorization: MediaBrowser`
-header, which Jellyfin 10.x and 12.x both accept, and needs MusicBrainz ids on the
-albums (tagged files, or the bundled MusicBrainz metadata provider).
-
----
-
-## Library API (`:9080`)
-
-The HTTP way to add or remove a title, for clients that cannot touch the
-filesystem: an AI agent, a script on another machine, or simply `curl`. One
-request does what the sync engine does for a single release: it registers the
-torrent, waits for the file list, picks the video file, writes the virtual
-`.mkv` with the same naming convention, registers TV episodes in the state DB,
-and asks the media server to rescan.
-
-```bash
-# Add a movie. release_title is the raw release name: the quality tags in the
-# filename (_DV, _Atmos, _REMUX) are read from it.
-curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
-  -d '{"type":"movie","hash":"<infohash>","title":"Dummy Bunny","year":2024,
-       "release_title":"Dummy.Bunny.2024.2160p.UHD.BluRay.REMUX.DV.Atmos-GRP",
-       "imdb":"tt1234567"}' \
-  http://127.0.0.1:9080/api/library/add
-
-# Add one episode, or a whole season pack by leaving "episode" out
-curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
-  -d '{"type":"tv","hash":"<infohash>","title":"Dummy Bunny","first_air_date":"2015-06-24",
-       "season":1,"episode":2,"release_title":"Dummy.Bunny.S01E02.1080p"}' \
-  http://127.0.0.1:9080/api/library/add
-```
-
-`add` answers `201` with the path, `fuse_path` and declared size of every stub
-it wrote, or `200` with `"already_present": true` when the release was already
-filed. A season pack is never short-circuited that way, because which episodes
-it contains is only known once the file list arrives; re-adding one rewrites the
-episodes it names and replaces the releases they came from. Failures follow the
-same rule as the sync: every error removes the torrent it added, so a failed
-call leaves nothing behind.
-
-For TV, `first_air_date` puts the year in the series folder, and `quality_score`
-is what the next sync compares against before replacing the episode. `imdb` is
-written into movie stubs only; episode stubs carry no id, the same convention
-the sync follows. `magnet` can replace `hash`; `is_4k`, `file_index` and
-`quality_score` override what would otherwise be inferred, and `metadata_wait`
-(default 60 seconds, capped at 300) is how long the call waits for the swarm to
-answer, so keep the client timeout above it.
-
-Errors say which half broke: `400` the request, `422` the torrent holds no video
-file, `502` the engine refused it, `503` the state DB is unavailable, `504` no
-metadata in time. Every failure removes the torrent it added, so a failed call
-leaves nothing behind.
-
-```bash
-# What the library already holds, one entry per stub. type is a filter: movie
-# lists the movie library, tv the series one, gaps the open holes. Any other
-# value silently falls back to the movie list, so a typo reads as a wrong answer.
-curl -s 'http://127.0.0.1:9080/api/library/list?type=movie' | jq '.[] | {fuse_path, size, hash, imdb}'
-curl -s 'http://127.0.0.1:9080/api/library/list?type=tv'    | jq '.[] | {fuse_path, season, episode}'
-
-# Remove. blacklist:true records the release the way the FUSE unlink handler
-# does, so the sync will not add the title back.
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"path":"movies/Dummy_Bunny_2024_2160p_DV_Atmos_REMUX_e7f8a9b0.mkv","blacklist":true}' \
-  http://127.0.0.1:9080/api/library/remove
-```
-
-Removing a stub drops its torrent only when no other stub still points at it:
-one season pack is a single torrent behind many episodes.
-
-### Music and audiobooks (v1.10.0)
-
-`music/` and `audiobooks/` use the same endpoints with their own rules. The caller
-supplies the final path and Tiramisu validates what the engine owns: section
-containment, extension agreement, the mandatory `_<hash8>` suffix (the last eight
-hex digits of the infohash, before the extension) and collision rules. Music admits
-`.flac` only; audiobooks admit `.m4b`, `.m4a` and `.mp3`.
-
-```bash
-# 1. Inspect hydrates the magnet and returns the file list. The engine adds the
-# torrent itself, so a magnet is enough; metadata_wait works as in add.
-curl -s -X POST -H 'Content-Type: application/json' --max-time 300 \
-  -d '{"magnet":"magnet:?xt=urn:btih:...","title":"Dummy Album"}' \
-  http://127.0.0.1:9080/api/library/inspect
-
-# 2. Add an album, one projection per file. external_id is the caller's identity
-# (a MusicBrainz release group, an ASIN) and external_id_ns its namespace: it is
-# stored verbatim, written into the stub, and returned by list.
-curl -s -X POST -H 'Content-Type: application/json' --max-time 300 \
-  -d '{"type":"music","hash":"<infohash>","title":"Dummy Album",
-       "files":[{"source_path":"Release/01 - One.flac",
-                 "path":"Artist/Album/01 - One_e7f8a9b0.flac",
-                 "external_id":"<release-group-mbid>","external_id_ns":"musicbrainz"}]}' \
-  http://127.0.0.1:9080/api/library/add
-
-# 3. List pages instead of returning an array, and shows the identity per row.
-# prefix filters the section; failures=1 adds the reachability counters.
-curl -s 'http://127.0.0.1:9080/api/library/list?type=music&limit=200' | \
-  jq '{next_cursor, items: [.items[] | {path, external_id, external_id_ns}]}'
-curl -s 'http://127.0.0.1:9080/api/library/list?type=music&prefix=Artist/Album&failures=1'
-
-# 4. Remove one projection by exact path, or a whole album by prefix.
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"type":"music","path":"Artist/Album/01 - One_e7f8a9b0.flac"}' \
-  http://127.0.0.1:9080/api/library/remove
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"type":"music","prefix":"Artist/Album"}' \
-  http://127.0.0.1:9080/api/library/remove
-```
-
-`add` answers `201` for the projections it created, or `200` with
-`"already_present": true` when they are already filed. On a replay the stored
-identity wins and a disagreement is logged, so changing an identity means removing
-and adding again. `remove` is idempotent: an absent path answers `removed: false`
-with `state: "absent"`. Prefix removal takes a whole album in one call and answers
-`409` when the rows under it do not share exactly one torrent, which is the engine
-saying that directory is not an album. `blacklist` is not audio lifecycle state and
-is rejected. Hash-wide, directory and batch removal remain out of Phase 1. A
-torrent is never dropped while another projection still references it.
-
-Projections are read-only to their clients: files answer `0444`, directories
-`0555`, and the mutations a scanner never needs (write open, truncate, rename,
-mkdir, chmod) are refused with `EROFS`, while a direct unlink gets `EPERM`. Adding,
-re-filing and removing happen only through the API.
-
-Two things worth knowing before scripting against it. The `type` must be exactly
-`music` or `audiobook`: `list` keeps the legacy fallback for unknown values, so the
-plural `audiobooks` answers `200` with the movie library instead of an error. And a
-music add or removal asks the media server to rescan the section in
-`plex.music_library_id` (Jellyfin refreshes every library, audiobooks included).
-On Plex, audiobooks have no library id yet, so the `audiobooks/` section is scanned
-manually, once, when the batch is done.
-
-### Episode gaps (v1.9.71)
-
-When the TV reaper removes an episode whose release died, it does not just
-delete the stub: it records the hole, so a show the discovery feed no longer
-returns can still be repaired later. `type=gaps` lists those holes, oldest
-first.
-
-```bash
-curl -s -D- 'http://127.0.0.1:9080/api/library/list?type=gaps' | \
-  jq '.[] | {episode_key, show, season, path, dead_hash, removed_at, last_attempt}'
-```
-
-`last_attempt` is when the repair pass last re-searched the hole, and it stays
-`0` when it never has, which is why it carries no `omitempty`: `0` means "never
-tried", not "tried at epoch". The listing is capped at 500 entries and the true
-count travels in the `X-Total-Count` header, so a client reading a full page can
-tell it is not the whole backlog.
-
-The TV sync repairs gaps on its own: one search per affected season, at most 5
-shows per run, and no sooner than 6 hours after the last attempt on the same
-hole. Filing the episode yourself with `/api/library/add` closes its gap too: a
-gap is cleared whenever the episode has a live release again, whoever put it
-there.
-
-> [!WARNING]
-> Nothing on `:9080` is authenticated. `/api/config` returns the whole
-> configuration, keys and tokens included, and accepts a POST that rewrites it;
-> `/api/library/add` and `/api/library/remove` write and delete files in the
-> library. Keep the port on a trusted network, or behind a reverse proxy that
-> requires authentication.
-
----
-
-## MCP Server
-
-Tiramisu serves its library tools over MCP at `http://<host>:9080/mcp`
-(Streamable HTTP). An agent searches releases with the deployment's own scoring
-profile, the same pipeline the sync uses, files the one you pick, lists and
-removes entries:
-
-- Claude Code: `claude mcp add --transport http tiramisu http://<host>:9080/mcp`
-- Any MCP client that speaks Streamable HTTP: point it at the same URL.
-
-| Tool | What it does |
-|------|--------------|
-| `resolve_title` | Title → IMDb id (and TMDB id, first-air date for shows) |
-| `search_releases` | Prowlarr + Torrentio search, gated and scored like the sync; returns a job |
-| `get_job` | Polls a search, add or inspect job |
-| `add_release` | Files the candidate you chose; TV releases are checked against the show's names |
-| `resolve_album` | Artist → discography from MusicBrainz, or one album; flags what is already in the library |
-| `search_album`, `add_album` | The music sync's own search (lossless only) and filing: MusicBrainz track ids, cue images split per track |
-| `inspect_torrent`, `add_audio` | A torrent you name, and audiobooks: list its files, file its tracks |
-| `list_library`, `list_gaps` | What the library holds; TV episodes the reaper removed |
-| `remove_entries` | Preview first; removes only with `confirm`, for good or to replace |
-
-Searches and adds run as jobs: indexer searches can take minutes. The agent
-always asks before adding or removing. It changes the scoring profile only for
-one search and only when you ask, and never writes it to `config.json`.
-
-```
-add the latest Dummy Bunny movie in 4K
-add Dummy Bunny's discography
-season 2 of Dummy Bunny is missing episodes 4 to 8, fill them in
-is Dummy Bunny (2024) already in the library, and in what quality?
-```
-
-The MCP server needs v1.11.5 or later.
-
-> **Trust model:** like the rest of `:9080`, `/mcp` has no authentication.
-> Keep the port on your LAN.
-
----
-
-## Plex/Jellyfin and Samba Setup
-
-### Connecting a Media Server
-
-Point the **Media Server** card in the Control Panel at your server, and Tiramisu
-identifies which product answers, showing it as verified with its latency. It
-also broadcasts on the LAN, Plex GDM on UDP 32414 and Jellyfin on UDP 7359, and
-lists whatever replies, so a server on the same network appears without
-configuration. A broadcast does not cross a Docker bridge network, and Jellyfin
-lets you switch its discovery off, so setting the URL is the reliable way.
-
-| Setting | Plex | Jellyfin |
-|---------|------|----------|
-| `media_server_type` | `plex` | `jellyfin` |
-| `plex.url` | `http://host:32400` | `http://host:8096` |
-| `plex.token` | [X-Plex-Token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/) | API key: Dashboard → Advanced → API Keys → **+** |
-| `plex.library_id` / `plex.tv_library_id` | Section IDs to refresh after a sync | Leave at `0` |
-
-The token drives the library refresh Tiramisu issues when the movies, TV and
-watchlist syncs finish, and the field names keep the `plex.` prefix for backward
-compatibility: they hold whichever server `media_server_type` names. Plex
-refreshes the section named by `library_id` and does nothing without one;
-Jellyfin refreshes every library, which is why its section IDs stay at `0`.
-Without a token the media server finds new files on its own scan schedule
-instead. The playback sessions and posters on the dashboard are Plex-only.
-
-### Samba Configuration
-
-Critical parameters in `/etc/samba/smb.conf` to prevent FUSE deadlocks during Plex/Jellyfin library scans:
-
-```ini
-[tiramisu-mkv-virtual]
-   path = /mnt/tiramisu-mkv-virtual
-   browseable = yes
-   read only = yes
-   oplocks = no           # CRITICAL: prevents kernel exclusive locks on FUSE files
-   aio read size = 1      # CRITICAL: forces async I/O, prevents smbd D-state
-   deadtime = 15          # cleans inactive SMB connections every 15 minutes
-   vfs objects = fileid   # CRITICAL: transmits 64-bit inodes to Synology/Plex/Jellyfin
-```
-
-> [!WARNING]
-> **`oplocks = no` is non-negotiable.** With oplocks enabled, the kernel requests exclusive locks on FUSE-backed files, causing `smbd` threads to enter D-state indefinitely during concurrent Plex/Jellyfin scans.
-
-> [!IMPORTANT]
-> **`vfs objects = fileid`** ensures 64-bit inode transmission. Without it, Synology receives truncated 32-bit inodes, causing Plex to misidentify files.
-
-### Synology CIFS Mount
-
-```
-Source:  //pi-ip/tiramisu-mkv-virtual
-Target:  /volume1/Tiramisu
-Options: serverino,vers=3.0,uid=1024,gid=100,file_mode=0777,dir_mode=0777
-```
-
-`serverino` must remain active. Synology may silently drop it after network timeouts. Schedule a Task Scheduler job (every 5 min) to verify and remount if needed.
-
----
-
 ## Build from Source
 
 > [!IMPORTANT]
@@ -1457,94 +1556,6 @@ sudo systemctl start tiramisu
 wget https://go.dev/dl/go1.26.8.linux-arm64.tar.gz
 sudo tar -C /usr/local -xzf go1.26.8.linux-arm64.tar.gz
 ```
-
----
-
-## Docker
-
-> [!IMPORTANT]
-> Tiramisu mounts a FUSE filesystem at startup. Docker blocks this syscall by default. The container requires elevated privileges to run.
-
-Pre-built images for `linux/amd64` and `linux/arm64` are published automatically on every release to Docker Hub and GitHub Container Registry:
-
-| Registry | Image |
-|----------|-------|
-| **Docker Hub** | `mrrobotogit/tiramisu:latest` |
-| **GHCR** | `ghcr.io/mrrobotogit/tiramisu:latest` |
-
-**Pull:**
-
-```bash
-docker pull mrrobotogit/tiramisu:latest
-# or
-docker pull ghcr.io/mrrobotogit/tiramisu:latest
-```
-
-**Run:**
-
-```bash
-docker run -d \
-  --name tiramisu \
-  --restart unless-stopped \
-  --device /dev/fuse \
-  --cap-add SYS_ADMIN \
-  --cap-add NET_ADMIN \
-  -v /path/to/config.json:/config.json \
-  -v /path/to/state:/state \
-  -v /mnt/tiramisu-mkv-real:/mnt/tiramisu-mkv-real \
-  -v /mnt/tiramisu-mkv-virtual:/mnt/tiramisu-mkv-virtual:rshared \
-  -p 8090:8090 \
-  -p 9080:9080 \
-  mrrobotogit/tiramisu:latest
-```
-
-Or use `--privileged` as a simpler alternative to the individual capabilities (e.g. on a Raspberry Pi where the container is fully trusted). In practice `--cap-add SYS_ADMIN`/`NET_ADMIN` alone have been reported insufficient on some Ubuntu hosts — if the container starts cleanly but the virtual directory stays empty, use `--privileged`.
-
-`config.json` must be volume-mounted at `/config.json` (the default `MKV_PROXY_CONFIG_PATH`). Use `config.json.example` as the starting point. Do not mount it `:ro`: the Control Panel writes settings back to this file, and a read-only mount makes every save fail.
-
-**Mount a volume on `/state`.** Everything that must outlive the container lives there:
-
-| Path | Holds |
-|------|-------|
-| `/state/config.db` | Torrent list, and GoStorm settings when `StoreSettingsInJson` is off |
-| `/state/settings.json` | GoStorm settings: peer port, cache size, connection limit |
-| `/state/STATE/` | Inode map and sync caches |
-| `/state/logs/` | Log files the Control Panel tails |
-| `/state/blocklist` | The downloaded IP blocklist |
-
-Mount a host directory there and everything survives `docker rm`. Without that volume the peer port, the torrent list and every other setting are discarded when the container is removed, and the next `docker run` starts from the defaults; the container prints a warning on startup when it detects this. `/state` is the default, so `TIRAMISU_ROOT_PATH` only needs setting to move the whole directory elsewhere, and `TIRAMISU_STATE_DIR` / `TIRAMISU_LOG_DIR` default to `STATE/` and `logs/` underneath it.
-
-Do not mount a named or anonymous Docker volume expecting the warning to catch a mistake: an anonymous volume looks mounted, but a fresh `docker run` attaches a new empty one. Use a host path.
-
-**Updating the container.** Unmount the virtual directory between removing the old container and starting the new one: Docker refuses to bind-mount over the FUSE mount the previous container left behind.
-
-```bash
-docker pull mrrobotogit/tiramisu:latest
-docker rm -f tiramisu
-sudo fusermount3 -uz /mnt/tiramisu-mkv-virtual
-docker run -d ...   # same flags as above
-```
-
-> [!TIP]
-> **Troubleshooting: real directory fills up, virtual stays empty.** If `docker logs` shows `FUSE mounted at ... all systems active` and the InodeMap saving files, but `/mnt/tiramisu-mkv-virtual` is empty on the host, the FUSE mount succeeded *inside* the container but never propagated out — Docker bind mounts default to private propagation, so a mount created inside the container isn't visible outside it. Fix: add `:rshared` to the virtual volume's `-v` flag (as above). If Docker then refuses to start with an error like *"must be shared or slave"*, the host mountpoint itself isn't shared yet - run `sudo mount --make-rshared /mnt` (or whichever parent directory holds it) once, then restart the container.
-
-**Build from source** (from the repository root):
-
-```bash
-docker build -f docker/Dockerfile -t tiramisu .
-```
-
-### Windows Docker Installer
-
-For Windows users, a dedicated installer generates a ready-to-use [Dockge](https://github.com/louislam/dockge) stack with Tiramisu + Plex **or** Jellyfin in a single container:
-
-👉 **[docker-windows/](https://github.com/MrRobotoGit/tiramisu/tree/main/docker-windows)**
-
-- Run `docker-windows\install-rebuild.bat` for interactive setup (flavor, paths, ports)
-- Auto port conflict resolution
-- Idempotent rebuild: never deletes existing media or config data
-
-> **Requires:** Docker Desktop with WSL2 (Linux containers) and FUSE support (`/dev/fuse` available inside containers).
 
 ---
 
@@ -1625,6 +1636,30 @@ curl -s "http://127.0.0.1:9080/api/prowlarr/search?imdb_id=tt0088196&type=movie&
 # Running configuration, including the quality_scoring profile in use
 curl -s http://127.0.0.1:9080/api/config | jq '.quality_scoring'
 ```
+
+---
+
+## Key File Locations
+
+Paths below use the defaults set by `install.sh`. All are configurable during installation.
+
+**Runtime (install directory, default `~/Tiramisu/`)**
+
+| Path | Purpose |
+|------|---------|
+| `~/Tiramisu/tiramisu` | Production binary |
+| `~/Tiramisu/config.json` | Live configuration (edit → `sudo systemctl restart tiramisu`) |
+| `~/Tiramisu/STATE/tiramisu.db` | SQLite state database: inode map, sync caches, episode registry, scheduler state |
+| `~/Tiramisu/logs/` | All service logs (`tiramisu.log`, `movies-sync.log`, `tv-sync.log`, `watchlist-sync.log`) |
+| `/mnt/tiramisu-mkv-virtual/` | FUSE mount point (served to Plex/Jellyfin -> Samba) |
+| `/etc/systemd/system/tiramisu.service` | systemd service definition |
+
+**Build (cloned repository)**
+
+| Path | Purpose |
+|------|---------|
+| `~/Tiramisu/` | Install directory: clone, build and runtime |
+| `~/Tiramisu/default.pgo` | PGO profile, regenerate after major code changes |
 
 ---
 
@@ -1786,35 +1821,11 @@ Expected hot paths: `sha1.blockGeneric` (no crypto extensions on Pi 4 A72), `io.
 
 ---
 
-## Key File Locations
-
-Paths below use the defaults set by `install.sh`. All are configurable during installation.
-
-**Runtime (install directory, default `~/Tiramisu/`)**
-
-| Path | Purpose |
-|------|---------|
-| `~/Tiramisu/tiramisu` | Production binary |
-| `~/Tiramisu/config.json` | Live configuration (edit → `sudo systemctl restart tiramisu`) |
-| `~/Tiramisu/STATE/tiramisu.db` | SQLite state database: inode map, sync caches, episode registry, scheduler state |
-| `~/Tiramisu/logs/` | All service logs (`tiramisu.log`, `movies-sync.log`, `tv-sync.log`, `watchlist-sync.log`) |
-| `/mnt/tiramisu-mkv-virtual/` | FUSE mount point (served to Plex/Jellyfin -> Samba) |
-| `/etc/systemd/system/tiramisu.service` | systemd service definition |
-
-**Build (cloned repository)**
-
-| Path | Purpose |
-|------|---------|
-| `~/Tiramisu/` | Install directory: clone, build and runtime |
-| `~/Tiramisu/default.pgo` | PGO profile, regenerate after major code changes |
-
----
-
 ## Support
 
 Tiramisu is free and open source. If it's saving you a monthly chip, consider fueling the engine!
 
-[![](https://img.shields.io/static/v1?label=DONATE!&message=%E2%9D%A4&logo=GitHub&color=%23fe8ebb)](https://github.com/sponsors/MrRobotoGit)
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub-121518?logo=githubsponsors)](https://github.com/sponsors/MrRobotoGit)
 
 ---
 
