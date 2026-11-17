@@ -11,7 +11,7 @@
   const MAX_PEERS = 48, MAX_PENDING = 8;
 
   let host = null, data = null, transport = null, clients = null, engine = null, lastSig = '';
-  let ui = null, focusKey = null, recent = [], quality = null, curKey = null;
+  let ui = null, focusKey = null, recent = [], curKey = null;
   let wasStrict = false, strictEndedAt = 0;
   // Per torrent: last peer count, plus when each index appeared or vanished, so a redraw
   // can resume the fade-in / pulse-and-fade exactly where it was.
@@ -143,7 +143,7 @@
     return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (data.health || {}).v304_banned_peers,
       (data.health || {}).cache_hit_rate_pct, Math.round((data.health || {}).fuse_active_pct || 0),
       Math.round((data.health || {}).fuse_stale_pct || 0), transport && transport.utp, clients && JSON.stringify([...clients].map(([k, c]) => [k, c.label, c.state, c.state === 'paused' ? c.pos : 0])), reducedMotion(),
-      focusKey, quality && quality.sig, recent.length && recent[0].started_at].join('#');
+      focusKey, recent.length && recent[0].started_at].join('#');
   }
 
   // On phones the vertical graph is sized so the whole panel (graph, shield strip, legend) fits the
@@ -573,20 +573,6 @@
     svg.addEventListener('click', () => { if (focusKey) toggleFocus(focusKey); });
 
     if (!torrents.length) drawIdleCard();
-    drawQuality(vertical);
-  }
-
-  // Playback quality since the last restart, from /metrics/ttff.
-  function drawQuality(vertical) {
-    if (!quality || !quality.sessions) return;
-    const q = document.createElement('div');
-    q.className = vertical ? 'sw-quality v' : 'sw-quality';
-    q.innerHTML = `<span class="lamp ${quality.level}"></span><b>${vertical ? 'Playback' : 'Playback quality'}</b>`
-      + `<span class="mono">start ${quality.start} · seek ${quality.seek}${vertical ? ' · ' + quality.stallsTxt : ''}</span>`
-      + (vertical ? '' : `<span class="mono faint">${quality.stallsTxt} · since restart, ${quality.sessions} sessions</span>`);
-    q.title = `Median start and seek time since the last restart (${quality.sessions} sessions). A slow read is one FUSE read over 1 s: `
-      + 'the player buffer usually hides it. Yellow from 10 per session, red when one read took 5 s or more.';
-    ui.appendChild(q);
   }
 
   function recentRows() {
@@ -598,7 +584,7 @@
         : d.toDateString() === yday ? 'yesterday' : d.toLocaleDateString([], { weekday: 'short', day: 'numeric' });
       const dur = r.duration_s >= 3600 ? `${Math.floor(r.duration_s / 3600)} h ${Math.floor(r.duration_s / 60) % 60} min` : `${Math.max(1, Math.round(r.duration_s / 60))} min`;
       const t = (data.torrents || []).find(x => x.hash === r.hash);
-      return [short(t && (t.clean_title || t.title) || r.name.replace(/[._][0-9a-f]{8}$/i, '').replace(/[._]/g, ' '), 28), `${when} · ${dur} · ${r.stalls} slow read${r.stalls === 1 ? '' : 's'}`];
+      return [short(t && (t.clean_title || t.title) || r.name.replace(/[._][0-9a-f]{8}$/i, '').replace(/[._]/g, ' '), 28), `${when} · ${dur}`];
     });
   }
   // Idle (desktop): the engine stays drawn; a card lists the last streams.
@@ -627,7 +613,6 @@
       + (rows.length ? `<hr><div class="label">Recent</div>` + rows.map(([a, b]) => `<div class="sw-d-row col"><span>${esc(a)}</span><span class="mono">${esc(b)}</span></div>`).join('') : '')
       + `</div>`;
     [...host.children].filter(n => n.tagName.toLowerCase() === 'svg').forEach(n => n.remove());
-    drawQuality(true);
   }
 
   async function fetchMetrics() {
@@ -658,21 +643,8 @@
       }
     } catch (_) { }
     try {
-      const [rr, qq] = await Promise.all([fetch('/api/recent-streams'), fetch('/metrics/ttff')]);
+      const rr = await fetch('/api/recent-streams');
       if (rr.ok) recent = (await rr.json()) || [];
-      if (qq.ok) {
-        const m = await qq.json();
-        const ms = v => v >= 1000 ? (v / 1000).toFixed(1) + ' s' : Math.round(v) + ' ms';
-        // A "stall" in the engine is one FUSE read over 1 s; the player's buffer usually absorbs it.
-        // Red only for a wait the buffer is unlikely to cover (>= 5 s), yellow for many slow reads.
-        const n = (m.stalls && m.stalls.count) || 0, maxMs = (m.stalls && m.stalls.max_ms) || 0;
-        const sessions = m.sessions_completed || 0;
-        const level = maxMs >= 5000 ? 'err' : sessions && n / sessions >= 10 ? 'warn-yellow' : 'ok-green';
-        quality = { sessions, start: ms((m.open_to_header_ms || {}).p50 || 0),
-          seek: (m.seek_latency_ms || {}).count ? ms(m.seek_latency_ms.p50) : '—', stalls: n, level,
-          stallsTxt: n ? `${n} slow read${n === 1 ? '' : 's'} · max ${(maxMs / 1000).toFixed(1)} s` : '0 slow reads' };
-        quality.sig = [quality.sessions, quality.start, quality.seek, n, level].join('/');
-      }
     } catch (_) { }
   }
 
