@@ -6,7 +6,7 @@ This document explains what fits the project, and what will be closed. Reading i
 
 ## What Tiramisu is not
 
-Tiramisu is not a download manager, not a debrid client, not a media library UI, and not a media player. It is the infrastructure layer between a torrent swarm and a media server. Everything above that layer (library administration, release selection, naming, tradeoffs) is policy. Policy lives in the engine as configuration (`quality_scoring`, `language`) and is applied, never imposed: the [MCP server](README.md#mcp-server) presents candidates scored with it, the user may vary it explicitly for one search, and the user always makes the choice.
+Tiramisu is not a download manager, not a debrid client, not a media library UI, and not a media player. It is the infrastructure layer between a torrent swarm and a media server. Everything above that layer (library administration, release selection, naming, tradeoffs) is policy. Policy lives in the engine as configuration (`quality_scoring`, `language`) and is applied, never imposed: the [MCP server](docs/api.md#mcp-server) presents candidates scored with it, the user may vary it explicitly for one search, and the user always makes the choice.
 
 ## What is welcome
 
@@ -17,7 +17,7 @@ Tiramisu is not a download manager, not a debrid client, not a media library UI,
 ## Before you open a pull request
 
 1. **Open an issue first** for anything that is not a small, self-contained bug fix: new features, API changes, refactors, behavioral changes, new dependencies. Wait for a maintainer's answer before writing code. PRs that arrive without a prior issue will usually be closed with a pointer to this document.
-2. **Read the project's own documentation first.** Many "gaps" are described in the [README](README.md), the [release notes](https://github.com/MrRobotoGit/tiramisu/releases), or the [configuration reference](README.md#configuration-reference). Characterizing the project before reading it wastes your time and ours.
+2. **Read the project's own documentation first.** Many "gaps" are described in the [README](README.md), the [release notes](https://github.com/MrRobotoGit/tiramisu/releases), or the [configuration reference](docs/configuration.md). Characterizing the project before reading it wastes your time and ours.
 3. **Search existing issues, PRs and forks.** Your idea may already have been proposed, implemented, or explicitly rejected.
 
 ## Where things belong
