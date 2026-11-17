@@ -77,7 +77,7 @@ type State struct {
 // ("s:"/"t:"), so a session value never passes as a token or the reverse.
 type cacheEntry struct {
 	at        time.Time
-	expiresAt int64 // sessions only
+	expiresAt int64  // sessions only
 	tokenID   int64  // tokens only
 	scope     string // tokens only
 	lastTouch time.Time
