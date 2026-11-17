@@ -23,7 +23,7 @@
   <a href="https://github.com/MrRobotoGit/tiramisu/releases"><b>Releases</b></a>
 </p>
 
-<p align="center"><img src="docs/screenshots/ui-network-light.png" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
+<p align="center"><img src="docs/screenshots/ui-network-light.gif" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
 <p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph. When a peer sends bad data, Adaptive Shield lights up the pipes it protects (see Screenshots).</sub></p>
 
 ---
@@ -57,7 +57,7 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
   </tr>
 </table>
 
-<p align="center"><img src="docs/screenshots/ui-piece-map-light.png" alt="Active streams with the piece map open: a fixed playhead over a strip of pieces, ready, arriving and not yet requested, up to the download frontier"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
+<p align="center"><img src="docs/screenshots/ui-piece-map-light.gif" alt="Active streams with the piece map open: a fixed playhead over a strip of pieces, ready, arriving and not yet requested, up to the download frontier"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
 
 <p align="center"><img src="docs/screenshots/ui-mobile.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
 
