@@ -219,6 +219,8 @@ The full guide covers persistent state in `/state`, updates, mount propagation a
 
 ## Sign-in and API Tokens
 
+<p align="center"><img src="docs/screenshots/ui-access-light.png" alt="Control Panel, Access section: sign-in required, four named API tokens with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, API tokens and browser sessions (sample data)</sub></p>
+
 Out of the box, anyone who can reach `:9080` on your network can use the Control Panel, the Dashboard and the APIs. Turn on sign-in in **Control Panel → Access** to require a password for all of them: the Control Panel, the Dashboard, every `/api/*` endpoint, `/metrics` and the MCP server.
 
 - **One user, one password.** A browser stays signed in for 30 days from its last visit. The Access page lists the signed-in browsers and can sign out all the others.
