@@ -26,7 +26,7 @@
   <a href="https://github.com/MrRobotoGit/tiramisu/releases"><b>Releases</b></a>
 </p>
 
-<p align="center"><img src="docs/screenshots/ui-swarm-dark.png?v=3" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
+<p align="center"><img src="docs/screenshots/ui-network-light.png" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
 <p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph. When a peer sends bad data, Adaptive Shield lights up the pipes it protects (see Screenshots).</sub></p>
 
 ---
@@ -47,16 +47,16 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/ui-dashboard-light.png?v=3" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
-    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark.png?v=3" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></td>
+    <td width="50%"><img src="docs/screenshots/ui-dashboard-light.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
+    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark.png" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Dashboard</b>: speed, torrents, streams, services, scheduler and logs</sub></td>
     <td align="center"><sub><b>Control Panel</b>: every setting, with a change bar that applies them together</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/ui-swarm-light.png?v=3" alt="Live swarm in light mode during an Adaptive Shield STRICT episode"></td>
-    <td><img src="docs/screenshots/ui-control-panel-light.png?v=3" alt="Control Panel, Streaming and FUSE section in light mode"></td>
+    <td><img src="docs/screenshots/ui-network-strict-dark.png" alt="Live swarm in dark mode during an Adaptive Shield STRICT episode"></td>
+    <td><img src="docs/screenshots/ui-control-panel-light.png" alt="Control Panel, Streaming and FUSE section in light mode"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Adaptive Shield</b>: a STRICT episode, live</sub></td>
@@ -64,7 +64,7 @@ This is not a torrent client with a media server bolted on. The FUSE filesystem 
   </tr>
 </table>
 
-<p align="center"><img src="docs/screenshots/ui-mobile.png?v=3" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
+<p align="center"><img src="docs/screenshots/ui-mobile.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
 
 <p align="center"><img src="docs/screenshots/tiramisu-demo.gif" alt="Click Play on a torrent in Infuse: streaming starts in under a second" width="720"><br><sub>Click Play in Infuse: the film starts in under a second</sub></p>
 
