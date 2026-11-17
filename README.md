@@ -1,8 +1,5 @@
 <h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/tiramisu-logo-dark.svg">
-    <img src="docs/screenshots/tiramisu-logo-light.svg" alt="Tiramisu" width="240">
-  </picture>
+  <img src="docs/screenshots/tiramisu-logo.svg" alt="Tiramisu" width="240">
 </h1>
 
 <p align="center"><strong>BitTorrent engine and FUSE virtual filesystem that streams your torrents to Plex, Jellyfin and Infuse, live.</strong><br>
@@ -61,8 +58,6 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 </table>
 
 <p align="center"><img src="docs/screenshots/ui-mobile.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
-
-<p align="center"><img src="docs/screenshots/tiramisu-demo.gif" alt="Click Play on a torrent in Infuse: streaming starts in under a second" width="720"><br><sub>Click Play in Infuse: the film starts in under a second</sub></p>
 
 ---
 
