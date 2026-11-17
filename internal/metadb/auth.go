@@ -116,10 +116,24 @@ func (d *DB) SetAuthPassword(passwordHash string) error {
 	return err
 }
 
+// CreateAuthSession stores s and replaces any session of the same device (same browser
+// and address): signing in again on one device must not add a row each time.
 func (d *DB) CreateAuthSession(s AuthSession) error {
-	_, err := d.db.Exec(`INSERT INTO auth_sessions (id_hash, created_at, last_seen, expires_at, user_agent, ip)
-		VALUES (?, ?, ?, ?, ?, ?)`, s.IDHash, s.CreatedAt, s.LastSeen, s.ExpiresAt, s.UserAgent, s.IP)
-	return err
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if s.UserAgent != "" && s.IP != "" {
+		if _, err := tx.Exec(`DELETE FROM auth_sessions WHERE user_agent = ? AND ip = ?`, s.UserAgent, s.IP); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO auth_sessions (id_hash, created_at, last_seen, expires_at, user_agent, ip)
+		VALUES (?, ?, ?, ?, ?, ?)`, s.IDHash, s.CreatedAt, s.LastSeen, s.ExpiresAt, s.UserAgent, s.IP); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (d *DB) GetAuthSession(idHash string) (AuthSession, bool, error) {

@@ -239,6 +239,7 @@ func (s *Service) newSession(ua, ip string) (string, error) {
 	now := s.now().Unix()
 	err := s.store.CreateAuthSession(metadb.AuthSession{IDHash: hashSecret(tok), CreatedAt: now, LastSeen: now,
 		ExpiresAt: now + int64(sessionTTL/time.Second), UserAgent: truncate(ua, 200), IP: ip})
+	s.clearCache() // the device's previous session was replaced: it must stop working now
 	return tok, err
 }
 
