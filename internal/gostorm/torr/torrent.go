@@ -59,6 +59,7 @@ type Torrent struct {
 	cachedFileStats []*state.TorrentFileStat
 
 	coldBoost coldBoost
+	peerRates peerRates
 }
 
 func NewTorrent(spec *torrent.TorrentSpec, bt *BTServer) (*Torrent, error) {
@@ -499,6 +500,7 @@ func (t *Torrent) Status() *state.TorrentStatus {
 		st.ActivePeers = tst.ActivePeers
 		st.ConnectedSeeders = tst.ConnectedSeeders
 		st.HalfOpenPeers = tst.HalfOpenPeers
+		st.PeerRates = t.peerRates.sample(torr.PeerSnapshots(), time.Now())
 
 		if torr.Info() != nil {
 			st.TorrentSize = torr.Length()

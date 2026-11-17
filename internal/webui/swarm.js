@@ -138,7 +138,8 @@
 
   function signature() {
     const t = (data.torrents || []).filter(x => x.status !== 'idle')
-      .map(x => [x.hash.slice(0, 8), x.speed_mbs.toFixed(1), x.peers, x.seeders, x.half_open, x.is_priority].join(':')).join('|');
+      .map(x => [x.hash.slice(0, 8), x.speed_mbs.toFixed(1), x.peers, x.seeders, x.half_open, x.is_priority,
+        (x.peer_rates || []).map(p => p.id + Math.round(Math.log2(1 + p.kbps))).sort().join(',')].join(':')).join('|');
     const sh = shieldState(data.shield, Date.now());
     return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (data.health || {}).v304_banned_peers,
       (data.health || {}).cache_hit_rate_pct, Math.round((data.health || {}).fuse_active_pct || 0),
@@ -245,53 +246,65 @@
         const pc = Math.max(0.02, Math.min(0.98, c + (r() + r() - 1) * spread * 1.6));
         return P(pf, pc);
       };
-      // Track arrivals and departures between polls.
+      // Peers. With per-peer rates from the engine each node is a real peer (stable id, real
+      // seeder flag, its own rate); without them (older engine) nodes are numbered slots.
+      const rates = Array.isArray(t.peer_rates) ? t.peer_rates.slice(0, MAX_PEERS) : null;
+      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps }))
+        : Array.from({ length: n }, (_, k) => ({ key: String(k), seed: k < seeds, kbps: null }));
+      // Track arrivals and departures between polls, by key.
       let L = life.get(t.hash);
-      if (!L) { L = { n, seeds, born: {}, dying: {} }; life.set(t.hash, L); }
-      else if (n !== L.n) {
-        for (let k = n; k < L.n; k++) { L.dying[k] = { at: now, seed: k < (L.seeds || 0) }; delete L.born[k]; }
-        for (let k = L.n; k < n; k++) { L.born[k] = now; delete L.dying[k]; }
-        L.n = n;
+      const keys = new Set(list.map(p => p.key));
+      if (!L || L.byId !== !!rates) { L = { keys, byId: !!rates, born: {}, dying: {} }; life.set(t.hash, L); }
+      else {
+        L.keys.forEach(kk => { if (!keys.has(kk)) { L.dying[kk] = { at: now, seed: !!(L.seedOf && L.seedOf[kk]) }; delete L.born[kk]; } });
+        keys.forEach(kk => { if (!L.keys.has(kk)) { L.born[kk] = now; delete L.dying[kk]; } });
+        L.keys = keys;
       }
-      L.seeds = seeds;
+      L.seedOf = Object.fromEntries(list.map(p => [p.key, p.seed]));
       const delay = (ms, total) => `${-Math.min(ms, total)}ms`;
-      for (let k = 0; k < n + pend; k++) {
-        const halfOpen = k >= n;
-        const pp = halfOpen ? spot(k - n, ':h') : spot(k, ':');
-        const edge = el('path', { d: curve(pp, tp), class: halfOpen ? 'sw-edge pending' : 'sw-edge' }, edgeLayer);
-        let node;
-        if (halfOpen) {
-          node = el('circle', { cx: pp[0], cy: pp[1], r: 2.2, class: 'sw-peer pending' }, peerLayer);
-        } else {
-          const seed = k < seeds;
-          // uTP vs TCP is known only in aggregate: the share is applied per torrent, by index.
-          const utp = tot && ((k + 1) * 0.6180339887) % 1 < utpShare;
-          node = utp ? el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: seed ? 'sw-peer seed' : 'sw-peer' }, peerLayer)
-            : el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: seed ? 'sw-peer seed' : 'sw-peer' }, peerLayer);
-          // Data leaving the peer: short dark segments travelling to the torrent, out of phase.
-          // Only while the torrent downloads: the API has no per-peer rate to show otherwise.
-          const fl = t.speed_mbs > 0.01 ? el('path', { d: curve(pp, tp), class: 'sw-peer-flow', pathLength: 100 }, edgeLayer)
-            : document.createElementNS(NS, 'path');
-          fl.style.animationDelay = `${-((now / 1000 + rng(t.hash + ':f' + k)() * 2.6) % 2.6).toFixed(2)}s`;
-          const b = L.born[k];
-          if (b !== undefined) {
-            const age = now - b;
-            if (age < BORN_MS) {
-              [node, edge, fl].forEach(x => { x.classList.add('sw-born'); x.style.animationDelay = (x === fl ? fl.style.animationDelay + ',' : '') + delay(age, BORN_MS); });
-            }
-            // A new peer announces itself: pulses for two seconds where it appeared.
-            if (age < BIRTH_PULSE_MS) {
-              const ring = el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: 'sw-birth-ring' }, peerLayer);
-              ring.style.animationDelay = delay(age, BIRTH_PULSE_MS);
-            } else delete L.born[k];
-          }
+      const isUtp = key => tot && rng(t.hash + ':u' + key)() < utpShare;
+      // Dash speed follows the peer's own rate: ~3 s along the path at 100 KB/s, faster above.
+      const flowDur = kbps => Math.max(0.5, Math.min(6, 30 / Math.sqrt(kbps)));
+      list.forEach(p => {
+        const pp = spot(p.key, ':');
+        const edge = el('path', { d: curve(pp, tp), class: 'sw-edge' }, edgeLayer);
+        // uTP vs TCP is known only in aggregate: the share is applied per peer, by its key.
+        const node = isUtp(p.key) ? el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: p.seed ? 'sw-peer seed' : 'sw-peer' }, peerLayer)
+          : el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: p.seed ? 'sw-peer seed' : 'sw-peer' }, peerLayer);
+        const live = p.kbps == null ? t.speed_mbs > 0.01 : p.kbps >= 0.5;
+        const fl = live ? el('path', { d: curve(pp, tp), class: 'sw-peer-flow', pathLength: 100 }, edgeLayer)
+          : document.createElementNS(NS, 'path');
+        if (live) {
+          const dur = p.kbps == null ? 2.6 : flowDur(p.kbps);
+          // Two animations may run on a newborn flow (dash + fade-in): keep the fade-in at 0.9 s.
+          fl.style.animationDuration = `${dur.toFixed(2)}s, ${BORN_MS / 1000}s`;
+          fl.style.animationDelay = `${-((now / 1000 + rng(t.hash + ':f' + p.key)() * dur) % dur).toFixed(2)}s`;
         }
+        // The rate on the peer node, where the pointer can actually land.
+        if (p.kbps != null) el('title', {}, node).textContent = `${p.kbps >= 1024 ? (p.kbps / 1024).toFixed(1) + ' MB/s' : Math.round(p.kbps) + ' KB/s'}${p.seed ? ' · seeder' : ''}`;
+        const b = L.born[p.key];
+        if (b !== undefined) {
+          const age = now - b;
+          if (age < BORN_MS) {
+            [node, edge, fl].forEach(x => { x.classList.add('sw-born'); x.style.animationDelay = (x === fl && live ? fl.style.animationDelay + ',' : '') + delay(age, BORN_MS); });
+          }
+          // A new peer announces itself: pulses for two seconds where it appeared.
+          if (age < BIRTH_PULSE_MS) {
+            const ring = el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: 'sw-birth-ring' }, peerLayer);
+            ring.style.animationDelay = delay(age, BIRTH_PULSE_MS);
+          } else delete L.born[p.key];
+        }
+      });
+      for (let k = 0; k < pend; k++) {
+        const pp = spot(k, ':h');
+        el('path', { d: curve(pp, tp), class: 'sw-edge pending' }, edgeLayer);
+        el('circle', { cx: pp[0], cy: pp[1], r: 2.2, class: 'sw-peer pending' }, peerLayer);
       }
       // Peers that just left: two pulses, then they fade out where they stood.
       Object.keys(L.dying).forEach(key => {
-        const k = +key, age = now - L.dying[k].at;
-        if (age >= DYING_MS || k < n) { delete L.dying[k]; return; }
-        const pp = spot(k, ':');
+        const age = now - L.dying[key].at;
+        if (age >= DYING_MS || keys.has(key)) { delete L.dying[key]; return; }
+        const pp = spot(key, ':');
         const eg = el('g', { class: 'sw-dying' }, edgeLayer);
         eg.style.animationDelay = delay(age, DYING_MS);
         el('path', { d: curve(pp, tp), class: 'sw-edge' }, eg);
@@ -299,9 +312,8 @@
         g.style.animationDelay = delay(age, DYING_MS);
         const ring = el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: 'sw-death-ring' }, g);
         ring.style.animationDelay = delay(age, DYING_MS);
-        const utp = tot && ((k + 1) * 0.6180339887) % 1 < utpShare;
-        const cls = L.dying[k].seed ? 'sw-peer seed' : 'sw-peer';
-        if (utp) el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: cls }, g);
+        const cls = L.dying[key].seed ? 'sw-peer seed' : 'sw-peer';
+        if (isUtp(key)) el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: cls }, g);
         else el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: cls }, g);
       });
       // Torrent → cache pipe, width = throughput.

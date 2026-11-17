@@ -125,14 +125,16 @@ type TorrentInfo struct {
 	IsPriority bool    `json:"is_priority"`
 	Status     string  `json:"status"`
 	// HalfOpen and Pending are peers still connecting / queued: the swarm view draws them dashed.
-	HalfOpen int    `json:"half_open"`
-	Pending  int    `json:"pending"`
-	Is4K     bool   `json:"is_4k"`
-	IsDV     bool   `json:"is_dv"`
-	IsHDR    bool   `json:"is_hdr"`
-	Is1080p  bool   `json:"is_1080p"`
-	Audio    string `json:"audio,omitempty"`
-	Channels string `json:"channels,omitempty"`
+	HalfOpen int `json:"half_open"`
+	Pending  int `json:"pending"`
+	// PeerRates: each connected peer's useful download rate, fastest first.
+	PeerRates []PeerRate `json:"peer_rates,omitempty"`
+	Is4K      bool       `json:"is_4k"`
+	IsDV      bool       `json:"is_dv"`
+	IsHDR     bool       `json:"is_hdr"`
+	Is1080p   bool       `json:"is_1080p"`
+	Audio     string     `json:"audio,omitempty"`
+	Channels  string     `json:"channels,omitempty"`
 }
 
 // SpeedPoint is a timestamped speed measurement.
@@ -406,18 +408,19 @@ func (c *Collector) fetchTorrents() []TorrentInfo {
 	data, _ := io.ReadAll(resp.Body)
 
 	var raw []struct {
-		Hash             string  `json:"hash"`
-		Title            string  `json:"title"`
-		DownloadSpeed    float64 `json:"download_speed"`
-		UploadSpeed      float64 `json:"upload_speed"`
-		ActivePeers      int     `json:"active_peers"`
-		ConnectedSeeders int     `json:"connected_seeders"`
-		HalfOpenPeers    int     `json:"half_open_peers"`
-		PendingPeers     int     `json:"pending_peers"`
-		TorrentSize      int64   `json:"torrent_size"`
-		BytesRead        int64   `json:"bytes_read"`
-		IsPriority       bool    `json:"is_priority"`
-		StatString       string  `json:"stat_string"`
+		Hash             string     `json:"hash"`
+		Title            string     `json:"title"`
+		DownloadSpeed    float64    `json:"download_speed"`
+		UploadSpeed      float64    `json:"upload_speed"`
+		ActivePeers      int        `json:"active_peers"`
+		ConnectedSeeders int        `json:"connected_seeders"`
+		HalfOpenPeers    int        `json:"half_open_peers"`
+		PendingPeers     int        `json:"pending_peers"`
+		TorrentSize      int64      `json:"torrent_size"`
+		BytesRead        int64      `json:"bytes_read"`
+		IsPriority       bool       `json:"is_priority"`
+		StatString       string     `json:"stat_string"`
+		PeerRates        []PeerRate `json:"peer_rates"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil
@@ -448,6 +451,7 @@ func (c *Collector) fetchTorrents() []TorrentInfo {
 			Status:     status,
 			HalfOpen:   r.HalfOpenPeers,
 			Pending:    r.PendingPeers,
+			PeerRates:  r.PeerRates,
 		})
 	}
 	return out
@@ -1046,4 +1050,11 @@ func hostOf(rawURL string) string {
 		return rawURL
 	}
 	return u.Host
+}
+
+// PeerRate is one connected peer as GoStorm reports it: anonymous id, KB/s, seeder.
+type PeerRate struct {
+	ID   string  `json:"id"`
+	KBps float64 `json:"kbps"`
+	Seed bool    `json:"seed"`
 }
