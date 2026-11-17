@@ -258,8 +258,6 @@ chmod +x install.sh
 ./install.sh
 ```
 
-![Tiramisu interactive installer](docs/screenshots/install.png?v=2)
-
 The interactive installer handles everything end-to-end:
 1. Installs system dependencies (`fuse3`, `libfuse3-dev`, `gcc`, `samba`, `git`)
 2. Prompts for all required paths, Plex credentials, TMDB key, and NAT-PMP settings
