@@ -23,7 +23,7 @@
   <a href="https://github.com/MrRobotoGit/tiramisu/releases"><b>Releases</b></a>
 </p>
 
-<p align="center"><img src="docs/screenshots/ui-network-light.gif" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
+<p align="center"><img src="docs/screenshots/ui-network-light-v2.gif" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
 <p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph. When a peer sends bad data, Adaptive Shield lights up the pipes it protects (see Screenshots).</sub></p>
 
 ---
@@ -40,16 +40,16 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/ui-dashboard-light.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
-    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark.png" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></td>
+    <td width="50%"><img src="docs/screenshots/ui-dashboard-light-v2.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
+    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark-v2.png" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Dashboard</b>: speed, torrents, streams, services, scheduler and logs</sub></td>
     <td align="center"><sub><b>Control Panel</b>: every setting, with a change bar that applies them together</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/ui-network-strict-dark.png" alt="Live swarm in dark mode during an Adaptive Shield STRICT episode"></td>
-    <td><img src="docs/screenshots/ui-control-panel-light.png" alt="Control Panel, Streaming and FUSE section in light mode"></td>
+    <td><img src="docs/screenshots/ui-network-strict-dark-v2.png" alt="Live swarm in dark mode during an Adaptive Shield STRICT episode"></td>
+    <td><img src="docs/screenshots/ui-control-panel-light-v2.png" alt="Control Panel, Streaming and FUSE section in light mode"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Adaptive Shield</b>: a STRICT episode, live</sub></td>
@@ -57,9 +57,9 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
   </tr>
 </table>
 
-<p align="center"><img src="docs/screenshots/ui-piece-map-light.gif" alt="Active streams with the piece map open: a fixed playhead over a strip of pieces, ready, arriving and not yet requested, up to the download frontier"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
+<p align="center"><img src="docs/screenshots/ui-piece-map-light-v2.gif" alt="Active streams with the piece map open: a fixed playhead over a strip of pieces, ready, arriving and not yet requested, up to the download frontier"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
 
-<p align="center"><img src="docs/screenshots/ui-mobile.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
+<p align="center"><img src="docs/screenshots/ui-mobile-v2.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
 
 ---
 
@@ -219,7 +219,7 @@ The full guide covers persistent state in `/state`, updates, mount propagation a
 
 ## Sign-in and Tokens
 
-<p align="center"><img src="docs/screenshots/ui-access-light.png" alt="Control Panel, Access section: sign-in required, four named tokens, two for MCP and two for the API, with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, MCP and API tokens, browser sessions (sample data)</sub></p>
+<p align="center"><img src="docs/screenshots/ui-access-light-v2.png" alt="Control Panel, Access section: sign-in required, four named tokens, two for MCP and two for the API, with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, MCP and API tokens, browser sessions (sample data)</sub></p>
 
 Out of the box, anyone who can reach `:9080` on your network can use the Control Panel, the Dashboard and the APIs. Turn on sign-in in **Control Panel → Access** to require a password for all of them: the Control Panel, the Dashboard, every `/api/*` endpoint, `/metrics` and the MCP server.
 
