@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ func main() {
 	prowlarrURL := flag.String("prowlarr-url", "", "Prowlarr base URL (default: prowlarr.url from config.json)")
 	prowlarrKey := flag.String("prowlarr-key", "", "Prowlarr API key (default: prowlarr.api_key from config.json)")
 	libraryURL := flag.String("library-url", "http://127.0.0.1:9080", "Tiramisu Library API base URL")
+	libraryToken := flag.String("token", os.Getenv("TIRAMISU_TOKEN"), "API token for :9080 when sign-in is on (default $TIRAMISU_TOKEN)")
 	statePath := flag.String("state", "musicimport-state.json", "state file, created when missing")
 	// 5 comes from the first production library: albums that played had a median of
 	// 7.5 seeders, the ones that failed their metadata a median of 4. Below this the
@@ -96,7 +98,7 @@ func main() {
 		}
 	}
 
-	library := musicimport.NewTiramisu(*libraryURL)
+	library := musicimport.NewTiramisu(*libraryURL).WithToken(*libraryToken)
 	style := *idStyle
 	if style == "" {
 		// The panel's Plex/Jellyfin switch decides which id the player will send back.

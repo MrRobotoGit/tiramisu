@@ -55,6 +55,8 @@ type Deps struct {
 	StateDir func() string
 	Version  string
 	Logger   *log.Logger
+	// InternalToken authenticates the music tools' loopback calls while sign-in is on.
+	InternalToken string
 }
 
 type server struct {
@@ -72,7 +74,7 @@ const (
 // NewServer builds the MCP server with every tool registered.
 func NewServer(deps Deps) *sdk.Server {
 	if deps.Backend == nil {
-		deps.Backend = &realBackend{config: deps.Config, brainz: musicimport.NewMusicBrainz()}
+		deps.Backend = &realBackend{config: deps.Config, brainz: musicimport.NewMusicBrainz(), token: deps.InternalToken}
 	}
 	s := &server{deps: deps, jobs: NewJobs(maxJobs, jobTTL, jobTimeout)}
 	if deps.Logger != nil {

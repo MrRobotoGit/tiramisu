@@ -169,6 +169,7 @@ type Collector struct {
 	shieldEvents []ShieldEvent
 	start        time.Time
 	httpClient   *http.Client
+	authToken    string // engine-internal token for the loopback /metrics calls
 
 	prevCPUIdle  uint64
 	prevCPUTotal uint64
@@ -457,10 +458,21 @@ func (c *Collector) fetchTorrents() []TorrentInfo {
 	return out
 }
 
+// SetAuthToken makes the loopback /metrics calls pass sign-in on :9080.
+func (c *Collector) SetAuthToken(t string) { c.authToken = t }
+
+func (c *Collector) loopbackRequest(ctx context.Context, url string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err == nil && c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+	return req, err
+}
+
 func (c *Collector) fetchFUSEBuffer(s *HealthStatus) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.metricsURL, nil)
+	req, err := c.loopbackRequest(ctx, c.metricsURL)
 	if err != nil {
 		return
 	}
@@ -503,7 +515,7 @@ func (c *Collector) fetchFUSEBuffer(s *HealthStatus) {
 func (c *Collector) fetchCacheHitRate(s *HealthStatus) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.profilingURL, nil)
+	req, err := c.loopbackRequest(ctx, c.profilingURL)
 	if err != nil {
 		return
 	}

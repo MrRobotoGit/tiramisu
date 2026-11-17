@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Tiramisu</title>
+<link rel="stylesheet" href="/ui/theme.css">
+<script src="/ui/theme.js"></script>
+<style>
+  body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; padding: 24px 16px; box-sizing: border-box; }
+  .sign-in { width: 100%; max-width: 380px; }
+  .sign-in form { display: flex; flex-direction: column; gap: 18px; }
+  .sign-in .input input { width: 100%; }
+  .err-line { display: flex; gap: 8px; align-items: center; color: var(--accent-ink); }
+  .submit { width: 100%; justify-content: center; padding: 9px 14px; font-size: 13px; }
+  .foot { text-align: center; }
+  code { font-family: var(--mono); }
+</style>
+</head>
+<body>
+  <span class="brand">
+    <span class="grille" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+    <span><span class="word">tiramisu</span><br><span class="sub">unified engine</span></span>
+  </span>
+  <div class="card sign-in">
+    <div class="card-head"><span class="label ink">Sign in</span><span class="spacer"></span><span class="scope"><span class="lamp"></span><span class="label" id="host"></span></span></div>
+    <div class="card-body">
+      <form id="f" autocomplete="on">
+        <div class="field"><label for="u">Username</label><div class="input"><input id="u" name="username" autocomplete="username" required autofocus></div></div>
+        <div class="field"><label for="p">Password</label><div class="input"><input id="p" name="password" type="password" autocomplete="current-password" required></div></div>
+        <div class="err-line small" id="err" hidden><span class="lamp err"></span><span id="err-txt"></span></div>
+        <button class="btn primary submit" id="go" type="submit">Sign in</button>
+      </form>
+    </div>
+  </div>
+  <p class="small faint foot">Forgot the password? Stop the service, run <code>tiramisu --reset-auth</code> on the host, start it again.</p>
+<script>
+(function () {
+  const q = new URLSearchParams(location.search);
+  const raw = q.get('next') || '';
+  // Resolve like the browser will (it drops tabs/newlines, reads "\\" as "/") and keep it same-origin.
+  let next = '/control';
+  try {
+    const u = new URL(raw, location.origin);
+    // u.href, not u.pathname: dot-segments can normalise a path to "//host".
+    if (raw.startsWith('/') && u.origin === location.origin && !u.pathname.startsWith('//')) next = u.href;
+  } catch (_) { }
+  // The server never sees the fragment; the browser carries it over the redirect.
+  if (location.hash && !next.includes('#')) next += location.hash;
+  document.getElementById('host').textContent = location.host;
+  const err = document.getElementById('err'), errTxt = document.getElementById('err-txt'), go = document.getElementById('go');
+  let timer = null;
+  function show(msg) { errTxt.textContent = msg; err.hidden = false; }
+  function lock(secs) {
+    clearInterval(timer);
+    go.disabled = true;
+    const tick = () => {
+      if (secs <= 0) { clearInterval(timer); go.disabled = false; go.textContent = 'Sign in'; err.hidden = true; return; }
+      go.textContent = 'Sign in · 0:' + String(secs).padStart(2, '0');
+      secs--;
+    };
+    show('Too many attempts. Try again shortly.');
+    tick();
+    timer = setInterval(tick, 1000);
+  }
+  document.getElementById('f').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    err.hidden = true;
+    go.disabled = true;
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: document.getElementById('u').value, password: document.getElementById('p').value })
+      });
+      if (r.ok) { location.replace(next); return; }
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 429) { lock(body.retry_after || 60); return; }
+      if (r.status === 409) { location.replace(next); return; } // sign-in is off
+      show(r.status === 401 ? 'Wrong username or password.' : (body.error || 'Sign-in failed.'));
+    } catch (_) {
+      show('Tiramisu is not reachable.');
+    }
+    go.disabled = false;
+  });
+})();
+</script>
+</body>
+</html>

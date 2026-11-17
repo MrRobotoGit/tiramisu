@@ -21,6 +21,7 @@ type MusicSyncConfig struct {
 	PlexToken    string
 	PlexMusicLib string // Plex artist section the seed index reads first
 	LibraryURL   string // e.g. http://127.0.0.1:9080
+	LibraryToken string // engine-internal token, accepted while sign-in is on
 	StateDir     string
 	LogsDir      string
 	ProwlarrCfg  prowlarr.ConfigProwlarr
@@ -71,7 +72,7 @@ type musicServer interface {
 
 // Run is one discovery pass. The scheduler's context cancels the pacing sleeps.
 func (e *MusicSyncEngine) Run(ctx context.Context) error {
-	library := musicimport.NewTiramisu(e.cfg.LibraryURL)
+	library := musicimport.NewTiramisu(e.cfg.LibraryURL).WithToken(e.cfg.LibraryToken)
 	serverType := "plex"
 	if configured, err := library.MediaServerType(ctx); err == nil && configured != "" {
 		serverType = configured

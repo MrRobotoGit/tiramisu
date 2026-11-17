@@ -889,8 +889,12 @@ verify_install() {
 
     local url="http://127.0.0.1:9080/metrics"
     if command -v curl >/dev/null 2>&1; then
-        if curl -sf --max-time 5 "$url" >/dev/null 2>&1; then
+        local code
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null)
+        if [ "$code" = "200" ]; then
             print_ok "Tiramisu metrics endpoint is reachable at ${url}"
+        elif [ "$code" = "401" ]; then
+            print_ok "Tiramisu is running at ${url} (sign-in is enabled, metrics need a token)"
         else
             print_warn "Tiramisu is not running yet (metrics endpoint not reachable)."
             print_warn "This is expected — start with: sudo systemctl start tiramisu"

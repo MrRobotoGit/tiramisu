@@ -54,6 +54,7 @@ type AddResult struct {
 type Tiramisu struct {
 	baseURL string
 	http    *http.Client
+	token   string
 }
 
 func NewTiramisu(baseURL string) *Tiramisu {
@@ -63,6 +64,12 @@ func NewTiramisu(baseURL string) *Tiramisu {
 		// minutes on a slow swarm; the engine bounds its own work.
 		http: &http.Client{Timeout: 20 * time.Minute},
 	}
+}
+
+// WithToken makes every request carry Authorization: Bearer token (sign-in on :9080).
+func (t *Tiramisu) WithToken(token string) *Tiramisu {
+	t.token = token
+	return t
 }
 
 // CommittedSet is what the library already holds: the external identities, and the
@@ -226,6 +233,9 @@ func (t *Tiramisu) do(ctx context.Context, method, path string, payload, out int
 	}
 	if payload != nil {
 		request.Header.Set("Content-Type", "application/json")
+	}
+	if t.token != "" {
+		request.Header.Set("Authorization", "Bearer "+t.token)
 	}
 	response, err := t.http.Do(request)
 	if err != nil {

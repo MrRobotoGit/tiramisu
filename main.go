@@ -30,6 +30,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"tiramisu/internal/auth"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/catalog/mediaserver"
@@ -4917,6 +4918,7 @@ func main() {
 
 	var dbPath string
 	flag.StringVar(&dbPath, "path", "", "path to database and config")
+	resetAuth := flag.Bool("reset-auth", false, "clear the :9080 user, sessions and tokens and turn sign-in off")
 	flag.Parse()
 
 	// Default --path to the directory containing the binary (portable install)
@@ -4957,6 +4959,23 @@ func main() {
 	}
 
 	globalConfig.Store(&cfg)
+	if *resetAuth {
+		// Before anything starts: a second engine next to the running service would mount FUSE twice.
+		p := gc().StateDBPath
+		if p == "" {
+			p = filepath.Join(GetStateDir(), "tiramisu.db")
+		}
+		if err := auth.ResetAt(p, GetStateDir()); errors.Is(err, auth.ErrDBUntouched) {
+			fmt.Println("reset-auth:", err)
+			fmt.Println("Only the marker was removed. Stop the service, check the DB path and permissions, and run it again.")
+			os.Exit(1)
+		} else if err != nil {
+			fmt.Println("reset-auth failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Sign-in reset: user, sessions and tokens cleared. Run this with the service stopped, then start it.")
+		os.Exit(0)
+	}
 	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
 	telemetry.SendHeartbeat(*gc(), AppVersion)
 	logger.Printf("[DEBUG] BlockListURL loaded: '%s'", gc().BlockListURL)
@@ -4984,6 +5003,20 @@ func main() {
 		logger.Printf("[BlockList] %v — loading the list unfiltered", err)
 	}
 	torrutils.SetBlockListEnabled(gc().BlockListEnabled)
+
+	// :8090 is for the engine itself: loopback unless config opens it.
+	if settings.Args == nil {
+		settings.Args = &settings.ExecArgs{}
+	}
+	bindIP, bindWarn := gc().GoStormBindIP()
+	settings.Args.IP = bindIP
+	if bindWarn != "" {
+		logger.Printf("[GoStorm] WARNING: %s", bindWarn)
+	} else if bindIP == "" {
+		logger.Printf("[GoStorm] API :8090 open on every interface (gostorm_listen_ip)")
+	} else {
+		logger.Printf("[GoStorm] API :8090 listening on %s only", bindIP)
+	}
 
 	go func() {
 		logger.Println("Starting Embedded GoStorm Engine...")
@@ -5190,6 +5223,32 @@ func main() {
 		}
 	}()
 
+	// Sign-in on :9080 (opt-in). The state lives in tiramisu.db, never in config.json.
+	resetEnv := os.Getenv("TIRAMISU_RESET_AUTH") == "1"
+	var authStore auth.Store // stays a nil interface when the StateDB is off
+	if stateDB != nil {
+		authStore = stateDB
+	}
+	if resetEnv {
+		if err := auth.Reset(authStore, GetStateDir()); err != nil {
+			logger.Printf("[Auth] reset failed: %v", err)
+		} else if authStore == nil {
+			logger.Printf("[Auth] reset: marker removed, but the state DB is unavailable; the user and tokens in it are untouched")
+		} else {
+			logger.Printf("[Auth] reset: user, sessions and tokens cleared, sign-in off")
+		}
+		logger.Printf("[Auth] WARNING: TIRAMISU_RESET_AUTH=1 is set: remove it, sign-in cannot be enabled while it is")
+	}
+	authSvc := auth.New(authStore, GetStateDir(), resetEnv)
+	authSvc.SetLogger(logger.Printf)
+	authTrusted := auth.ParseTrusted(gc().AuthTrustedProxies)
+	if st := authSvc.State(); st.FailClosed {
+		logger.Printf("[Auth] sign-in was on but its state is unavailable: :9080 answers 503 until it is back, or stop the service, run tiramisu --reset-auth and start it again")
+	} else {
+		logger.Printf("[Auth] sign-in %s", map[bool]string{true: "on", false: "off"}[st.Enabled])
+	}
+	auth.Register(http.DefaultServeMux, authSvc, authTrusted)
+
 	http.HandleFunc("/plex/webhook", handlePlexWebhook)
 
 	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
@@ -5338,7 +5397,8 @@ func main() {
 	http.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(gc())
+			w.Header().Set("Cache-Control", "no-store")
+			json.NewEncoder(w).Encode(gc().Redacted()) // secrets are write-only (issue #26)
 			return
 		}
 		if r.Method == "POST" {
@@ -5347,12 +5407,14 @@ func main() {
 				http.Error(w, err.Error(), 400)
 				return
 			}
+			newCfg.KeepSecrets(gc()) // an empty secret means "unchanged"
 			// Update file
 			data, _ := json.MarshalIndent(newCfg, "", "  ")
-			if err := os.WriteFile(gc().ConfigPath, data, 0644); err != nil {
+			if err := os.WriteFile(gc().ConfigPath, data, 0600); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
+			_ = os.Chmod(gc().ConfigPath, 0600) // existing installs were written 0644
 			// Reload in memory (V1.4.0 Live Update)
 			oldEnabled := gc().BlockListEnabled
 			oldURL := gc().BlockListURL
@@ -5550,6 +5612,7 @@ func main() {
 				PlexToken:    gc().Plex.Token,
 				PlexMusicLib: strconv.Itoa(gc().Plex.MusicLibraryID),
 				LibraryURL:   fmt.Sprintf("http://127.0.0.1:%d", gc().MetricsPort),
+				LibraryToken: authSvc.InternalToken(),
 				StateDir:     GetStateDir(),
 				LogsDir:      logsDir,
 				ProwlarrCfg:  gc().Prowlarr,
@@ -5704,6 +5767,8 @@ func main() {
 			StateDir: GetStateDir,
 			Version:  AppVersion,
 			Logger:   logger,
+
+			InternalToken: authSvc.InternalToken(),
 		})
 	}
 
@@ -5763,12 +5828,13 @@ func main() {
 		}
 	})
 	http.HandleFunc("/api/clients", clientSvc.Handler)
+	monCollector.SetAuthToken(authSvc.InternalToken())
 	safeGo(func() {
 		monCollector.Run(backgroundStopChan)
 	})
 	logger.Printf("[Dashboard] enabled at :%d/dashboard", gc().MetricsPort)
 
-	go http.ListenAndServe(fmt.Sprintf(":%d", gc().MetricsPort), nil)
+	go http.ListenAndServe(fmt.Sprintf(":%d", gc().MetricsPort), auth.Wrap(authSvc, authTrusted, http.DefaultServeMux))
 
 	// Graceful shutdown: saves inode map and sync caches before exit.
 	sigChan := make(chan os.Signal, 1)

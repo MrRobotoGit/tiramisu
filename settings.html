@@ -7,6 +7,7 @@
     <title>Tiramisu — Control Panel</title>
     <link rel="stylesheet" href="/ui/theme.css">
     <script src="/ui/theme.js"></script>
+    <script src="/ui/auth.js"></script>
     <style>
         .page-intro { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; scroll-margin-top: 80px; }
         .page-intro .row { display: flex; align-items: flex-end; gap: 16px; }
@@ -112,6 +113,44 @@
             .quality-preview-row { padding: 12px 16px; gap: 12px; flex-wrap: wrap; }
             .quality-preview-score { width: auto; }
         }
+        /* ---- 07 Access ---- */
+        .acc-status { display: flex; align-items: center; gap: 24px; }
+        .acc-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+        .acc-text .title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; }
+        .acc-pad { padding: 16px 24px; margin: 0; border-bottom: 1px solid var(--hair); }
+        .acc-table-wrap { overflow-x: auto; }
+        .acc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .acc-table th { text-align: left; padding: 10px 24px 10px 0; background: var(--well); font-size: 10px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; color: var(--ink3); white-space: nowrap; }
+        .acc-table th:first-child, .acc-table td:first-child { padding-left: 24px; }
+        .acc-table td { padding: 12px 24px 12px 0; border-top: 1px solid var(--hair); white-space: nowrap; color: var(--ink2); font-size: 12px; }
+        .acc-table td.nm { font-size: 13px; }
+        .acc-table td.nm { color: var(--ink); font-weight: 500; }
+        .acc-table td.nm .lamp { margin-right: 8px; vertical-align: middle; }
+        .acc-table td.mono { font-family: var(--mono); font-size: 11px; }
+        .acc-table td:last-child { text-align: right; padding-right: 16px; }
+        .acc-table tr.new td { background: var(--well); }
+        .acc-empty td { color: var(--ink3); text-align: left !important; }
+        .acc-foot { display: flex; align-items: center; gap: 10px; padding: 12px 24px; border-top: 1px solid var(--hair); flex-wrap: wrap; }
+        .acc-foot .spacer { flex: 1; }
+        .acc-row { display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--hair); }
+        .acc-row .dev { font-weight: 500; min-width: 180px; }
+        .acc-row .spacer { flex: 1; }
+        .acc-note { display: flex; align-items: center; gap: 10px; padding-top: 14px; }
+        .acc-step { display: flex; gap: 16px; padding: 14px 0; border-bottom: 1px solid var(--hair); }
+        .acc-step:last-child { border-bottom: 0; }
+        .acc-step .title { font-weight: 500; }
+        .acc-num { flex: 0 0 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--hair2); display: inline-flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 10px; color: var(--ink2); }
+        .acc-dialog { border: 1px solid var(--hair); border-radius: 8px; padding: 0; background: var(--panel); color: var(--ink); width: min(560px, calc(100vw - 32px)); box-shadow: 0 16px 48px rgba(0,0,0,.18); }
+        .acc-dialog::backdrop { background: rgba(18, 21, 24, .5); }
+        .acc-dialog .card-head .title { font-size: 15px; font-weight: 500; }
+        .acc-dialog .card-body { gap: 18px; }
+        .acc-dialog .input input { width: 100%; }
+        .acc-dlg-foot { display: flex; align-items: center; gap: 10px; padding: 14px 24px; border-top: 1px solid var(--hair); background: var(--well); }
+        .acc-err { display: flex; align-items: center; gap: 8px; color: var(--accent-ink); font-size: 11px; }
+        .acc-token { display: flex; align-items: center; gap: 10px; padding: 0 6px 0 12px; height: 40px; border: 1px solid var(--ink); border-radius: 4px; background: var(--well); }
+        .acc-token code { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+        .acc-snippet { margin: 0; padding: 14px 16px; border-radius: 4px; background: var(--term); color: var(--term-text); font-family: var(--mono); font-size: 11px; line-height: 16px; white-space: pre-wrap; word-break: break-all; }
+        @media (max-width: 900px) { .acc-status { flex-direction: column; align-items: flex-start; } .acc-row .dev { min-width: 0; } }
     </style>
 </head>
 
@@ -136,6 +175,7 @@
                 <a href="#engine" data-sec="sec-engine"><span class="num">04</span>Engine<span class="dirty"></span></a>
                 <a href="#release" data-sec="sec-release"><span class="num">05</span>Release Selection<span class="dirty"></span></a>
                 <a href="#scheduler" data-sec="sec-scheduler"><span class="num">06</span>Scheduler<span class="dirty"></span></a>
+                <a href="#access" data-sec="sec-access"><span class="num">07</span>Access</a>
             </nav>
             <div class="rail-foot">
                 <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Engine online</span></div>
@@ -788,6 +828,76 @@
                             </div>
                         </div>
                     </div>
+                </section>
+
+                <!-- ================= 07 ACCESS (sign-in, API tokens) ================= -->
+                <!-- Outside both forms and without name attributes: nothing here reaches the change bar or /api/config. -->
+                <section class="settings" id="sec-access" data-title="Access">
+                    <div class="page-intro">
+                        <span class="label">Settings · 07</span>
+                        <div class="row">
+                            <h1 class="h1">Access</h1><span class="spacer"></span>
+                            <span class="scope"><span class="lamp" id="acc-scope-lamp"></span><span class="label">Applies immediately</span></span>
+                        </div>
+                        <p>Who can open the Control Panel, the Dashboard, the API and the MCP server on this port. Webhooks from Plex and Jellyfin are always accepted.</p>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-head"><span class="num">07.1</span><span class="label ink">Authentication</span><span class="spacer"></span><span class="scope"><span class="lamp"></span><span class="label">Live</span></span></div>
+                        <div class="card-body">
+                            <div class="acc-status">
+                                <div class="acc-text">
+                                    <div class="title"><span class="lamp off" id="acc-lamp"></span><span id="acc-title">Loading…</span></div>
+                                    <div class="hint" id="acc-hint"></div>
+                                </div>
+                                <button type="button" class="btn" id="acc-main-btn" hidden></button>
+                            </div>
+                            <div class="warn-note" id="acc-warn" hidden></div>
+                        </div>
+                    </div>
+
+                    <div class="card" id="acc-tokens-card">
+                        <div class="card-head"><span class="num">07.2</span><span class="label ink">API tokens</span><span class="spacer"></span><button type="button" class="btn primary sm" onclick="accNewToken()">+ New token</button></div>
+                        <div class="card-body flush">
+                            <p class="small faint acc-pad">Tokens act with full access, as the signed-in user. They do not expire: revoke the ones you no longer use. The value is shown once, when it is created.</p>
+                            <div class="acc-table-wrap">
+                                <table class="acc-table">
+                                    <thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th>From</th><th></th></tr></thead>
+                                    <tbody id="acc-tokens"></tbody>
+                                </table>
+                            </div>
+                            <div class="acc-foot"><span class="small" style="font-weight:500">MCP endpoint</span><span class="mono small" id="acc-mcp-url"></span><span class="spacer"></span><button type="button" class="btn ghost sm" onclick="accCopy(accMcpURL(), this)">Copy URL</button></div>
+                        </div>
+                    </div>
+
+                    <div class="card" id="acc-sessions-card" hidden>
+                        <div class="card-head"><span class="num">07.3</span><span class="label ink">Browser sessions</span><span class="spacer"></span><button type="button" class="btn sm" onclick="accLogoutOthers()">Sign out everywhere else</button></div>
+                        <div class="card-body tight">
+                            <div id="acc-sessions"></div>
+                            <div class="acc-note"><span class="lamp off"></span><span class="small faint">Sessions last 30 days from the last visit. Changing the password signs out every other session.</span></div>
+                        </div>
+                    </div>
+
+                    <div class="card" id="acc-before-card" hidden>
+                        <div class="card-head"><span class="num">07.3</span><span class="label ink">Before you enable it</span></div>
+                        <div class="card-body tight">
+                            <div class="acc-step"><span class="acc-num">1</span><div><div class="title">Choose a username and a password</div><div class="hint">Single user. Stored as a bcrypt hash in tiramisu.db, never in config.json.</div></div></div>
+                            <div class="acc-step"><span class="acc-num">2</span><div><div class="title">Create a token for each client first</div><div class="hint">Tokens can be created while access is open: configure Hermes, Claude Code, the menubar app and scripts (Authorization: Bearer), then enable sign-in.</div></div></div>
+                            <div class="acc-step"><span class="acc-num">3</span><div><div class="title">Forgot the password?</div><div class="hint">Stop the service, run <code>tiramisu --reset-auth</code> on the host and start it again (Docker: TIRAMISU_RESET_AUTH=1 for one start, then remove it). It clears the user, sessions and tokens and turns sign-in off.</div></div></div>
+                        </div>
+                    </div>
+
+                    <div class="card" id="acc-off-card" hidden>
+                        <div class="card-head"><span class="num">07.4</span><span class="label ink">Turn off sign-in</span></div>
+                        <div class="card-body">
+                            <div class="acc-status">
+                                <div class="hint" style="flex:1">Removes the requirement for this port. The user and the tokens are kept, so turning it back on restores them. Asks for the password.</div>
+                                <button type="button" class="btn danger sm" onclick="accDisable()">Turn off</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="acc-note"><span class="lamp off"></span><span class="small faint">Port :8090 (GoStorm API) answers on this machine only (127.0.0.1); gostorm_listen_ip in config.json opens it to the network.</span></div>
                 </section>
             </div>
 
@@ -1512,6 +1622,12 @@
                     form.querySelector('[data-nested="prowlarr.url"]').value = pr.url || pr.URL || "";
                 }
                 updateProwlarrState();
+                // Secrets are write-only: the server never sends them back (issue #26).
+                const sc = originalEngine.secrets_configured || {};
+                [['plex_token', 'plex.token'], ['tmdb_api_key', 'tmdb_api_key'], ['prowlarr_api_key', 'prowlarr.api_key']].forEach(([name, key]) => {
+                    const i = form.querySelector(`[name="${name}"]`);
+                    if (i) i.placeholder = sc[key] ? 'Configured · type to replace' : 'Not set';
+                });
                 const blEnabled = document.querySelector('[name="blocklist_enabled"]');
                 if (blEnabled) blEnabled.checked = originalEngine.blocklist_enabled || false;
                 updateBlockListState();
@@ -2277,6 +2393,309 @@
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); if (narrow.matches) TiramisuUI.toggleRail(true); sInput.focus(); }
         });
         document.addEventListener('click', e => { if (!e.target.closest('.search')) sBox.classList.remove('open'); });
+    </script>
+
+    <!-- ============ ACCESS DIALOG (one, reused) ============ -->
+    <dialog class="acc-dialog" id="acc-dialog">
+        <form method="dialog" id="acc-dialog-form" autocomplete="off">
+            <div class="card-head"><span class="title" id="acc-dlg-title"></span><span class="spacer"></span><button type="button" class="key" aria-label="Close" onclick="accClose()">✕</button></div>
+            <div class="card-body" id="acc-dlg-body"></div>
+            <div class="acc-dlg-foot">
+                <span class="small faint" id="acc-dlg-note" style="flex:1"></span>
+                <button type="button" class="btn ghost sm" id="acc-dlg-cancel" onclick="accClose()">Cancel</button>
+                <button type="submit" class="btn primary sm" id="acc-dlg-ok"></button>
+            </div>
+        </form>
+    </dialog>
+    <script>
+        // =============================================================
+        // 07 Access: sign-in and API tokens (/api/auth/*). Values are put in the page
+        // with textContent only; a token's value is never stored, only shown once.
+        // =============================================================
+        (function () {
+            const $ = id => document.getElementById(id);
+            let st = null;
+            const dlg = $('acc-dialog');
+            let onSubmit = null;
+
+            async function api(method, path, body) {
+                const r = await fetch('/api/auth/' + path, {
+                    method, headers: body ? { 'Content-Type': 'application/json' } : {},
+                    body: body ? JSON.stringify(body) : undefined, cache: 'no-store'
+                });
+                const data = await r.json().catch(() => ({}));
+                // Only the middleware's 401 means "session gone"; a wrong password in a dialog is also 401.
+                if (r.status === 401 && (r.headers.get('WWW-Authenticate') || '').includes('realm="tiramisu"')) {
+                    location.href = '/login?next=' + encodeURIComponent('/control#access'); // session expired
+                }
+                if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+                return data;
+            }
+            const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+            const lamp = cls => el('span', 'lamp ' + (cls || ''));
+            function ago(ts) {
+                if (!ts) return 'never';
+                const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+                if (s < 60) return s + ' s ago';
+                if (s < 3600) return Math.floor(s / 60) + ' min ago';
+                if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+                return Math.floor(s / 86400) + ' days ago';
+            }
+            const day = ts => new Date(ts * 1000).toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+            window.accMcpURL = () => location.origin + '/mcp';
+
+            // navigator.clipboard exists only on HTTPS or localhost; on http://<lan-ip> fall back
+            // to execCommand, with the textarea inside the open dialog (the top layer keeps focus there).
+            window.accCopy = async function (text, btn) {
+                let ok = false;
+                if (navigator.clipboard && window.isSecureContext) {
+                    try { await navigator.clipboard.writeText(text); ok = true; } catch (_) { }
+                }
+                if (!ok) {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.setAttribute('readonly', '');
+                    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0';
+                    (btn.closest('dialog') || document.body).appendChild(ta);
+                    ta.select();
+                    try { ok = document.execCommand('copy'); } catch (_) { }
+                    ta.remove();
+                }
+                const old = btn.textContent;
+                btn.textContent = ok ? 'Copied' : 'Select and copy';
+                setTimeout(() => { btn.textContent = old; }, 1500);
+            };
+
+            // ---------- dialog ----------
+            function field(label, type, hint, value) {
+                const f = el('div', 'field');
+                const l = el('label', null, label);
+                const box = el('div', 'input');
+                const i = el('input');
+                i.type = type || 'text';
+                i.autocomplete = type === 'password' ? 'new-password' : 'off';
+                if (value) i.value = value;
+                l.htmlFor = i.id = 'acc-f-' + Math.random().toString(36).slice(2);
+                box.appendChild(i);
+                f.append(l, box);
+                if (hint) f.appendChild(el('div', 'hint', hint));
+                return { node: f, input: i };
+            }
+            function openDialog(title, okLabel, okKind, build, submit, opts = {}) {
+                $('acc-dlg-title').textContent = title;
+                const body = $('acc-dlg-body');
+                body.replaceChildren();
+                build(body);
+                const err = el('div', 'acc-err'); err.hidden = true; err.append(lamp('err'), el('span'));
+                body.appendChild(err);
+                $('acc-dlg-ok').textContent = okLabel;
+                $('acc-dlg-ok').className = 'btn sm ' + (okKind || 'primary');
+                $('acc-dlg-cancel').hidden = !!opts.noCancel;
+                $('acc-dlg-note').textContent = opts.note || '';
+                onSubmit = async () => {
+                    err.hidden = true;
+                    $('acc-dlg-ok').disabled = true;
+                    try { await submit(); }
+                    catch (e) { err.lastChild.textContent = e.message; err.hidden = false; }
+                    finally { $('acc-dlg-ok').disabled = false; }
+                };
+                dlg.showModal();
+                body.querySelector('input')?.focus();
+            }
+            window.accClose = () => dlg.close();
+            // A created token must not linger in the DOM or in closures after the dialog closes.
+            dlg.addEventListener('close', () => { $('acc-dlg-body').replaceChildren(); onSubmit = null; });
+            $('acc-dialog-form').addEventListener('submit', e => { e.preventDefault(); onSubmit && onSubmit(); });
+
+            function samePasswords(a, b) {
+                if ([...a.value].length < 10) throw new Error('Password must be at least 10 characters.');
+                if (a.value !== b.value) throw new Error('The passwords do not match.');
+            }
+
+            // ---------- sign-in on/off ----------
+            async function dlgSetup() {
+                const tokens = await api('GET', 'tokens').catch(() => []);
+                let u, p, c;
+                openDialog('Enable sign-in', 'Enable sign-in', 'primary', body => {
+                    body.appendChild(el('div', 'hint', 'Pick the credentials for this Tiramisu. After saving, this browser stays signed in and every other client on this port will need a token.'));
+                    u = field('Username', 'text', null, 'admin'); p = field('Password', 'password', 'At least 10 characters.'); c = field('Confirm password', 'password');
+                    body.append(u.node, p.node, c.node);
+                    const names = tokens.map(t => t.name).join(', ');
+                    body.appendChild(el('div', 'warn-note', tokens.length
+                        ? (tokens.length === 1 ? '1 token exists (' : tokens.length + ' tokens exist (') + names + ') and keeps working after sign-in is on: revoke any you do not recognise. Any other client stops working until it has one.'
+                        : 'No API token exists yet: Hermes, the menubar app and scripts stop working until they have one.'));
+                }, async () => {
+                    samePasswords(p.input, c.input);
+                    await api('POST', 'setup', { username: u.input.value, password: p.input.value });
+                    location.reload();
+                });
+            }
+            async function dlgEnable() {
+                const tokens = await api('GET', 'tokens').catch(() => []);
+                let p;
+                openDialog('Enable sign-in', 'Enable sign-in', 'primary', body => {
+                    body.appendChild(el('div', 'hint', 'Sign-in was set up before. Enter the password of ' + (st.username || 'the user') + ' to turn it back on; the existing tokens work again.'));
+                    if (tokens.length) body.appendChild(el('div', 'warn-note', 'These tokens work again: ' + tokens.map(t => t.name + ' (' + t.prefix + '…)').join(', ') + '. Revoke any you do not recognise.'));
+                    p = field('Password', 'password'); body.appendChild(p.node);
+                }, async () => { await api('POST', 'enable', { password: p.input.value }); location.reload(); });
+            }
+            function dlgPassword() {
+                let o, n, c;
+                openDialog('Change password', 'Change password', 'primary', body => {
+                    o = field('Current password', 'password'); n = field('New password', 'password', 'At least 10 characters.'); c = field('Confirm new password', 'password');
+                    body.append(o.node, n.node, c.node);
+                }, async () => {
+                    samePasswords(n.input, c.input);
+                    await api('POST', 'password', { old: o.input.value, new: n.input.value });
+                    accClose(); load();
+                }, { note: 'Every other browser session is signed out.' });
+            }
+            window.accDisable = function () {
+                let p;
+                openDialog('Turn off sign-in', 'Turn off', 'danger', body => {
+                    body.appendChild(el('div', 'hint', 'Anyone who can reach this port will be able to change settings and the library again. The user and the tokens are kept.'));
+                    p = field('Password', 'password'); body.appendChild(p.node);
+                }, async () => { await api('POST', 'disable', { password: p.input.value }); location.reload(); });
+            };
+
+            // ---------- tokens ----------
+            window.accNewToken = function () {
+                let n;
+                openDialog('New API token', 'Create token', 'primary', body => {
+                    n = field('Name', 'text', 'Where it will be used. Shown in the table, never sent by clients.');
+                    body.appendChild(n.node);
+                    const i = el('div', 'acc-note'); i.style.paddingTop = '0';
+                    i.append(lamp('off'), el('span', 'small faint', 'Full access, no expiry. Revoke it from this page at any time.'));
+                    body.appendChild(i);
+                }, async () => {
+                    const r = await api('POST', 'tokens', { name: n.input.value.trim() });
+                    showCreated(r);
+                    loadTokens(r.id);
+                });
+            };
+            function snippets(tok) {
+                const url = accMcpURL();
+                return {
+                    'Hermes': '# ~/.hermes/config.yaml\nmcp_servers:\n  Tiramisu:\n    url: ' + url + '\n    headers:\n      Authorization: "Bearer ' + tok + '"',
+                    'Claude Code': 'claude mcp add --transport http tiramisu ' + url + ' \\\n  --header "Authorization: Bearer ' + tok + '"',
+                    'curl': 'curl -H "Authorization: Bearer ' + tok + '" ' + location.origin + '/api/health',
+                };
+            }
+            function showCreated(r) {
+                openDialog('Token created', 'Done', 'primary', body => {
+                    const t = el('div', 'acc-note'); t.style.paddingTop = '0';
+                    const ok = lamp(); ok.style.background = 'var(--ok)';
+                    t.append(ok, el('span', null, 'Copy it now: it will not be shown again.'));
+                    t.lastChild.style.fontWeight = '500';
+                    const box = el('div', 'acc-token');
+                    const code = el('code', null, r.token);
+                    const copy = el('button', 'btn primary sm', 'Copy'); copy.type = 'button';
+                    copy.onclick = () => accCopy(r.token, copy);
+                    box.append(code, copy);
+                    body.append(t, box, el('span', 'label', 'MCP client config'));
+                    const sn = snippets(r.token);
+                    const seg = el('div', 'seg sm'); seg.setAttribute('role', 'group');
+                    const pre = el('pre', 'acc-snippet');
+                    Object.keys(sn).forEach((k, i) => {
+                        const b = el('button', i === 0 ? 'active' : '', k); b.type = 'button';
+                        b.onclick = () => { seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b)); pre.textContent = sn[k]; };
+                        seg.appendChild(b);
+                    });
+                    pre.textContent = sn['Hermes'];
+                    const row = el('div'); row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.gap = '10px';
+                    const cp = el('button', 'btn ghost sm', 'Copy snippet'); cp.type = 'button';
+                    cp.onclick = () => accCopy(pre.textContent, cp);
+                    row.append(seg, el('span', 'spacer'), cp); row.lastChild.previousSibling.style.flex = '1';
+                    body.append(row, pre);
+                }, async () => accClose(), { noCancel: true, note: 'Stored as a SHA-256 hash · name: ' + r.name });
+            }
+            function revoke(t) {
+                openDialog('Revoke “' + t.name + '”?', 'Revoke', 'danger', body => {
+                    body.appendChild(el('div', 'hint', 'Requests with ' + t.prefix + '… will get 401 Unauthorized from now on. This cannot be undone: a new token has to be created and configured in the client.'));
+                }, async () => { await api('DELETE', 'tokens/' + t.id); accClose(); loadTokens(); });
+            }
+            async function loadTokens(highlight) {
+                const tb = $('acc-tokens');
+                let list = [];
+                try { list = await api('GET', 'tokens'); } catch (e) { tb.replaceChildren(); return; }
+                tb.replaceChildren();
+                if (!list.length) {
+                    const tr = el('tr', 'acc-empty'); const td = el('td', null, 'No tokens yet.'); td.colSpan = 6; tr.appendChild(td); tb.appendChild(tr);
+                }
+                list.forEach(t => {
+                    const tr = el('tr', t.id === highlight ? 'new' : '');
+                    const nm = el('td', 'nm'); nm.append(lamp(t.last_used ? '' : 'off'), document.createTextNode(t.name));
+                    if (t.id === highlight) { const c = el('span', 'chip-tag sig-green', 'new'); c.style.marginLeft = '8px'; nm.appendChild(c); }
+                    const rv = el('button', 'btn ghost sm', 'Revoke'); rv.type = 'button'; rv.onclick = () => revoke(t);
+                    const last = el('td'); last.appendChild(rv);
+                    tr.append(nm, el('td', 'mono', t.prefix + '…'), el('td', null, day(t.created_at)), el('td', null, ago(t.last_used)), el('td', 'mono', t.last_ip || '—'), last);
+                    tb.appendChild(tr);
+                });
+            }
+
+            // ---------- sessions ----------
+            async function loadSessions() {
+                const box = $('acc-sessions');
+                let list = [];
+                try { list = await api('GET', 'sessions'); } catch (_) { }
+                box.replaceChildren();
+                list.forEach(s => {
+                    const r = el('div', 'acc-row');
+                    const l = lamp(s.current ? 'run' : ''); if (s.current) l.style.background = 'var(--ok)';
+                    r.append(l, el('span', 'dev', device(s.user_agent)), el('span', 'mono small faint', s.ip || '—'), el('span', 'small', 'active ' + ago(s.last_seen)));
+                    if (s.current) r.appendChild(el('span', 'chip-tag soft', 'this device'));
+                    r.appendChild(el('span', 'spacer'));
+                    if (!s.current) {
+                        const b = el('button', 'btn ghost sm', 'Sign out'); b.type = 'button';
+                        b.onclick = async () => { await api('DELETE', 'sessions/' + s.id).catch(() => { }); loadSessions(); };
+                        r.appendChild(b);
+                    }
+                    box.appendChild(r);
+                });
+            }
+            function device(ua) {
+                ua = ua || '';
+                const b = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : (ua.split('/')[0] || 'Unknown');
+                const o = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : '';
+                return o ? b + ' · ' + o : b;
+            }
+            window.accLogoutOthers = async function () { await api('POST', 'logout-others').catch(() => { }); loadSessions(); };
+
+            // ---------- state ----------
+            async function load() {
+                try { st = await TiramisuAuth.status(); } catch (_) { st = null; }
+                if (!st) { $('acc-title').textContent = 'Unavailable'; return; }
+                const on = st.enabled, btn = $('acc-main-btn');
+                $('acc-mcp-url').textContent = accMcpURL();
+                $('acc-lamp').className = 'lamp ' + (on ? '' : 'off');
+                $('acc-scope-lamp').className = 'lamp ' + (on ? '' : 'off');
+                $('acc-sessions-card').hidden = !on;
+                $('acc-off-card').hidden = !on;
+                $('acc-before-card').hidden = on;
+                $('acc-tokens-card').hidden = !st.available;
+                const warn = $('acc-warn');
+                warn.hidden = !st.reset_pending;
+                warn.textContent = 'TIRAMISU_RESET_AUTH is set on the host: remove it and restart before enabling sign-in, or the next restart clears it again.';
+                btn.hidden = false;
+                btn.disabled = !st.available || st.reset_pending;
+                if (!st.available) {
+                    $('acc-title').textContent = 'Sign-in unavailable';
+                    $('acc-hint').textContent = 'Sign-in needs the state database (enable_state_db in config.json), which is off or could not be opened.';
+                    btn.hidden = true;
+                } else if (on) {
+                    $('acc-title').textContent = 'Sign-in required';
+                    $('acc-hint').textContent = 'Every request on this port needs a session cookie or an API token. Signed in as ' + (st.username || '?') + '.';
+                    btn.className = 'btn sm'; btn.textContent = 'Change password'; btn.onclick = dlgPassword;
+                } else {
+                    $('acc-title').textContent = 'Open access';
+                    $('acc-hint').textContent = 'Anyone who can reach this machine on this port can change settings, add or remove library items and use the MCP server.';
+                    btn.className = 'btn primary'; btn.textContent = 'Enable sign-in'; btn.onclick = st.configured ? dlgEnable : dlgSetup;
+                }
+                if (st.available) loadTokens();
+                if (on) loadSessions();
+            }
+            load();
+        })();
     </script>
 </body>
 

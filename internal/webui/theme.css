@@ -680,3 +680,14 @@ input.danger, .input input.danger { color: var(--accent-ink); }
   .h1 { font-size: 26px; }
   .kpi { font-size: 38px; }
 }
+
+/* Signed-in user in the top bar (auth.js) */
+.auth-user { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; padding-left: 16px; margin-left: 4px; border-left: 1px solid var(--hair); align-self: stretch; }
+.auth-user .avatar { flex: 0 0 24px; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: var(--ink); color: var(--inv); display: inline-flex; align-items: center; justify-content: center; font: 500 11px var(--sans); pointer-events: none; }
+/* Phones: the avatar alone is the sign-out control. */
+@media (max-width: 900px) {
+  .auth-user { padding-left: 10px; margin-left: 0; }
+  .auth-user .btn { display: none; }
+  /* 40px tap target around a 28px dot, like the other phone top-bar controls. */
+  .auth-user .avatar { pointer-events: auto; cursor: pointer; width: 40px; height: 40px; flex-basis: 40px; background: radial-gradient(circle, var(--ink) 13.5px, transparent 14px); }
+}

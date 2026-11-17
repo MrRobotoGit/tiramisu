@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-//go:embed theme.css theme.js swarm.js fonts/*.woff2 fonts/*.txt
+//go:embed theme.css theme.js swarm.js auth.js fonts/*.woff2 fonts/*.txt
 var assets embed.FS
 
 // Handler serves the assets; mount it with http.StripPrefix("/ui/", ...).

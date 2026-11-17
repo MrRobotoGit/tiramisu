@@ -248,5 +248,9 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 	// The audio projection registry is authoritative for audio ownership, so it is
 	// created here rather than lazily: a missing table would look like an empty
 	// library and let cleanup drop torrents that are still projected.
+	// Auth tables: additive, created on every start so upgraded installs have them.
+	if err := d.execAuthSchema(); err != nil {
+		return err
+	}
 	return d.execAudioSchema()
 }

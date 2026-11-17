@@ -21,6 +21,7 @@ import (
 type realBackend struct {
 	config func() *config.Config
 	brainz *musicimport.MusicBrainz // one client: MusicBrainz is rate limited
+	token  string                   // engine-internal token for the loopback Library API
 }
 
 func (b *realBackend) tmdb() *tmdb.Client { return tmdb.NewClient(b.config().TMDBAPIKey) }

@@ -23,7 +23,7 @@ func (b *realBackend) musicLogf() func(string, ...any) { return musicLog.Printf 
 
 // musicLibrary is the Library API the music sync files through: same path, same result.
 func (b *realBackend) musicLibrary() *musicimport.Tiramisu {
-	return musicimport.NewTiramisu(fmt.Sprintf("http://127.0.0.1:%d", b.config().MetricsPort))
+	return musicimport.NewTiramisu(fmt.Sprintf("http://127.0.0.1:%d", b.config().MetricsPort)).WithToken(b.token)
 }
 
 func (b *realBackend) ArtistAlbums(ctx context.Context, artist string) ([]musicimport.ArtistReleaseGroup, error) {
