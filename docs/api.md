@@ -260,7 +260,7 @@ without opening the web UI.
 
 The GoStorm API listens on `127.0.0.1` only: run these commands on the Tiramisu
 host (or inside the container). Only the engine itself calls it. To reach it from
-the network, as before v1.11.14, set `"gostorm_listen_ip": "all"` in
+the network, as before v1.11.15, set `"gostorm_listen_ip": "all"` in
 `config.json`; it has no authentication, so do that only on a trusted network.
 
 ```bash

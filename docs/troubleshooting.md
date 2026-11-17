@@ -160,7 +160,7 @@ stays closed instead of opening up. Restore the database, or reset as above.
 
 With sign-in on, every call to `:9080` needs an API token
 (`-H "Authorization: Bearer tmr_..."`), created in **Control Panel → Access**.
-The GoStorm API on `:8090` listens on `127.0.0.1` only since v1.11.14: run its
+The GoStorm API on `:8090` listens on `127.0.0.1` only since v1.11.15: run its
 commands on the host, or set `"gostorm_listen_ip": "all"` in `config.json`.
 
 </details>
