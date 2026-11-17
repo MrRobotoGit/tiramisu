@@ -28,6 +28,8 @@ type Client struct {
 	Product string `json:"product,omitempty"`
 	State   string `json:"state,omitempty"`
 	Address string `json:"address,omitempty"`
+	// PositionS is the playback position in seconds, as the media server reports it.
+	PositionS int64 `json:"position_s,omitempty"`
 }
 
 // Config is read on every refresh so a saved config applies without a restart.
@@ -158,7 +160,8 @@ func (s *Service) Clients(ctx context.Context) []Client {
 type plexSessions struct {
 	MediaContainer struct {
 		Metadata []struct {
-			Media []struct {
+			ViewOffset int64 `json:"viewOffset"` // ms
+			Media      []struct {
 				Part []struct {
 					File string `json:"file"`
 				} `json:"Part"`
@@ -195,12 +198,13 @@ func (s *Service) plexSessions(ctx context.Context, cfg Config) []Client {
 		for _, media := range m.Media {
 			for _, part := range media.Part {
 				out = append(out, Client{
-					Hash:    cfg.Resolve(path.Base(filepathSlash(part.File))),
-					Source:  "plex",
-					Device:  device,
-					Product: m.Player.Product,
-					State:   m.Player.State,
-					Address: m.Player.Address,
+					Hash:      cfg.Resolve(path.Base(filepathSlash(part.File))),
+					Source:    "plex",
+					Device:    device,
+					Product:   m.Player.Product,
+					State:     m.Player.State,
+					Address:   m.Player.Address,
+					PositionS: m.ViewOffset / 1000,
 				})
 			}
 		}
@@ -218,7 +222,8 @@ type jellyfinSession struct {
 		Path string `json:"Path"`
 	} `json:"NowPlayingItem"`
 	PlayState struct {
-		IsPaused bool `json:"IsPaused"`
+		IsPaused      bool  `json:"IsPaused"`
+		PositionTicks int64 `json:"PositionTicks"` // 100 ns
 	} `json:"PlayState"`
 }
 
@@ -246,12 +251,13 @@ func (s *Service) jellyfinSessions(ctx context.Context, cfg Config) []Client {
 			state = "paused"
 		}
 		out = append(out, Client{
-			Hash:    cfg.Resolve(path.Base(filepathSlash(js.NowPlayingItem.Path))),
-			Source:  "jellyfin",
-			Device:  firstNonEmpty(js.DeviceName, js.Client, "Jellyfin player"),
-			Product: js.Client,
-			State:   state,
-			Address: js.RemoteEndPoint,
+			Hash:      cfg.Resolve(path.Base(filepathSlash(js.NowPlayingItem.Path))),
+			Source:    "jellyfin",
+			Device:    firstNonEmpty(js.DeviceName, js.Client, "Jellyfin player"),
+			Product:   js.Client,
+			State:     state,
+			Address:   js.RemoteEndPoint,
+			PositionS: js.PlayState.PositionTicks / 10_000_000,
 		})
 	}
 	return out

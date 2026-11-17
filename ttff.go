@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -304,6 +305,10 @@ func (s *TTFFSession) closeSession() {
 		}
 		ttffStats.sessionsCompleted.Add(1)
 		opened := s.openedAt.Load()
+		if last := s.lastReadAt.Load(); last > opened {
+			recordRecent(RecentSession{Hash: s.hash, Name: strings.TrimSuffix(filepath.Base(s.path), filepath.Ext(s.path)),
+				StartedAt: opened / int64(time.Second), DurationS: (last - opened) / int64(time.Second), Stalls: s.stallCount.Load()})
+		}
 		if fd := s.firstDataAt.Load(); fd > 0 {
 			ttffStats.openToHeader.Add(time.Duration(fd - opened))
 		}
@@ -366,6 +371,37 @@ type ttffAgg struct {
 }
 
 var ttffStats ttffAgg
+
+// RecentSession is one finished playback, for the Dashboard's idle view.
+type RecentSession struct {
+	Hash      string `json:"hash"`
+	Name      string `json:"name"`
+	StartedAt int64  `json:"started_at"` // unix seconds
+	DurationS int64  `json:"duration_s"`
+	Stalls    int64  `json:"stalls"`
+}
+
+const recentKeep = 10
+
+var (
+	recentMu       sync.Mutex
+	recentSessions []RecentSession // newest first
+)
+
+func recordRecent(r RecentSession) {
+	recentMu.Lock()
+	defer recentMu.Unlock()
+	recentSessions = append([]RecentSession{r}, recentSessions...)
+	if len(recentSessions) > recentKeep {
+		recentSessions = recentSessions[:recentKeep]
+	}
+}
+
+func recentSnapshot() []RecentSession {
+	recentMu.Lock()
+	defer recentMu.Unlock()
+	return append([]RecentSession{}, recentSessions...) // [] not null when empty
+}
 
 // ttffRegister opens (or reopens) the session for a path. Reopening refreshes
 // lastReadAt and the warmup flags, but openedAt is refreshed only while the

@@ -5211,6 +5211,11 @@ func main() {
 			gc().MaxConnsPerHost)
 	})
 
+	http.HandleFunc("/api/recent-streams", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(recentSnapshot())
+	})
+
 	http.HandleFunc("/metrics/ttff", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"sessions_completed":%d,"sessions_filtered":%d,`+
 			`"open_to_header_ms":%s,"open_to_deep_read_ms":%s,"seek_latency_ms":%s,`+

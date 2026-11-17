@@ -17,7 +17,7 @@
 .dash.net-view #p-speed, .dash.net-view #p-torrents { grid-column: 1 / -1; }
 @media (min-width: 901px) { .dash.net-view #p-speed .kpi-row { display: none; } }
 #speed-head { display: none; margin-left: 10px; color: var(--ink2); }
-#net-strip { display: flex; align-items: center; gap: 12px; font: 400 10px var(--mono); color: var(--ink3); }
+#net-strip { position: relative; display: flex; align-items: center; gap: 12px; font: 400 10px var(--mono); color: var(--ink3); }
 #net-strip svg { flex: 1; }
 .dash.net-view #p-torrents .card-body { flex-direction: row; align-items: center; gap: 40px; }
 .dash.net-view #p-torrents .card-body > hr { display: none; }
@@ -292,7 +292,7 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const SVGNS = 'http://www.w3.org/2000/svg';
-let lastHistory = [], lastShield = [];
+let lastHistory = [], lastShield = [], lastTorrents = [];
 
 function setLamp(lamp, cls) { lamp.className = 'lamp ' + cls; }
 
@@ -383,6 +383,7 @@ function drawShieldTimeline(events, history, id) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.innerHTML = '';
   el('rect', { x: 0, y: 0, width: W, height: H, rx: 2, style: 'fill:var(--well)' }, svg);
+  if (id === 'shieldTimelineNet' && window.Swarm && Swarm.closeOrphan) setTimeout(Swarm.closeOrphan, 0);
   if (!history || history.length < 2) return;
   const tMin = history[0].t, tMax = history[history.length - 1].t;
   if (tMax <= tMin) return;
@@ -404,7 +405,37 @@ function drawShieldTimeline(events, history, id) {
     const x = toX(ev.t);
     if (x < 0 || x > W) continue;
     el('circle', { cx: x, cy: H / 2, r: 3, style: 'fill:var(--accent)' }, svg);
+    // Network view: each mark explains itself (hover on desktop, tap on phones).
+    if (id === 'shieldTimelineNet' && window.Swarm && Swarm.details) {
+      // A tall, finger-sized target around the 6px mark (the strip svg lets it overflow).
+      const hit = el('rect', { x: x - 11, y: -12, width: 22, height: H + 24, style: 'fill:transparent' }, svg);
+      svg.style.overflow = 'visible';
+      Swarm.hoverable(hit, () => shieldDetails(ev, sorted, hit));
+    }
   }
+}
+
+function shieldDetails(ev, sorted, node) {
+  const i = sorted.indexOf(ev);
+  // A corruption counts as the start of STRICT only when STRICT followed within seconds
+  // (or names the same torrent); otherwise FAST was kept.
+  const next = sorted.slice(i + 1).find(e => e.type === 'strict');
+  const strictAt = ev.type === 'strict' ? ev.t
+    : next && (next.t - ev.t < 5000 || (ev.hash && next.hash === ev.hash)) ? next.t : null;
+  const end = strictAt && (sorted.find(e => e.t > strictAt && e.type === 'restore') || {}).t;
+  const t = lastTorrents.find(x => ev.hash && x.hash === ev.hash);
+  const rows = [];
+  if (t || ev.hash) rows.push(['Torrent', (t && (t.clean_title || t.title)) || ev.hash.slice(0, 8)]);
+  if (ev.piece) rows.push(['Piece', String(ev.piece)]);
+  rows.push(['STRICT', !strictAt ? 'no · FAST kept' : end ? `${Math.max(1, Math.round((end - strictAt) / 1000))} s` : 'still on']);
+  const when = new Date(ev.t).toTimeString().slice(0, 8);
+  Swarm.details(`${when} · ${ev.type === 'corruption' ? 'hash fail' : 'STRICT on'}`, rows,
+    { rect: node.getBoundingClientRect(), host: $('net-strip'), node },
+    { text: 'Open in log', run: () => {
+      document.querySelector('#log-seg button[data-log="tiramisu"]')?.click();
+      if (logLines !== 200) $('log-more').click();
+      $('p-logs').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } });
 }
 
 function renderStreams(torrents) {
@@ -495,6 +526,7 @@ async function load() {
     drawShieldTimeline(lastShield, lastHistory);
     drawShieldTimeline(lastShield, lastHistory, 'shieldTimelineNet');
     renderStreams(torrents);
+    lastTorrents = torrents || [];
     if (window.Swarm) Swarm.update({ health: h, torrents, shield: lastShield, history: lastHistory });
   } catch (e) { ok = false; console.error('Dashboard update failed:', e); }
   setLamp($('live-lamp'), ok ? 'run' : 'err');
