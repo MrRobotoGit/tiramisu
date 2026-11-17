@@ -581,6 +581,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-grab { width: 36px; height: 4px; border-radius: 2px; background: var(--hair2); align-self: center; }
 .sw-chip { position: absolute; top: -2px; right: 0; display: flex; gap: 4px; align-items: center; padding: 4px 10px; font-size: 12px; background: var(--panel); border: 1px solid var(--hair2); border-radius: 4px; cursor: pointer; color: var(--ink3); }
 .sw-chip b { font-weight: 500; color: var(--ink); }
+.sw-showall { margin-left: 6px; border: 0; border-left: 1px solid var(--hair2); padding: 0 0 0 8px; background: transparent; font: 500 12px var(--sans); color: var(--ink); cursor: pointer; }
 .sw-focusbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--well); border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
 .sw-focusbar span { flex: 1; }
 .sw-focusbar button { border: 0; background: transparent; color: var(--ink2); font-size: 14px; cursor: pointer; }
@@ -601,6 +602,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-client.paused { stroke: var(--hair2); }
 .sw-name.dim { fill: var(--ink3); }
 .lamp.ok-green { background: var(--ok); }
+.lamp.warn-yellow { background: var(--sig-yellow); }
 .sw-dot.off { fill: var(--hair2); opacity: .45; }
 
 .sw-box.strict { fill: var(--accent); }

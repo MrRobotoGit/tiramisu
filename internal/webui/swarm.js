@@ -547,7 +547,11 @@
         }
       });
 
-    // Follow one stream: everything outside the chosen path fades.
+    // Follow one stream: everything outside the chosen path fades. With a single path there is
+    // nothing to fade, so the gesture is off (and an old focus is dropped).
+    const multi = torrents.length > 1 || devs.length > 1;
+    if (!multi) focusKey = null;
+    svg.querySelectorAll('.sw-tap, .sw-hitbox').forEach(n => { n.style.cursor = multi ? 'pointer' : 'default'; if (!multi) n.style.pointerEvents = 'none'; });
     if (focusKey) {
       const dev = devs.find(d => d.key === focusKey) || devs.find(d => d.hashes.includes(focusKey));
       const isDev = String(focusKey).startsWith('dev:');
@@ -561,7 +565,7 @@
         bar.className = vertical ? 'sw-focusbar' : 'sw-chip';
         bar.innerHTML = vertical
           ? `<span>${esc(label.join(' → '))}${t && t.speed_mbs > 0.01 ? ' · ' + t.speed_mbs.toFixed(1) + ' MB/s' : ''}</span><button type="button" aria-label="Show all streams">✕</button>`
-          : `<b>${esc(label[0] || '')}</b><span>${label[1] ? ' · ' + esc(label[1]) : ''} · tap again to show all</span>`;
+          : `<b>${esc(label[0] || '')}</b><span>${label[1] ? ' · ' + esc(label[1]) : ''}</span><button type="button" class="sw-showall">Show all ✕</button>`;
         bar.onclick = () => toggleFocus(focusKey);
         ui.appendChild(bar);
       }
@@ -577,11 +581,11 @@
     if (!quality || !quality.sessions) return;
     const q = document.createElement('div');
     q.className = vertical ? 'sw-quality v' : 'sw-quality';
-    const ok = quality.stalls === 0;
-    q.innerHTML = `<span class="lamp ${ok ? 'ok-green' : 'err'}"></span><b>${vertical ? 'Playback' : 'Playback quality'}</b>`
+    q.innerHTML = `<span class="lamp ${quality.level}"></span><b>${vertical ? 'Playback' : 'Playback quality'}</b>`
       + `<span class="mono">start ${quality.start} · seek ${quality.seek}${vertical ? ' · ' + quality.stallsTxt : ''}</span>`
       + (vertical ? '' : `<span class="mono faint">${quality.stallsTxt} · since restart, ${quality.sessions} sessions</span>`);
-    q.title = `Median time to first byte and seek latency, stalls over ${quality.sessions} sessions since the last restart`;
+    q.title = `Median start and seek time since the last restart (${quality.sessions} sessions). A slow read is one FUSE read over 1 s: `
+      + 'the player buffer usually hides it. Yellow from 10 per session, red when one read took 5 s or more.';
     ui.appendChild(q);
   }
 
@@ -594,7 +598,7 @@
         : d.toDateString() === yday ? 'yesterday' : d.toLocaleDateString([], { weekday: 'short', day: 'numeric' });
       const dur = r.duration_s >= 3600 ? `${Math.floor(r.duration_s / 3600)} h ${Math.floor(r.duration_s / 60) % 60} min` : `${Math.max(1, Math.round(r.duration_s / 60))} min`;
       const t = (data.torrents || []).find(x => x.hash === r.hash);
-      return [short(t && (t.clean_title || t.title) || r.name.replace(/[._][0-9a-f]{8}$/i, '').replace(/[._]/g, ' '), 28), `${when} · ${dur} · ${r.stalls} stall${r.stalls === 1 ? '' : 's'}`];
+      return [short(t && (t.clean_title || t.title) || r.name.replace(/[._][0-9a-f]{8}$/i, '').replace(/[._]/g, ' '), 28), `${when} · ${dur} · ${r.stalls} slow read${r.stalls === 1 ? '' : 's'}`];
     });
   }
   // Idle (desktop): the engine stays drawn; a card lists the last streams.
@@ -659,11 +663,15 @@
       if (qq.ok) {
         const m = await qq.json();
         const ms = v => v >= 1000 ? (v / 1000).toFixed(1) + ' s' : Math.round(v) + ' ms';
-        const n = (m.stalls && m.stalls.count) || 0;
-        quality = { sessions: m.sessions_completed || 0, start: ms((m.open_to_header_ms || {}).p50 || 0),
-          seek: (m.seek_latency_ms || {}).count ? ms(m.seek_latency_ms.p50) : '—', stalls: n,
-          stallsTxt: `${n} stall${n === 1 ? '' : 's'}` };
-        quality.sig = [quality.sessions, quality.start, quality.seek, n].join('/');
+        // A "stall" in the engine is one FUSE read over 1 s; the player's buffer usually absorbs it.
+        // Red only for a wait the buffer is unlikely to cover (>= 5 s), yellow for many slow reads.
+        const n = (m.stalls && m.stalls.count) || 0, maxMs = (m.stalls && m.stalls.max_ms) || 0;
+        const sessions = m.sessions_completed || 0;
+        const level = maxMs >= 5000 ? 'err' : sessions && n / sessions >= 10 ? 'warn-yellow' : 'ok-green';
+        quality = { sessions, start: ms((m.open_to_header_ms || {}).p50 || 0),
+          seek: (m.seek_latency_ms || {}).count ? ms(m.seek_latency_ms.p50) : '—', stalls: n, level,
+          stallsTxt: n ? `${n} slow read${n === 1 ? '' : 's'} · max ${(maxMs / 1000).toFixed(1)} s` : '0 slow reads' };
+        quality.sig = [quality.sessions, quality.start, quality.seek, n, level].join('/');
       }
     } catch (_) { }
   }
