@@ -2196,7 +2196,8 @@ func pieceMapFor(hash string) *piecemap.Map {
 		}
 		return true
 	})
-	if h == nil {
+	// Music and audiobook files are a few MB: the map says nothing there, so none is served.
+	if h == nil || isAudioSectionPath(h.path) {
 		return nil
 	}
 	tr := torr.PeekTorrent(hash)

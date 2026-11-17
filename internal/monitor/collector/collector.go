@@ -856,6 +856,7 @@ type plexSession struct {
 type plexMediaContainer struct {
 	XMLName xml.Name    `xml:"MediaContainer"`
 	Videos  []plexVideo `xml:"Video"`
+	Tracks  []plexVideo `xml:"Track"` // music: same attributes, album in parent*, artist in grandparent*
 }
 
 type plexVideo struct {
@@ -866,6 +867,9 @@ type plexVideo struct {
 	Year             string `xml:"year,attr"`
 	Thumb            string `xml:"thumb,attr"`
 	GrandparentThumb string `xml:"grandparentThumb,attr"` // series poster (episodes only)
+	ParentTitle      string `xml:"parentTitle,attr"`      // album (tracks only)
+	ParentYear       string `xml:"parentYear,attr"`       // album year (tracks only)
+	ParentThumb      string `xml:"parentThumb,attr"`      // album cover (tracks only)
 	ParentIndex      int    `xml:"parentIndex,attr"`      // season number
 	Index            int    `xml:"index,attr"`            // episode number
 	Media            []struct {
@@ -906,8 +910,8 @@ func (c *Collector) fetchPlexSessions() map[string]plexSession {
 		return result
 	}
 
-	reHash8 := regexp.MustCompile(`(?i)_([a-f0-9]{8})\.mkv$`)
-	for _, v := range container.Videos {
+	reHash8 := regexp.MustCompile(`(?i)_([a-f0-9]{8})\.[a-z0-9]+$`) // .mkv, and .flac/.mp3/.m4b for audio
+	for _, v := range append(container.Videos, container.Tracks...) {
 		// For episodes: use series title + series poster; for movies: use title + thumb
 		title := v.Title
 		year := v.Year
@@ -919,6 +923,16 @@ func (c *Collector) fetchPlexSessions() map[string]plexSession {
 			}
 			if v.GrandparentThumb != "" {
 				thumbPath = v.GrandparentThumb
+			}
+		}
+		if v.Type == "track" {
+			// One torrent is one album: show "Artist - Album" with the album cover.
+			if v.GrandparentTitle != "" && v.ParentTitle != "" {
+				title = v.GrandparentTitle + " - " + v.ParentTitle
+			}
+			year = v.ParentYear
+			if v.ParentThumb != "" {
+				thumbPath = v.ParentThumb
 			}
 		}
 		poster := ""
