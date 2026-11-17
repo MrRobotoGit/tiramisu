@@ -50,6 +50,7 @@ func bearer(r *http.Request) string {
 func Wrap(s *Service, trusted []netip.Prefix, next http.Handler) http.Handler {
 	cop := http.NewCrossOriginProtection()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w, r)
 		// Decide on the canonical path, so /ui/../api cannot ride the /ui/ exemption.
 		path := cleanPath(r.URL.Path)
 		if (s.Enabled() || strings.HasPrefix(path, "/api/auth/")) && cop.Check(r) != nil {
