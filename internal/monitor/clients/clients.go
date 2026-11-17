@@ -30,6 +30,8 @@ type Client struct {
 	Address string `json:"address,omitempty"`
 	// PositionS is the playback position in seconds, as the media server reports it.
 	PositionS int64 `json:"position_s,omitempty"`
+	// DurationS is the item's runtime; with the file size it gives the average bitrate.
+	DurationS int64 `json:"duration_s,omitempty"`
 }
 
 // Config is read on every refresh so a saved config applies without a restart.
@@ -161,6 +163,7 @@ type plexSessions struct {
 	MediaContainer struct {
 		Metadata []struct {
 			ViewOffset int64 `json:"viewOffset"` // ms
+			Duration   int64 `json:"duration"`   // ms
 			Media      []struct {
 				Part []struct {
 					File string `json:"file"`
@@ -205,6 +208,7 @@ func (s *Service) plexSessions(ctx context.Context, cfg Config) []Client {
 					State:     m.Player.State,
 					Address:   m.Player.Address,
 					PositionS: m.ViewOffset / 1000,
+					DurationS: m.Duration / 1000,
 				})
 			}
 		}
@@ -219,7 +223,8 @@ type jellyfinSession struct {
 	Client         string `json:"Client"`
 	RemoteEndPoint string `json:"RemoteEndPoint"`
 	NowPlayingItem *struct {
-		Path string `json:"Path"`
+		Path         string `json:"Path"`
+		RunTimeTicks int64  `json:"RunTimeTicks"` // 100 ns
 	} `json:"NowPlayingItem"`
 	PlayState struct {
 		IsPaused      bool  `json:"IsPaused"`
@@ -258,6 +263,7 @@ func (s *Service) jellyfinSessions(ctx context.Context, cfg Config) []Client {
 			State:     state,
 			Address:   js.RemoteEndPoint,
 			PositionS: js.PlayState.PositionTicks / 10_000_000,
+			DurationS: js.NowPlayingItem.RunTimeTicks / 10_000_000,
 		})
 	}
 	return out

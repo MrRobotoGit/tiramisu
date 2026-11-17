@@ -17,8 +17,6 @@
 .dash.net-view #p-speed, .dash.net-view #p-torrents { grid-column: 1 / -1; }
 @media (min-width: 901px) { .dash.net-view #p-speed .kpi-row { display: none; } }
 #speed-head { display: none; margin-left: 10px; color: var(--ink2); }
-#net-strip { position: relative; display: flex; align-items: center; gap: 12px; font: 400 10px var(--mono); color: var(--ink3); }
-#net-strip svg { flex: 1; }
 .dash.net-view #p-torrents .card-body { flex-direction: row; align-items: center; gap: 40px; }
 .dash.net-view #p-torrents .card-body > hr { display: none; }
 .dash.net-view #p-torrents .card-body > * { flex: 1; }
@@ -68,6 +66,44 @@
 .stream .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .stream .spd { text-align: right; display: flex; flex-direction: column; gap: 2px; white-space: nowrap; }
 .stream .spd .n { font-family: var(--mono); font-size: 14px; font-weight: 500; }
+
+/* Piece map: the file in one line, and the pieces around the playhead when open. */
+.pm { padding: 0 24px 14px; display: flex; flex-direction: column; gap: 10px; }
+.pm-line { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.pm-ov { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--well); box-shadow: inset 0 0 0 1px var(--hair); }
+.pm-ov i { position: absolute; top: 0; height: 6px; border-radius: 3px; }
+.pm-ov .pl { background: var(--hair2); left: 0; transition: width .9s linear; }
+.pm-ov .win { top: -4px; height: 14px; border-radius: 3px; box-shadow: inset 0 0 0 1px var(--ink); transition: left .9s linear, width .9s linear; }
+.pm-zoom { display: block; width: 100%; height: 30px; margin: -10px 0; overflow: visible; }
+.pm-zoom line { stroke: var(--hair2); stroke-width: 1; }
+.pm-ov .ph { top: -5px; height: 16px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; transition: left .9s linear; }
+.pm-ah { font-family: var(--mono); font-size: 12px; white-space: nowrap; min-width: 92px; text-align: right; }
+.pm-ah.warn { color: var(--accent-ink); }
+.pm-chev { color: var(--ink2); font-size: 12px; width: 12px; text-align: center; }
+.pm-track { position: relative; padding-bottom: 16px; }
+.pm-cells { position: relative; height: 14px; overflow: hidden; }
+.pm-tape { position: absolute; inset: 0; will-change: transform; }
+.pc { position: absolute; top: 0; height: 14px; border-radius: 2px; box-shadow: inset 0 0 0 1px var(--hair2); transition: background-color .4s, box-shadow .4s, opacity .5s; }
+.pc.enter { opacity: 0; }
+.pc.r { background: var(--ink); box-shadow: none; }
+.pc.b { background: var(--hair2); box-shadow: none; }
+.pc.e { background: var(--well); box-shadow: inset 0 0 0 1px var(--hair); }
+.pc.d { box-shadow: inset 0 0 0 1px var(--sig-yellow); background: var(--well); }
+.pc.p { background: var(--well); }
+.pc.x { box-shadow: inset 0 0 0 1px var(--accent); }
+.pc.x::after { content: "✕"; position: absolute; inset: 0; display: grid; place-items: center; color: var(--accent); font-size: 9px; }
+.pc .f { position: absolute; left: 1px; right: 1px; bottom: 1px; height: 0; border-radius: 1px; opacity: .85; background: var(--ink2); transition: height .9s linear; }
+.pc.d .f { background: var(--sig-yellow); }
+.pm-head { position: absolute; top: -4px; height: 22px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; z-index: 1; }
+.pm-head.wait { background: var(--accent); }
+.pm-ticks span { position: absolute; top: 18px; font-family: var(--mono); font-size: 10px; color: var(--ink3); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .pm *, .pm *::after { transition: none !important; } }
+.pm-foot { font-size: 11px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 560px) {
+  .pm { padding: 0 16px 14px; }
+  .pm-ticks span { font-size: 9px; }
+  .pm-ah { min-width: 0; }
+}
 
 .job { display: flex; align-items: center; gap: 12px; padding: 13px 24px; border-top: 1px solid var(--hair); }
 .job:first-child { border-top: 0; }
@@ -207,7 +243,6 @@
               <svg class="shield" id="shieldTimeline" preserveAspectRatio="none" aria-label="Adaptive Shield timeline" style="width:calc(100% - 38px)"></svg>
             </div>
             <div id="view-network" hidden></div>
-            <div id="net-strip" hidden><span>−5 min</span><svg class="shield" id="shieldTimelineNet" preserveAspectRatio="none" aria-label="Adaptive Shield timeline"></svg><span>now</span></div>
             <div class="legend" id="net-legend" hidden>
               <span><span class="sw" style="width:7px;height:7px;border-radius:50%;background:var(--ink)"></span>seeder</span>
               <span><span class="sw" style="width:7px;height:7px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--ink2)"></span>leecher</span>
@@ -383,7 +418,6 @@ function drawShieldTimeline(events, history, id) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.innerHTML = '';
   el('rect', { x: 0, y: 0, width: W, height: H, rx: 2, style: 'fill:var(--well)' }, svg);
-  if (id === 'shieldTimelineNet' && window.Swarm && Swarm.closeOrphan) setTimeout(Swarm.closeOrphan, 0);
   if (!history || history.length < 2) return;
   const tMin = history[0].t, tMax = history[history.length - 1].t;
   if (tMax <= tMin) return;
@@ -405,39 +439,14 @@ function drawShieldTimeline(events, history, id) {
     const x = toX(ev.t);
     if (x < 0 || x > W) continue;
     el('circle', { cx: x, cy: H / 2, r: 3, style: 'fill:var(--accent)' }, svg);
-    // Network view: each mark explains itself (hover on desktop, tap on phones).
-    if (id === 'shieldTimelineNet' && window.Swarm && Swarm.details) {
-      // A tall, finger-sized target around the 6px mark (the strip svg lets it overflow).
-      const hit = el('rect', { x: x - 11, y: -12, width: 22, height: H + 24, style: 'fill:transparent' }, svg);
-      svg.style.overflow = 'visible';
-      Swarm.hoverable(hit, () => shieldDetails(ev, sorted, hit));
-    }
   }
 }
 
-function shieldDetails(ev, sorted, node) {
-  const i = sorted.indexOf(ev);
-  // A corruption counts as the start of STRICT only when STRICT followed within seconds
-  // (or names the same torrent); otherwise FAST was kept.
-  const next = sorted.slice(i + 1).find(e => e.type === 'strict');
-  const strictAt = ev.type === 'strict' ? ev.t
-    : next && (next.t - ev.t < 5000 || (ev.hash && next.hash === ev.hash)) ? next.t : null;
-  const end = strictAt && (sorted.find(e => e.t > strictAt && e.type === 'restore') || {}).t;
-  const t = lastTorrents.find(x => ev.hash && x.hash === ev.hash);
-  const rows = [];
-  if (t || ev.hash) rows.push(['Torrent', (t && (t.clean_title || t.title)) || ev.hash.slice(0, 8)]);
-  if (ev.piece) rows.push(['Piece', String(ev.piece)]);
-  rows.push(['STRICT', !strictAt ? 'no · FAST kept' : end ? `${Math.max(1, Math.round((end - strictAt) / 1000))} s` : 'still on']);
-  const when = new Date(ev.t).toTimeString().slice(0, 8);
-  Swarm.details(`${when} · ${ev.type === 'corruption' ? 'hash fail' : 'STRICT on'}`, rows,
-    { rect: node.getBoundingClientRect(), host: $('net-strip'), node },
-    { text: 'Open in log', run: () => {
-      document.querySelector('#log-seg button[data-log="tiramisu"]')?.click();
-      if (logLines !== 200) $('log-more').click();
-      $('p-logs').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    } });
+// Same scale as swarm.js; local so an older cached swarm.js cannot break the stream list.
+function fmtMbps(mbs) {
+  const v = mbs * 8;
+  return (v >= 100 ? Math.round(v) : v >= 1 ? v.toFixed(1) : v >= 0.05 ? v.toFixed(2) : '<0.05') + ' Mbps';
 }
-
 function renderStreams(torrents) {
   const active = (torrents || []).filter(t => t.status !== 'idle').sort((a, b) => b.speed_mbs - a.speed_mbs);
   const box = $('streams');
@@ -445,9 +454,10 @@ function renderStreams(torrents) {
   $('streamCount').textContent = active.length || '';
   $('streamSummary').textContent = active.length ? `${moving} streaming · ${active.length - moving} idle` : '';
   if (!active.length) { box.innerHTML = '<div class="empty" style="padding:16px 24px">No active streams</div>'; return; }
+  const kept = new Map([...box.querySelectorAll('[data-pm]')].map(n => [n.dataset.pm, n]));
   box.innerHTML = active.map(t => {
     const fast = t.speed_mbs > 0.01;
-    const speedTxt = fast ? `${t.speed_mbs.toFixed(1)} MB/s` : (t.status === 'streaming' ? 'streaming' : 'idle');
+    const speedTxt = fast ? fmtMbps(t.speed_mbs) : (t.status === 'streaming' ? 'streaming' : 'idle');
     // Signal colours: resolution blue, HDR/DV green, audio neutral, priority yellow.
     const chips = [];
     if (t.is_4k) chips.push(['4K', 'sig-blue']); else if (t.is_1080p) chips.push(['1080p', 'sig-blue']);
@@ -471,9 +481,204 @@ function renderStreams(torrents) {
       </div>
       <div class="spd"><span class="n">${speedTxt}</span><span class="small faint">${t.peers} peers · ${t.seeders} seeds</span></div>
       <button type="button" class="key" title="Kill stream" aria-label="Kill stream" data-kill="${esc(t.hash)}">✕</button>
-    </div>`;
+    </div><div class="pm" data-pm="${esc(t.hash)}" hidden></div>`;
   }).join('');
+  // The piece maps survive the rebuild so their cells keep animating.
+  box.querySelectorAll('[data-pm]').forEach(n => { const k = kept.get(n.dataset.pm); if (k) n.replaceWith(k); });
+  drawPieceMaps();
 }
+
+// ---------- Piece map ----------
+// /api/pieces answers only for a stream a player is reading. The strip runs from the read position
+// to the download frontier; one cell holds `bucket` pieces. Nodes persist between polls so cells
+// slide, fill and fade instead of being redrawn.
+const pmData = new Map(), pmOpen = new Set();
+let pmDur = new Map();
+const pmReduce = matchMedia('(prefers-reduced-motion: reduce)');
+async function pmFetch(h) {
+  try {
+    const r = await fetch('/api/pieces?hash=' + encodeURIComponent(h));
+    if (r.ok) pmData.set(h, await r.json()); else pmData.delete(h);
+  } catch (_) { }
+}
+async function loadPieceMaps(torrents) {
+  if (document.hidden) return;
+  const hashes = (torrents || []).filter(t => t.status !== 'idle').map(t => t.hash).filter(Boolean);
+  try {
+    const r = await fetch('/api/clients');
+    if (r.ok) pmDur = new Map(((await r.json()) || []).filter(c => c.hash && c.duration_s > 0).map(c => [c.hash, c.duration_s]));
+  } catch (_) { }
+  await Promise.all(hashes.filter(h => !pmOpen.has(h)).map(pmFetch));
+  [...pmData.keys()].forEach(h => { if (!hashes.includes(h)) pmData.delete(h); });
+  drawPieceMaps();
+}
+function pmRate(m) { const d = pmDur.get(m.hash); return d ? m.file_size / d : 0; }
+function pmAheadText(m, waiting) {
+  const bps = pmRate(m);
+  if (waiting) return bps ? '0 s ahead' : '0 MB ahead';
+  if (bps) { const s = m.ahead_bytes / bps; return s >= 600 ? '10+ min ahead' : `${Math.round(s)} s ahead`; }
+  return `${Math.round(m.ahead_bytes / 1048576)} MB ahead`;
+}
+const pmPct = v => (Math.max(0, Math.min(1, v)) * 100).toFixed(2) + '%';
+function pmSkeleton(el, open) {
+  el.innerHTML = `<div class="pm-line" role="button" tabindex="0" aria-expanded="${open}" title="Pieces from the player's read position to the download frontier">
+      <div class="pm-ov"><i class="pl"></i><i class="win"></i><i class="ph"></i></div>
+      <span class="pm-ah" title="Video ready after the player's last read, up to the first missing piece"></span><span class="pm-chev">${open ? '⌃' : '⌄'}</span></div>` +
+    (open ? `<svg class="pm-zoom" aria-hidden="true"><line/><line/></svg><div class="pm-track"><div class="pm-cells"></div><i class="pm-head"></i><div class="pm-ticks"></div></div><div class="pm-foot"></div>` : '');
+  el.dataset.open = open ? '1' : '';
+}
+function drawPieceMaps() {
+  document.querySelectorAll('[data-pm]').forEach(el => {
+    const m = pmData.get(el.dataset.pm);
+    if (!m || !m.cells || !m.cells.length) { el.hidden = true; el.innerHTML = ''; el.dataset.open = ''; return; }
+    el.hidden = false;
+    const open = pmOpen.has(m.hash);
+    if (!el.firstElementChild || (el.dataset.open === '1') !== open) pmSkeleton(el, open);
+    const pl = m.piece_len, bucket = m.bucket || 1, fileStart = m.file_first * pl, size = m.file_size;
+    const first = m.cells[0].i, endPiece = m.cells[m.cells.length - 1].i + bucket;
+    const w0 = (first * pl - fileStart) / size, w1 = Math.min(1, (endPiece * pl - fileStart) / size);
+    const waiting = m.first_gap === m.play;
+    const ov = el.querySelector('.pm-ov');
+    ov.querySelector('.pl').style.width = pmPct(m.player_off / size);
+    ov.querySelector('.ph').style.left = pmPct(m.player_off / size);
+    const win = ov.querySelector('.win');
+    win.style.left = `calc(${pmPct((w0 + w1) / 2)} - max(6px, ${pmPct((w1 - w0) / 2)}))`;
+    win.style.width = `max(12px, ${pmPct(w1 - w0)})`;
+    const ah = el.querySelector('.pm-ah');
+    ah.textContent = pmAheadText(m, waiting);
+    ah.classList.toggle('warn', waiting);
+    if (open) pmCells(el, m, waiting);
+  });
+}
+function pmCells(el, m, waiting) {
+  // The playhead holds still; the tape of cells scrolls under it. Each cell sits at its piece
+  // index on the tape, so only the tape's offset changes between polls.
+  const clip = el.querySelector('.pm-cells'), bucket = m.bucket || 1;
+  let tape = clip.firstElementChild;
+  if (!tape) { tape = document.createElement('div'); tape.className = 'pm-tape'; clip.appendChild(tape); }
+  const W = clip.clientWidth, sp = W < 500 ? 1 : 2, pitch = (W + sp) / 32, cw = pitch - sp;
+  const pos = c => (c - +tape.dataset.origin) / bucket;
+  const play = m.play + m.play_frac;
+  let jump = tape.dataset.bucket !== String(bucket) || !tape.dataset.origin;
+  if (!jump && Math.abs(pos(play) - pos(+tape.dataset.play)) > 40) jump = true; // a seek: no fly-by
+  if (jump) { tape.innerHTML = ''; tape.dataset.origin = m.cells[0].i; tape.dataset.bucket = bucket; }
+  tape.dataset.play = play;
+  const now = Date.now();
+  const failed = (lastShield || []).filter(e => e.type === 'corruption' && e.hash === m.hash && e.piece && now - e.t < 60000).map(e => e.piece);
+  const tip = { r: 'ready', b: 'played · in memory', e: 'played · evicted', d: 'downloading · deadline set', p: 'partly here', m: 'not requested', x: 'hash failed · re-downloading' };
+  const old = new Map([...tape.children].map(n => [n.dataset.i, n])), keep = new Set();
+  m.cells.forEach(c => {
+    const key = String(c.i);
+    keep.add(key);
+    const st = c.s !== 'r' && c.s !== 'b' && failed.some(p => p >= c.i && p < c.i + bucket) ? 'x' : c.s;
+    let n = old.get(key);
+    if (!n) { n = document.createElement('div'); n.dataset.i = key; n.className = 'pc' + (jump ? '' : ' enter'); n.innerHTML = '<i class="f"></i>'; tape.appendChild(n); }
+    n.classList.remove('r', 'b', 'e', 'd', 'p', 'm', 'x');
+    n.classList.add(st);
+    n.style.left = (pos(c.i) * pitch) + 'px';
+    n.style.width = cw + 'px';
+    n.firstElementChild.style.height = (st === 'p' || st === 'd') && c.pct ? `calc(${c.pct}% - 2px)` : '0';
+    n.title = `${bucket > 1 ? `pieces ${c.i}–${c.i + bucket - 1}` : `piece ${c.i}`} · ${tip[st]}${c.pct ? ' · ' + c.pct + ' %' : ''}`;
+  });
+  old.forEach((n, k) => { if (!keep.has(k)) n.remove(); });
+  // Playhead fixed two cells in; the tape is moved by pmTick so the read position lands under it.
+  const headX = 2 * pitch;
+  const bps = pmRate(m);
+  const st = pmMotion.get(el) || {};
+  st.tape = tape; st.headX = headX; st.pitch = pitch; st.bucket = bucket; st.target = play;
+  // Expected playback speed in pieces per second: the file's average bitrate when known.
+  st.rate = bps ? bps / m.piece_len : (st.rate || 0);
+  if (jump || st.disp === undefined || pmReduce.matches) st.disp = play;
+  pmMotion.set(el, st);
+  pmTick.start();
+  requestAnimationFrame(() => tape.querySelectorAll('.pc.enter').forEach(n => n.classList.remove('enter')));
+  const head = el.querySelector('.pm-head');
+  head.style.left = headX + 'px';
+  head.classList.toggle('wait', waiting);
+  const cell = tape.firstElementChild;
+  // Time ticks every 10 s of video from the playhead, when the bitrate is known.
+  const ticks = el.querySelector('.pm-ticks');
+  ticks.innerHTML = '';
+  if (cell && bps) {
+    const perCell = bucket * m.piece_len / bps;
+    const x0 = headX, maxX = W - 24;
+    // Labels at least 56 px apart: the step grows with the time each cell holds.
+    const step = [10, 20, 30, 60, 120, 300].find(v => v / perCell * pitch >= 56) || 600;
+    for (let t = 0, j = 0; j < 8; t += step, j++) {
+      const x = x0 + t / perCell * pitch;
+      if (x > maxX) break;
+      const s = document.createElement('span');
+      s.textContent = !t ? 'now' : t >= 60 ? `+${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}` : `+${t} s`;
+      s.style.left = x + 'px';
+      ticks.appendChild(s);
+    }
+  }
+  const pieceMB = Math.round(m.piece_len / 1048576 * 10) / 10;
+  const gap = m.done_ahead ? 'fully downloaded to the end' : m.first_gap < 0 ? 'no gap in sight' : waiting ? `the player's next read needs piece ${m.first_gap}` : `download frontier at piece ${m.first_gap}`;
+  el.querySelector('.pm-foot').textContent = `${gap} · ${bucket > 1 ? bucket + ' × ' : ''}${pieceMB} MB per cell · solid ready · yellow deadline · outline not requested`;
+  pmZoom(el);
+}
+// Smooth scrolling. Polls arrive once a second and players read in bursts, so the tape is not
+// moved to each sample: it advances at the playback rate and eases toward the sampled position,
+// never backwards except after a seek (handled as a jump in pmCells).
+const pmMotion = new Map();
+const pmTick = (() => {
+  let raf = 0, last = 0;
+  function frame(t) {
+    const dt = last ? Math.min(0.1, (t - last) / 1000) : 0;
+    last = t;
+    let alive = false;
+    pmMotion.forEach((st, el) => {
+      if (!el.isConnected || !st.tape.isConnected) { pmMotion.delete(el); return; }
+      alive = true;
+      const err = st.target - st.disp, rate = st.rate || 0;   // pieces
+      // Behind the sample: playback speed plus a catch-up over ~1.5 s. Ahead of it (between two
+      // read bursts): keep the playback speed, slowing to a stop as the lead nears 20 s of video.
+      const v = err >= 0 ? rate + err / 1.5 : rate * Math.max(0, 1 + err / (rate * 20 + 1.5));
+      st.disp += v * dt;
+      const tx = st.headX - ((st.disp - +st.tape.dataset.origin) / st.bucket) * st.pitch;
+      st.tape.style.transform = `translate3d(${tx.toFixed(2)}px,0,0)`;
+    });
+    if (alive && !document.hidden) raf = requestAnimationFrame(frame); else { raf = 0; last = 0; }
+  }
+  return { start() { if (!raf) { last = 0; raf = requestAnimationFrame(frame); } } };
+})();
+document.addEventListener('visibilitychange', () => { if (!document.hidden && pmMotion.size) pmTick.start(); });
+
+// The two lines that magnify the bracket on the file line into the row of cells below it.
+function pmZoom(el) {
+  const z = el.querySelector('.pm-zoom'), w = el.querySelector('.pm-ov .win'), c = el.querySelector('.pm-cells');
+  if (!z || !w || !c) return;
+  const zr = z.getBoundingClientRect(), wr = w.getBoundingClientRect(), r0 = c.getBoundingClientRect();
+  if (!zr.width) return;
+  const cr = r0;
+  z.setAttribute('viewBox', `0 0 ${zr.width} ${zr.height}`);
+  const [a, b] = z.querySelectorAll('line'), y0 = wr.bottom - zr.top, y1 = cr.top - zr.top;
+  Object.entries({ x1: wr.left - zr.left, y1: y0, x2: cr.left - zr.left, y2: y1 }).forEach(([k, v]) => a.setAttribute(k, v));
+  Object.entries({ x1: wr.right - zr.left, y1: y0, x2: cr.right - zr.left, y2: y1 }).forEach(([k, v]) => b.setAttribute(k, v));
+}
+window.addEventListener('resize', () => document.querySelectorAll('[data-pm]').forEach(el => { const m = pmData.get(el.dataset.pm); if (m && pmOpen.has(m.hash)) pmCells(el, m, m.first_gap === m.play); }));
+// An open strip follows the playhead every second; closed ones ride the 5 s dashboard refresh.
+let pmBusy = false;
+setInterval(async () => {
+  if (pmBusy || document.hidden || !pmOpen.size) return;
+  const hs = [...pmOpen].filter(h => pmData.has(h));
+  if (!hs.length) return;
+  pmBusy = true;
+  await Promise.all(hs.map(pmFetch));
+  pmBusy = false;
+  drawPieceMaps();
+}, 1000);
+document.addEventListener('click', e => {
+  const line = e.target.closest('.pm-line');
+  if (!line) return;
+  const h = line.parentElement.dataset.pm;
+  pmOpen.has(h) ? pmOpen.delete(h) : pmOpen.add(h);
+  drawPieceMaps();
+});
+document.addEventListener('keydown', e => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('pm-line')) { e.preventDefault(); e.target.click(); }
+});
 
 let lastHealth = null;
 function updateSpeedMeta() {
@@ -524,8 +729,8 @@ async function load() {
 
     drawChart(lastHistory);
     drawShieldTimeline(lastShield, lastHistory);
-    drawShieldTimeline(lastShield, lastHistory, 'shieldTimelineNet');
     renderStreams(torrents);
+    loadPieceMaps(torrents);
     lastTorrents = torrents || [];
     if (window.Swarm) Swarm.update({ health: h, torrents, shield: lastShield, history: lastHistory });
   } catch (e) { ok = false; console.error('Dashboard update failed:', e); }
@@ -602,7 +807,6 @@ document.querySelectorAll('#view-seg button').forEach(b => b.addEventListener('c
   $('view-network').hidden = !net;
   $('view-timeline').hidden = net;
   $('net-legend').hidden = !net;
-  $('net-strip').hidden = !net;
   $('tl-legend').hidden = net;
   $('speed-title').textContent = net ? 'Live swarm' : 'Download speed';
   updateSpeedMeta();
@@ -610,7 +814,6 @@ document.querySelectorAll('#view-seg button').forEach(b => b.addEventListener('c
   try { localStorage.setItem('gs-dash-view', b.dataset.view); } catch (_) { }
   if (net && window.Swarm) Swarm.redraw();
   if (!net) { drawChart(lastHistory); drawShieldTimeline(lastShield, lastHistory); }
-  else drawShieldTimeline(lastShield, lastHistory, 'shieldTimelineNet');
 }));
 
 // Actions come from data attributes, never from strings spliced into handler code.
@@ -666,7 +869,7 @@ function doRestart() {
 })();
 
 window.addEventListener('resize', () => {
-  drawChart(lastHistory); drawShieldTimeline(lastShield, lastHistory); drawShieldTimeline(lastShield, lastHistory, 'shieldTimelineNet');
+  drawChart(lastHistory); drawShieldTimeline(lastShield, lastHistory);
   if (window.Swarm) Swarm.redraw();
 });
 document.addEventListener('themechange', () => { if (window.Swarm) Swarm.redraw(); });

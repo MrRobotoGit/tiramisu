@@ -51,6 +51,7 @@ import (
 	"tiramisu/internal/monitor/dashboard"
 	"tiramisu/internal/natpmp"
 	"tiramisu/internal/opentracker"
+	"tiramisu/internal/piecemap"
 	"tiramisu/internal/preload"
 	"tiramisu/internal/prowlarr"
 	"tiramisu/internal/ratelimit"
@@ -2177,6 +2178,78 @@ func pathPlaybackActive(path string) bool {
 	return ok && (ps.GetStatus() || ps.IsInferredPlayback())
 }
 
+// pieceMapFor describes the pieces around the furthest primary player of hash; nil when none is playing.
+func pieceMapFor(hash string) *piecemap.Map {
+	if hash == "" {
+		return nil
+	}
+	var h *MkvHandle
+	var off int64
+	activeHandles.Range(func(key, _ interface{}) bool {
+		c := key.(*MkvHandle)
+		if c.hash != hash || !c.isPrimaryHandle.Load() {
+			return true
+		}
+		if o := atomic.LoadInt64(&c.lastOff); o > off && !shouldServeTailFromSSD(o, c.size, warmup.TailWarmupSize) {
+			h, off = c, o
+		}
+		return true
+	})
+	if h == nil {
+		return nil
+	}
+	tr := torr.PeekTorrent(hash)
+	if tr == nil || tr.Torrent == nil || tr.Torrent.Info() == nil {
+		return nil
+	}
+	var file *torrent.File
+	files := tr.Torrent.Files()
+	if i := h.fileID - 1; i >= 0 && i < len(files) && files[i].Length() == h.size {
+		file = files[i]
+	} else {
+		for _, f := range files {
+			if f.Length() == h.size {
+				file = f
+				break
+			}
+		}
+	}
+	if file == nil {
+		return nil
+	}
+	src := piecemap.Source{
+		Hash: hash, PieceLen: int64(tr.Torrent.Info().PieceLength), FileOffset: file.Offset(), FileSize: h.size, PlayerOff: off,
+		// What the engine keeps ahead of a player: the FUSE read-ahead budget plus the piece cache.
+		SpanBytes: int64(gc().ReadAheadBudget),
+		Window: func(first, n int) []piecemap.Piece {
+			ws := tr.Torrent.PieceWindow(first, n)
+			out := make([]piecemap.Piece, len(ws))
+			for i, p := range ws {
+				out[i] = piecemap.Piece{Complete: p.Complete, Length: p.Length, Missing: p.Missing, Deadline: p.Deadline}
+			}
+			return out
+		},
+		Covered: func(o, e int64) bool { return raCache.Holds(h.path, o, e) },
+	}
+	// The SSD warmup serves the head (and the tail) itself and the pump skips that zone, so those
+	// pieces are never fetched from the torrent: they still count as ready.
+	if dw := warmup.DiskWarmup; dw != nil && h.usesWarmup {
+		head := dw.GetAvailableRange(hash, h.fileID)
+		var tailFrom int64 = -1
+		if dw.TailReady(hash, h.fileID) {
+			tailFrom = h.size - warmup.TailWarmupSize
+		}
+		ram := src.Covered
+		src.Covered = func(o, e int64) bool {
+			return e <= head || (tailFrom >= 0 && o >= tailFrom) || ram(o, e)
+		}
+	}
+	if settings.BTsets != nil {
+		src.SpanBytes += settings.BTsets.CacheSize
+	}
+	return piecemap.Build(src)
+}
+
 // headerProbeZone is the start of the file that players and Samba re-read for container headers.
 const headerProbeZone = 2 * 1024 * 1024
 
@@ -3887,6 +3960,22 @@ func (c *ReadAheadCache) SwitchContext(newPath string) {
 	}
 }
 
+// Holds reports whether [off, end) is cached, walking any number of chunks. Read-only: unlike
+// Covered it leaves lastAccess alone, so the dashboard can ask without affecting eviction.
+func (c *ReadAheadCache) Holds(p string, off, end int64) bool {
+	s := c.getShard(p)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for pos := off; pos < end; {
+		b, ok := s.buffers[c.chunkKey(p, pos)]
+		if !ok || pos < b.start || pos > b.end {
+			return false
+		}
+		pos = b.end + 1
+	}
+	return true
+}
+
 // Covered reports whether the cache fully covers [off, end] without copying any bytes —
 // use this for presence/coverage checks on the hot path; call Get separately only once the
 // actual data is needed, to avoid an up-to-16MB defensive copy on every check.
@@ -5209,6 +5298,17 @@ func main() {
 			float64(avgHTTPLatency.Microseconds())/1000.0,
 			float64(avgCacheLatency.Microseconds())/1000.0,
 			gc().MaxConnsPerHost)
+	})
+
+	http.HandleFunc("/api/pieces", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		m := pieceMapFor(r.URL.Query().Get("hash"))
+		if m == nil {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("{}"))
+			return
+		}
+		json.NewEncoder(w).Encode(m)
 	})
 
 	http.HandleFunc("/api/recent-streams", func(w http.ResponseWriter, r *http.Request) {
