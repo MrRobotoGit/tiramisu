@@ -817,37 +817,24 @@ Served at `:9080/control`.
 http://<your-pi-ip>:9080/control
 ```
 
-### Simple / Advanced Mode
+### Layout
 
-A toggle in the top-right corner switches between two views:
+Six sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
+**Sources & Media**, **Engine**, **Release Selection** and **Scheduler**. Each section says when
+its settings take effect: on restart (Tiramisu settings, written to `config.json`) or live
+(GoStorm engine settings, pushed through its API). Find any setting with <kbd>⌘K</kbd>.
 
-- **Simple**: Most frequently changed settings: read-ahead budget, concurrency, cache size, paths, and NAT-PMP toggle
-- **Advanced**: All tunable parameters, split into labelled groups across two panels
+- **Simple / Advanced**: Simple shows the settings you change most often; Advanced shows everything, with expert cards marked as such.
+- **Change bar**: every edit is collected at the bottom of the page with its old and new value. **Apply** saves them all (live ones take effect at once) and becomes **Apply & restart** when one of them needs a restart; **Discard** reverts. Leaving the page with pending changes asks first.
 
-### Tiramisu FUSE Panel (left)
-
-Settings are written to `config.json` and require a **service restart**. The **Restart** button in the header triggers an immediate restart.
-
-| Group | Settings |
-|-------|----------|
-| **Core & Streaming** | ReadAhead Budget (MB), Master Concurrency, Max Streaming Slots, Streaming Threshold (KB) |
-| **Paths** | Physical Source Path (Samba root), FUSE Mount Path |
-| **Prowlarr Indexer** | Enable Prowlarr, API Key, URL |
-| **Media Manager (Plex)** | TMDB API Key, Plex URL, Plex Token, Movies Library ID, Series TV Library ID |
-| **Connectivity & Rescue** | GoStorm URL, Rescue Grace/Cooldown, Metrics Port, Log Level, Tiramisu Port, Enable BlockList, BlockList URL |
-
-### GoStorm Engine Panel (right)
-
-Settings are pushed **live via API**: no restart needed. **Apply All Core Settings** sends values immediately.
-
-| Group | Settings |
-|-------|----------|
-| **Cache & Data** | Cache Size (MB), Readahead Cache (%), Preload Cache (%) |
-| **Warmup & SSD** | Use Warmup Cache, Warmup path, SSD Quota (GB), Head Warmup (MB) |
-| **Swarm Limits** | Connections Limit, DL/UP Rate (KB/s), Disconnect Timeout (s) |
-| **Network & Protocol** | Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt |
-| **NAT-PMP (WireGuard)** | Enable, Gateway IP, VPN Interface, Refresh/Lifetime (s), Local Port |
-| **Behaviors** | Smart Responsive Mode, Debug Log |
+| Section | Settings |
+|---------|----------|
+| **Streaming & FUSE** | FUSE Cache Budget, Master Concurrency, Streaming Threshold; Physical Source Path, FUSE Mount Path; FUSE Block, Attr/Entry Timeout; Metadata Cache, Max Cache Entries, Cleanup Interval |
+| **Network & VPN** | NAT-PMP (enable, Gateway IP, VPN Interface, Local Port, Refresh/Lifetime); GoStorm URL, Rescue Grace/Cooldown, Metrics Port, Proxy Port, Log Level; IP BlockList (enable, URL, filter) |
+| **Sources & Media** | Prowlarr URL and API key, Torrentio URL; TMDB API key; media server type (Plex or Jellyfin), URL, token, Movies / TV Series / Music library IDs |
+| **Engine** *(live)* | Cache Size, Readahead Cache; Warmup Cache, path and SSD quota; Connections Limit, DL/UP Rate, Disconnect Timeout; Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt; Smart Responsive Mode, Adaptive Shield, Debug Log |
+| **Release Selection** | Preferred and excluded language flags, preferred terms; quality scoring preset and bonuses for Movies and TV Series, with a preview of what wins right now |
+| **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule from `config.json`) |
 
 ---
 
@@ -883,23 +870,21 @@ Six tiles:
 | Card | What it shows |
 |------|--------------| 
 | **GOSTORM** | API ping latency (green = responding). |
-| **FUSE MOUNT** | Number of virtual `.mkv` files currently exposed. |
-| **VPN (WG0)** | WireGuard interface status: VPN IP and gateway. |
+| **FUSE** | Number of virtual `.mkv` files currently exposed. |
+| **VPN** | WireGuard interface status: VPN IP and gateway. |
 | **NAT-PMP** | Active external port assigned by VPN gateway. |
-| **PLEX** | Server version and reachability. |
+| **MEDIA SERVER** | Plex and/or Jellyfin reachability and latency. |
 | **SYSTEM** | CPU %, RAM %, free disk space, live via gopsutil. |
 
 ### Download Speed Graph
 
 **Rolling chart** (last 5 minutes) of GoStorm download speed in Mbps, sampled every 5 seconds, with the Adaptive Shield timeline underneath.
 
-### Active Stream Panel
+### Active Streams
 
-Appears automatically during playback:
-- 🎬 **Movie poster** (fetched from TMDB)
-- 🏷️ **Quality badges**: `PRIORITY`, `4K`, `DV`, `ATMOS`, `HDR10+`
-- 📡 **LIVE indicator** + 5-minute average speed
-- 👥 **Peer/seeder count** for the active torrent
+Every torrent in use, with poster, title and year, hash and size, quality chips (`4K`/`1080p`,
+`DV`/`HDR`, audio codec and channels, `PRIORITY`), current speed and peer/seed count, and a ✕
+to stop the stream.
 
 ### Sync Controls
 
