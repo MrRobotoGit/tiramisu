@@ -80,7 +80,7 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 
 ## Contents
 
-[Overview](#overview) · [Screenshots](#screenshots) · [Features](#features) · [How It Fits Together](#how-it-fits-together-plex-jellyfin-and-infuse) · [Requirements](#requirements) · [Quick Install](#quick-install) · [Docker](#docker) · [Documentation](#documentation) · [FAQ](#faq) · [Contributing and Security](#contributing-and-security) · [Support](#support) · [Acknowledgements](#acknowledgements) · [License](#license)
+[Overview](#overview) · [Screenshots](#screenshots) · [Features](#features) · [How It Fits Together](#how-it-fits-together-plex-jellyfin-and-infuse) · [Requirements](#requirements) · [Quick Install](#quick-install) · [Docker](#docker) · [Sign-in and API Tokens](#sign-in-and-api-tokens) · [Documentation](#documentation) · [FAQ](#faq) · [Contributing and Security](#contributing-and-security) · [Support](#support) · [Acknowledgements](#acknowledgements) · [License](#license)
 
 ---
 
@@ -217,6 +217,32 @@ The full guide covers persistent state in `/state`, updates, mount propagation a
 
 ---
 
+## Sign-in and API Tokens
+
+Out of the box, anyone who can reach `:9080` on your network can use the Control Panel, the Dashboard and the APIs. Turn on sign-in in **Control Panel → Access** to require a password for all of them: the Control Panel, the Dashboard, every `/api/*` endpoint, `/metrics` and the MCP server.
+
+- **One user, one password.** A browser stays signed in for 30 days from its last visit. The Access page lists the signed-in browsers and can sign out all the others.
+- **API tokens for everything that is not a browser.** Hermes, Claude Code, the macOS menu bar app and your scripts each get a named token (`tmr_…`), sent as `Authorization: Bearer <token>`. A token has full access and does not expire. Its value is shown once, when you create it, and you can revoke it at any time from the same page.
+- **Create the tokens first.** Tokens can be created while sign-in is still off: configure your clients, then turn it on, and nothing stops working.
+- **Plex and Jellyfin keep working.** Their playback webhooks stay open, so the media server needs no changes.
+- **Keys stay on the server.** Your Plex/Jellyfin token and your TMDB and Prowlarr API keys are write-only: the Control Panel shows whether each one is set, never its value.
+- **The engine API is private.** GoStorm's API on `:8090` listens on the Tiramisu host only, so no other device can manage torrents behind sign-in's back.
+
+```bash
+# An MCP client (Claude Code) with a token
+claude mcp add --transport http tiramisu http://<host>:9080/mcp \
+  --header "Authorization: Bearer tmr_..."
+
+# A script
+curl -H "Authorization: Bearer tmr_..." http://<host>:9080/api/health
+```
+
+**Forgot the password?** Stop the service, run `tiramisu --reset-auth` on the host, start it again: the user, the sessions and the tokens are cleared and sign-in is off. With Docker, start the container once with `-e TIRAMISU_RESET_AUTH=1`, then remove the variable.
+
+Sign-in is meant for your home network or a reverse proxy with HTTPS in front of it; see [Sign-in and API tokens](docs/api.md#sign-in-and-api-tokens) for the details: rate limits, reverse proxies and what happens if the state database cannot be read.
+
+---
+
 ## Documentation
 
 | Guide | What it covers |
@@ -225,7 +251,7 @@ The full guide covers persistent state in `/state`, updates, mount propagation a
 | [User Guide](docs/user-guide.md) | First-run steps, webhooks, the Control Panel and the Dashboard |
 | [Sync Engine](docs/sync-engine.md) | Movies, TV, Watchlist and Music sync, the dead-release reaper, Prowlarr |
 | [Configuration](docs/configuration.md) | Every `config.json` field, quality scoring, languages, environment variables |
-| [API and MCP Server](docs/api.md) | Library API, MCP server for AI agents, HTTP endpoint reference |
+| [API and MCP Server](docs/api.md) | Sign-in and API tokens, Library API, MCP server for AI agents, HTTP endpoint reference |
 | [Architecture](docs/architecture.md) | How the FUSE layer, caches and engine work; performance figures |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes, file locations |
 
@@ -253,6 +279,9 @@ Not directly. Tiramisu has its own built-in sync engine that talks to TMDB, Prow
 
 **Is this legal?**
 Tiramisu is a general-purpose BitTorrent engine and streaming filesystem. It does not host, index, or distribute any copyrighted content itself; what you do with it is your responsibility, same as with any BitTorrent client.
+
+**Can I put Tiramisu on the internet?**
+Not directly. Turn on sign-in (Control Panel → Access) and put a reverse proxy with HTTPS in front of `:9080`. Never publish `:8090`: it listens on the host only by default, and it has no authentication.
 
 **Is my data private?**
 Everything runs on your own hardware. No account, no third-party API key is required for the core engine to work (TMDB, Prowlarr, and Plex/Jellyfin integrations are optional and use your own credentials).
