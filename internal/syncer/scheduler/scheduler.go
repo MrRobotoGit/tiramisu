@@ -116,14 +116,12 @@ func (s *Scheduler) TriggerRun(name string) error {
 	}
 
 	jt := s.state.Tracker(name)
-	if jt.Snapshot().Running {
+	// Check and set in one step: two requests at once must not both start the job.
+	if !jt.TryStart() {
 		return ErrAlreadyRunning
 	}
-
-	// V2.0: Set running before spawn to prevent concurrent launches from tick().
-	jt.SetRunning(true)
 	s.state.Save()
-	go s.runJob(syncer, jt)
+	s.start(name, syncer, jt)
 	return nil
 }
 
@@ -156,9 +154,11 @@ func (s *Scheduler) tick() {
 			continue
 		}
 
-		// V2.0: Set running before spawn to prevent concurrent TriggerRun/tick races.
-		jt.SetRunning(true)
-		go s.runJob(syncer, jt)
+		// A TriggerRun may have started it since the snapshot.
+		if !jt.TryStart() {
+			continue
+		}
+		s.start(name, syncer, jt)
 	}
 
 	s.updateNextRuns()
@@ -231,33 +231,47 @@ func (s *Scheduler) shouldRunInterval(state JobState, enabled bool, intervalHour
 	return time.Since(state.LastRun) >= time.Duration(intervalHours)*time.Hour
 }
 
-func (s *Scheduler) runJob(syncer Syncer, jt *JobTracker) {
+// start registers the job's cancel before it runs, so a stop sent right after the run
+// request finds it.
+func (s *Scheduler) start(name string, syncer Syncer, jt *JobTracker) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.cancels[name] = cancel
+	s.mu.Unlock()
+	go s.runJob(ctx, cancel, syncer, jt)
+}
+
+func (s *Scheduler) forget(name string) {
+	s.mu.Lock()
+	delete(s.cancels, name)
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) runJob(ctx context.Context, cancel context.CancelFunc, syncer Syncer, jt *JobTracker) {
 	name := syncer.Name()
+	released := false // once true, a newer run may own the cancel and the running flag
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Scheduler] %s PANIC: %v", name, r)
-			jt.SetRunning(false)
+			if !released {
+				s.forget(name)
+				jt.SetRunning(false)
+			}
 			jt.SetStatus("failed", fmt.Sprintf("panic: %v", r))
 			s.state.Save()
 		}
-		s.mu.Lock()
-		delete(s.cancels, name)
-		s.mu.Unlock()
 	}()
 
 	s.state.Save()
 	log.Printf("[Scheduler] %s started", name)
-
-	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	s.mu.Lock()
-	s.cancels[name] = cancel
-	s.mu.Unlock()
 
 	err := syncer.Run(ctx)
 
+	// Before running goes false: a run started after that registers its own cancel.
+	s.forget(name)
 	jt.SetRunning(false)
+	released = true
 	if err != nil && ctx.Err() == nil {
 		log.Printf("[Scheduler] %s failed: %v", name, err)
 		jt.SetStatus("failed", err.Error())
@@ -413,6 +427,17 @@ func (ss *StateStore) Save() error {
 type JobTracker struct {
 	mu    sync.Mutex
 	state JobState
+}
+
+// TryStart sets running and reports true, or reports false when it was already set.
+func (jt *JobTracker) TryStart() bool {
+	jt.mu.Lock()
+	defer jt.mu.Unlock()
+	if jt.state.Running {
+		return false
+	}
+	jt.state.Running = true
+	return true
 }
 
 // SetRunning updates the running flag.

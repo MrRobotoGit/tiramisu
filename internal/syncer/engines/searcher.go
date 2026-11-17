@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -221,6 +222,11 @@ func ApplyOverrides(base SearchConfig, raw json.RawMessage) (SearchConfig, *Over
 	if err := mergeInto(o.TV, &base.TVWeights); err != nil {
 		return base, nil, fmt.Errorf("overrides.tv: %w", err)
 	}
+	// base shares its slices with the live config, and decoding into a slice reuses its
+	// backing array: copy them, or a one-search override rewrites the sync's languages.
+	base.Language.PreferredTerms = slices.Clone(base.Language.PreferredTerms)
+	base.Language.PreferredFlags = slices.Clone(base.Language.PreferredFlags)
+	base.Language.ExcludedFlags = slices.Clone(base.Language.ExcludedFlags)
 	if err := mergeInto(o.Language, &base.Language); err != nil {
 		return base, nil, fmt.Errorf("overrides.language: %w", err)
 	}

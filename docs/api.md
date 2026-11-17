@@ -172,14 +172,20 @@ playback tracking keeps working without changes on the media server.
 
 - **One user**, with a password (bcrypt). The browser session lasts 30 days from
   the last visit; **Sign out everywhere else** ends the others.
-- **API tokens** for agents, scripts and the menu bar app: create one per client
-  in **Access → New token**. A token has full access and does not expire; its
-  value (`tmr_…`) is shown once and stored only as a SHA-256 hash. Revoke it from
-  the same table.
+- **Tokens** for everything that is not a browser: create one per client in
+  **Access → New token** and pick its type. An **MCP token** opens only `/mcp`
+  (agents such as Hermes and Claude Code); an **API token** opens the HTTP API
+  but not `/mcp` (the menu bar app, scripts). A token of the wrong type gets
+  `403`. No token can reach `/api/auth/*`: creating and revoking tokens, the
+  password and turning sign-in off take the Control Panel, signed in, and so does
+  changing `auth_trusted_proxies`. Tokens do not expire; the value (`tmr_…`) is
+  shown once and stored only as a SHA-256 hash. Revoke it from the same table.
+- **Upgrading from v1.11.15:** tokens created before token types become MCP
+  tokens. Re-create the ones your menu bar app and scripts use as API tokens.
 - Tokens can be created while sign-in is still off: configure your clients first,
   then turn sign-in on.
 
-Clients send the token as a bearer header:
+Clients send the token as a bearer header (an API token here):
 
 ```bash
 export TIRAMISU_TOKEN=tmr_...
@@ -190,7 +196,10 @@ Without credentials, browsers are redirected to `/login` and API clients get
 `401` with `WWW-Authenticate: Bearer realm="tiramisu"`. The login is limited to
 5 attempts per minute per IP. Behind a reverse proxy, list it in
 `auth_trusted_proxies` so the limit applies per client, and forward `Host` and
-`X-Forwarded-Proto` (the session cookie is marked `Secure` on HTTPS).
+`X-Forwarded-Proto` (the session cookie is marked `Secure` on HTTPS). A plain-HTTP
+proxy that rewrites `Host` must also send `X-Forwarded-Host`, or browser saves are
+refused as cross-origin. `/mcp` through a reverse proxy on the same machine needs
+sign-in on.
 
 **Forgotten password:** stop the service, run `tiramisu --reset-auth` on the
 host, start it again. It clears the user, the sessions and the tokens and turns

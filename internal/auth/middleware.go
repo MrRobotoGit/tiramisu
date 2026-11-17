@@ -53,7 +53,9 @@ func Wrap(s *Service, trusted []netip.Prefix, next http.Handler) http.Handler {
 		setSecurityHeaders(w, r)
 		// Decide on the canonical path, so /ui/../api cannot ride the /ui/ exemption.
 		path := cleanPath(r.URL.Path)
-		if (s.Enabled() || strings.HasPrefix(path, "/api/auth/")) && cop.Check(r) != nil {
+		// Always, sign-in or not: otherwise any page the user opens could rewrite the config or
+		// restart the engine. Clients that are not browsers send no Sec-Fetch-Site/Origin and pass.
+		if !sameOrigin(cop, r, trusted) {
 			http.Error(w, "cross-origin request blocked", http.StatusForbidden)
 			return
 		}
@@ -74,7 +76,15 @@ func Wrap(s *Service, trusted []netip.Prefix, next http.Handler) http.Handler {
 			return
 		}
 		if tok := bearer(r); tok != "" {
-			if s.IsInternal(tok) || s.AuthenticateToken(tok, clientIP(r, trusted)) {
+			if s.IsInternal(tok) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if scope, ok := s.AuthenticateToken(tok, clientIP(r, trusted)); ok {
+				if msg := scopeRefusal(scope, path); msg != "" {
+					writeJSON(w, http.StatusForbidden, map[string]string{"error": msg})
+					return
+				}
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -96,6 +106,37 @@ func Wrap(s *Service, trusted []netip.Prefix, next http.Handler) http.Handler {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"error":"unauthorized"}`))
 	})
+}
+
+// sameOrigin is CrossOriginProtection, plus one case it cannot see: over plain HTTP the
+// browser sends no Sec-Fetch-Site, and a proxy that rewrites Host makes Origin differ from
+// it. A configured proxy that names the original host in X-Forwarded-Host is believed.
+func sameOrigin(cop *http.CrossOriginProtection, r *http.Request, trusted []netip.Prefix) bool {
+	if cop.Check(r) == nil {
+		return true
+	}
+	fwd := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Host"), ",")[0])
+	if fwd == "" || r.Header.Get("Sec-Fetch-Site") != "" || !fromTrustedProxy(r, trusted) {
+		return false
+	}
+	o, err := url.Parse(r.Header.Get("Origin"))
+	return err == nil && o.Host != "" && strings.EqualFold(o.Host, fwd)
+}
+
+// scopeRefusal says why a valid token may not open path, or "" when it may. Tokens never
+// reach the sign-in and token routes: an agent holding one must not mint, revoke or lock out.
+func scopeRefusal(scope, path string) string {
+	switch {
+	case strings.HasPrefix(path, "/api/auth/"):
+		return "tokens and sign-in are managed from the Control Panel, signed in: no token opens /api/auth"
+	case scope == ScopeMCP && path != "/mcp":
+		return "this is an MCP token: it opens /mcp only. Create an API token in Access for the HTTP API"
+	case scope == ScopeAPI && path == "/mcp":
+		return "this is an API token: /mcp needs an MCP token, created in Access"
+	case scope != ScopeMCP && scope != ScopeAPI:
+		return "token of unknown type: create a new one in Access"
+	}
+	return ""
 }
 
 func setSessionCookie(w http.ResponseWriter, r *http.Request, value string) {

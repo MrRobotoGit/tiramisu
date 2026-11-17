@@ -39,6 +39,12 @@ func (d *DB) execAuthSchema() error {
 		return err
 	}
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (12, 'add auth tables')`)
+	// Additive: tokens made before scopes become MCP-only, the narrower of the two.
+	if err := d.addColumn("auth_tokens", "scope",
+		`ALTER TABLE auth_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'mcp'`); err != nil {
+		return err
+	}
+	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (13, 'add auth_tokens.scope')`)
 	return nil
 }
 
@@ -66,6 +72,7 @@ type AuthToken struct {
 	CreatedAt int64  `json:"created_at"`
 	LastUsed  int64  `json:"last_used"`
 	LastIP    string `json:"last_ip"`
+	Scope     string `json:"scope"` // "mcp" or "api"
 }
 
 var ErrAuthUserExists = errors.New("auth user already exists")
@@ -167,9 +174,9 @@ func (d *DB) ListAuthSessions() ([]AuthSession, error) {
 	return out, rows.Err()
 }
 
-func (d *DB) CreateAuthToken(name, prefix, tokenHash string, createdAt int64) (int64, error) {
-	res, err := d.db.Exec(`INSERT INTO auth_tokens (name, prefix, token_hash, created_at) VALUES (?, ?, ?, ?)`,
-		name, prefix, tokenHash, createdAt)
+func (d *DB) CreateAuthToken(name, prefix, tokenHash, scope string, createdAt int64) (int64, error) {
+	res, err := d.db.Exec(`INSERT INTO auth_tokens (name, prefix, token_hash, scope, created_at) VALUES (?, ?, ?, ?, ?)`,
+		name, prefix, tokenHash, scope, createdAt)
 	if err != nil {
 		return 0, err
 	}
@@ -178,8 +185,8 @@ func (d *DB) CreateAuthToken(name, prefix, tokenHash string, createdAt int64) (i
 
 func (d *DB) GetAuthTokenByHash(tokenHash string) (AuthToken, bool, error) {
 	var t AuthToken
-	err := d.db.QueryRow(`SELECT id, name, prefix, created_at, last_used, last_ip FROM auth_tokens WHERE token_hash = ?`, tokenHash).
-		Scan(&t.ID, &t.Name, &t.Prefix, &t.CreatedAt, &t.LastUsed, &t.LastIP)
+	err := d.db.QueryRow(`SELECT id, name, prefix, created_at, last_used, last_ip, scope FROM auth_tokens WHERE token_hash = ?`, tokenHash).
+		Scan(&t.ID, &t.Name, &t.Prefix, &t.CreatedAt, &t.LastUsed, &t.LastIP, &t.Scope)
 	if err == sql.ErrNoRows {
 		return t, false, nil
 	}
@@ -201,7 +208,7 @@ func (d *DB) DeleteAuthToken(id int64) (bool, error) {
 }
 
 func (d *DB) ListAuthTokens() ([]AuthToken, error) {
-	rows, err := d.db.Query(`SELECT id, name, prefix, created_at, last_used, last_ip FROM auth_tokens ORDER BY created_at`)
+	rows, err := d.db.Query(`SELECT id, name, prefix, created_at, last_used, last_ip, scope FROM auth_tokens ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +216,7 @@ func (d *DB) ListAuthTokens() ([]AuthToken, error) {
 	var out []AuthToken
 	for rows.Next() {
 		var t AuthToken
-		if err := rows.Scan(&t.ID, &t.Name, &t.Prefix, &t.CreatedAt, &t.LastUsed, &t.LastIP); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Prefix, &t.CreatedAt, &t.LastUsed, &t.LastIP, &t.Scope); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

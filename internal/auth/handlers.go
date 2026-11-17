@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -60,7 +61,7 @@ func (h *handlers) fail(w http.ResponseWriter, err error) {
 		code = http.StatusServiceUnavailable
 	case errors.Is(err, ErrNotFound):
 		code = http.StatusNotFound
-	case errors.Is(err, ErrWeakPassword), errors.Is(err, ErrLongPassword), errors.Is(err, ErrBadUsername), errors.Is(err, ErrBadName):
+	case errors.Is(err, ErrWeakPassword), errors.Is(err, ErrLongPassword), errors.Is(err, ErrBadUsername), errors.Is(err, ErrBadName), errors.Is(err, ErrBadScope):
 		code = http.StatusBadRequest
 	}
 	msg := err.Error()
@@ -96,12 +97,28 @@ func safeNext(n string) string {
 	return n
 }
 
+func (h *handlers) sessionOK(r *http.Request) bool {
+	if !h.s.Enabled() {
+		return true
+	}
+	c, err := r.Cookie(cookieName)
+	if err != nil || bearer(r) != "" {
+		return false
+	}
+	ok, _ := h.s.AuthenticateSession(c.Value)
+	return ok
+}
+
 func (h *handlers) authenticated(r *http.Request) bool {
 	if !h.s.Enabled() {
 		return true
 	}
 	if tok := bearer(r); tok != "" {
-		return h.s.IsInternal(tok) || h.s.AuthenticateToken(tok, clientIP(r, h.trusted))
+		if h.s.IsInternal(tok) {
+			return true
+		}
+		_, ok := h.s.AuthenticateToken(tok, clientIP(r, h.trusted))
+		return ok
 	}
 	if c, err := r.Cookie(cookieName); err == nil {
 		ok, _ := h.s.AuthenticateSession(c.Value)
@@ -124,7 +141,9 @@ func (h *handlers) status(w http.ResponseWriter, r *http.Request) {
 	st := h.s.State()
 	out := map[string]any{"enabled": st.Enabled, "configured": st.Configured, "available": st.Available,
 		"fail_closed": st.FailClosed, "reset_pending": st.ResetPending, "authenticated": h.authenticated(r)}
-	if out["authenticated"] == true && st.Configured {
+	// The username only to a browser session: a token holder has no use for it, and it
+	// would be half of a password guess.
+	if out["authenticated"] == true && st.Configured && h.sessionOK(r) {
 		out["username"] = st.Username
 	}
 	writeJSON(w, 200, out)
@@ -136,6 +155,7 @@ type creds struct {
 	Old      string `json:"old"`
 	New      string `json:"new"`
 	Name     string `json:"name"`
+	Scope    string `json:"scope"`
 }
 
 func (h *handlers) setup(w http.ResponseWriter, r *http.Request) {
@@ -317,12 +337,17 @@ func (h *handlers) createToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
 		return
 	}
-	id, tok, err := h.s.CreateToken(strings.TrimSpace(c.Name))
+	if c.Scope == "" {
+		c.Scope = ScopeMCP // the narrower one
+	}
+	name := strings.TrimSpace(c.Name)
+	id, tok, err := h.s.CreateToken(name, c.Scope)
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"id": id, "name": strings.TrimSpace(c.Name), "token": tok})
+	h.s.logf("[Auth] token id %d %q (%s, %s…) created from %s", id, name, c.Scope, tokenPrefix(tok), clientIP(r, h.trusted))
+	writeJSON(w, 200, map[string]any{"id": id, "name": name, "scope": c.Scope, "token": tok})
 }
 
 func (h *handlers) revokeToken(w http.ResponseWriter, r *http.Request) {
@@ -331,9 +356,18 @@ func (h *handlers) revokeToken(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, ErrNotFound)
 		return
 	}
+	what := fmt.Sprintf("id %d", id) // the log names it as its creation line did
+	if list, err := h.s.Tokens(); err == nil {
+		for _, t := range list {
+			if t.ID == id {
+				what = fmt.Sprintf("id %d %q (%s, %s…)", id, t.Name, t.Scope, t.Prefix)
+			}
+		}
+	}
 	if err := h.s.RevokeToken(id); err != nil {
 		h.fail(w, err)
 		return
 	}
+	h.s.logf("[Auth] token %s revoked from %s", what, clientIP(r, h.trusted))
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

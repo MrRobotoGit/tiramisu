@@ -18,6 +18,7 @@ const (
 var (
 	latestVersion   atomic.Value
 	updateAvailable atomic.Bool
+	stars           atomic.Int64
 	logger          = log.New(log.Writer(), "[Updater] ", log.LstdFlags)
 )
 
@@ -31,6 +32,9 @@ func LatestVersion() string {
 	return v
 }
 
+// Stars returns the GitHub star count from the last check, 0 when unknown.
+func Stars() int64 { return stars.Load() }
+
 // UpdateAvailable returns true if a newer version is available.
 func UpdateAvailable() bool {
 	return updateAvailable.Load()
@@ -39,6 +43,10 @@ func UpdateAvailable() bool {
 // Start begins the periodic update check loop.
 // Call in a goroutine; respects stop channel for shutdown.
 func Start(currentVersion string, stop <-chan struct{}) {
+	// Stars at once: the rail shows them as soon as the page loads, not a minute later.
+	if n, err := CheckStars(repo); err == nil {
+		stars.Store(int64(n))
+	}
 	time.Sleep(checkInitial)
 
 	checkOnce(currentVersion)
@@ -57,6 +65,10 @@ func Start(currentVersion string, stop <-chan struct{}) {
 }
 
 func checkOnce(currentVersion string) {
+	// Shown in the rail next to "Star on GitHub"; a failure keeps the last count.
+	if n, err := CheckStars(repo); err == nil {
+		stars.Store(int64(n))
+	}
 	latest, err := CheckLatest(repo)
 	if err != nil {
 		logger.Printf("Check failed: %v", err)

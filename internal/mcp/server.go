@@ -57,6 +57,8 @@ type Deps struct {
 	Logger   *log.Logger
 	// InternalToken authenticates the music tools' loopback calls while sign-in is on.
 	InternalToken string
+	// SignInOn says whether :9080 requires sign-in; nil means off. See rebindGuard.
+	SignInOn func() bool
 }
 
 type server struct {
@@ -93,7 +95,9 @@ func NewServer(deps Deps) *sdk.Server {
 // Register mounts the server on mux at /mcp.
 func Register(mux *http.ServeMux, deps Deps) {
 	srv := NewServer(deps)
-	mux.Handle("/mcp", sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv }, nil))
+	h := sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv },
+		&sdk.StreamableHTTPOptions{DisableLocalhostProtection: true}) // rebindGuard does it
+	mux.Handle("/mcp", rebindGuard(deps.SignInOn, h))
 }
 
 // searchConfig is the live profile, translated as the syncers translate it.

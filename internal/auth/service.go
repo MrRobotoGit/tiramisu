@@ -31,6 +31,7 @@ var (
 	ErrNotFound       = errors.New("not found")
 	ErrBadUsername    = errors.New("username must be 1-64 characters, no surrounding spaces")
 	ErrBadName        = errors.New("name must be 1-64 characters")
+	ErrBadScope       = errors.New(`scope must be "mcp" or "api"`)
 )
 
 // bcryptSlots bounds concurrent bcrypt work: each hash costs a Pi 4 core for ~0.3 s.
@@ -55,7 +56,7 @@ type Store interface {
 	DeleteAuthSessionsExcept(idHash string) error
 	PurgeExpiredAuthSessions(now int64) error
 	ListAuthSessions() ([]metadb.AuthSession, error)
-	CreateAuthToken(name, prefix, tokenHash string, createdAt int64) (int64, error)
+	CreateAuthToken(name, prefix, tokenHash, scope string, createdAt int64) (int64, error)
 	GetAuthTokenByHash(tokenHash string) (metadb.AuthToken, bool, error)
 	TouchAuthToken(id, lastUsed int64, ip string) error
 	DeleteAuthToken(id int64) (bool, error)
@@ -77,9 +78,17 @@ type State struct {
 type cacheEntry struct {
 	at        time.Time
 	expiresAt int64 // sessions only
-	tokenID   int64 // tokens only
+	tokenID   int64  // tokens only
+	scope     string // tokens only
 	lastTouch time.Time
 }
+
+// Token scopes: an MCP token opens /mcp and nothing else, an API token the HTTP API
+// and not /mcp. Neither manages tokens or the sign-in: that needs a browser session.
+const (
+	ScopeMCP = "mcp"
+	ScopeAPI = "api"
+)
 
 type Service struct {
 	store         Store
@@ -468,9 +477,10 @@ func (s *Service) AuthenticateSession(session string) (ok, renewed bool) {
 	return true, true
 }
 
-func (s *Service) AuthenticateToken(tok, ip string) bool {
+// AuthenticateToken reports whether tok is a valid API token, and its scope.
+func (s *Service) AuthenticateToken(tok, ip string) (scope string, ok bool) {
 	if s.store == nil || !strings.HasPrefix(tok, tokenPrefixLiteral) || len(tok) != len(tokenPrefixLiteral)+43 {
-		return false
+		return "", false
 	}
 	h := hashSecret(tok)
 	key := "t:" + h
@@ -479,15 +489,15 @@ func (s *Service) AuthenticateToken(tok, ip string) bool {
 	if e == nil {
 		t, found, err := s.store.GetAuthTokenByHash(h)
 		if err != nil || !found {
-			return false
+			return "", false
 		}
-		e = &cacheEntry{at: now, tokenID: t.ID, lastTouch: time.Unix(t.LastUsed, 0)}
+		e = &cacheEntry{at: now, tokenID: t.ID, scope: t.Scope, lastTouch: time.Unix(t.LastUsed, 0)}
 		s.store_(key, e, gen, now)
 	}
 	if s.claimTouch(e, tokenTouch, now) {
 		_ = s.store.TouchAuthToken(e.tokenID, now.Unix(), ip)
 	}
-	return true
+	return e.scope, true
 }
 
 func (s *Service) Sessions() ([]metadb.AuthSession, error) {
@@ -507,15 +517,18 @@ func (s *Service) RevokeSessionByHash(idHash string) error {
 	return err
 }
 
-func (s *Service) CreateToken(name string) (int64, string, error) {
+func (s *Service) CreateToken(name, scope string) (int64, string, error) {
 	if s.store == nil {
 		return 0, "", ErrUnavailable
 	}
 	if name == "" || utf8.RuneCountInString(name) > 64 {
 		return 0, "", ErrBadName
 	}
+	if scope != ScopeMCP && scope != ScopeAPI {
+		return 0, "", ErrBadScope
+	}
 	tok := newToken()
-	id, err := s.store.CreateAuthToken(name, tokenPrefix(tok), hashSecret(tok), s.now().Unix())
+	id, err := s.store.CreateAuthToken(name, tokenPrefix(tok), hashSecret(tok), scope, s.now().Unix())
 	return id, tok, err
 }
 

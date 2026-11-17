@@ -80,7 +80,7 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 
 ## Contents
 
-[Overview](#overview) · [Screenshots](#screenshots) · [Features](#features) · [How It Fits Together](#how-it-fits-together-plex-jellyfin-and-infuse) · [Requirements](#requirements) · [Quick Install](#quick-install) · [Docker](#docker) · [Sign-in and API Tokens](#sign-in-and-api-tokens) · [Documentation](#documentation) · [FAQ](#faq) · [Contributing and Security](#contributing-and-security) · [Support](#support) · [Acknowledgements](#acknowledgements) · [License](#license)
+[Overview](#overview) · [Screenshots](#screenshots) · [Features](#features) · [How It Fits Together](#how-it-fits-together-plex-jellyfin-and-infuse) · [Requirements](#requirements) · [Quick Install](#quick-install) · [Docker](#docker) · [Sign-in and Tokens](#sign-in-and-tokens) · [Documentation](#documentation) · [FAQ](#faq) · [Contributing and Security](#contributing-and-security) · [Support](#support) · [Acknowledgements](#acknowledgements) · [License](#license)
 
 ---
 
@@ -217,29 +217,33 @@ The full guide covers persistent state in `/state`, updates, mount propagation a
 
 ---
 
-## Sign-in and API Tokens
+## Sign-in and Tokens
 
-<p align="center"><img src="docs/screenshots/ui-access-light.png" alt="Control Panel, Access section: sign-in required, four named API tokens with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, API tokens and browser sessions (sample data)</sub></p>
+<p align="center"><img src="docs/screenshots/ui-access-light.png" alt="Control Panel, Access section: sign-in required, four named tokens, two for MCP and two for the API, with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, MCP and API tokens, browser sessions (sample data)</sub></p>
 
 Out of the box, anyone who can reach `:9080` on your network can use the Control Panel, the Dashboard and the APIs. Turn on sign-in in **Control Panel → Access** to require a password for all of them: the Control Panel, the Dashboard, every `/api/*` endpoint, `/metrics` and the MCP server.
 
 - **One user, one password.** A browser stays signed in for 30 days from its last visit. The Access page lists the signed-in browsers and can sign out all the others.
-- **API tokens for everything that is not a browser.** Hermes, Claude Code, the macOS menu bar app and your scripts each get a named token (`tmr_…`), sent as `Authorization: Bearer <token>`. A token has full access and does not expire. Its value is shown once, when you create it, and you can revoke it at any time from the same page.
+- **Two kinds of token for everything that is not a browser.** Each client gets a named token (`tmr_…`), sent as `Authorization: Bearer <token>`. An **MCP token** opens only the MCP server and its library tools: give it to Hermes or Claude Code. An **API token** opens the HTTP API: give it to the macOS menu bar app and your scripts. Neither can create or revoke tokens, change the password or turn sign-in off: that takes the Control Panel, signed in. Tokens do not expire; the value is shown once, when you create it, and you can revoke it at any time from the same page.
 - **Create the tokens first.** Tokens can be created while sign-in is still off: configure your clients, then turn it on, and nothing stops working.
 - **Plex and Jellyfin keep working.** Their playback webhooks stay open, so the media server needs no changes.
 - **Keys stay on the server.** Your Plex/Jellyfin token and your TMDB and Prowlarr API keys are write-only: the Control Panel shows whether each one is set, never its value.
 - **The engine API is private.** GoStorm's API on `:8090` listens on the Tiramisu host only, so no other device can manage torrents behind sign-in's back.
 
 ```bash
-# An MCP client (Claude Code) with a token
+# An MCP client (Claude Code) with an MCP token
 claude mcp add --transport http tiramisu http://<host>:9080/mcp \
   --header "Authorization: Bearer tmr_..."
 
-# A script
+# A script with an API token
 curl -H "Authorization: Bearer tmr_..." http://<host>:9080/api/health
 ```
 
 **Forgot the password?** Stop the service, run `tiramisu --reset-auth` on the host, start it again: the user, the sessions and the tokens are cleared and sign-in is off. With Docker, start the container once with `-e TIRAMISU_RESET_AUTH=1`, then remove the variable.
+
+Every endpoint is documented inside Tiramisu too: **Reference → API** in the side menu (`/api-docs`) lists the stable API with parameters, a ready-to-copy `curl` for your own address and sample responses, and puts the MCP server address first.
+
+<p align="center"><img src="docs/screenshots/ui-api-light.png" alt="Reference, API page: the MCP server box with its address and client config, then the endpoints grouped by area, one of them open with its parameters, request and response" width="720"><br><sub><b>Reference → API</b>: the MCP server and the HTTP endpoints, documented in the app</sub></p>
 
 Sign-in is meant for your home network or a reverse proxy with HTTPS in front of it; see [Sign-in and API tokens](docs/api.md#sign-in-and-api-tokens) for the details: rate limits, reverse proxies and what happens if the state database cannot be read.
 
@@ -307,6 +311,8 @@ Tiramisu is free and open source. If it is useful to you, you can support its de
 ## Acknowledgements
 
 Tiramisu builds on [TorrServer](https://github.com/YouROK/TorrServer) and [anacrolix/torrent](https://github.com/anacrolix/torrent); both are embedded as patched forks.
+
+The optional peer country and network view uses the DB-IP Lite databases: [IP geolocation by DB-IP](https://db-ip.com), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ---
 

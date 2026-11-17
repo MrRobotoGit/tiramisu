@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"tiramisu/internal/apidocs"
 	"tiramisu/internal/auth"
 	"tiramisu/internal/cache"
 	"tiramisu/internal/catalog"
@@ -5214,6 +5216,7 @@ func main() {
 
 	// Sign-in on :9080 (opt-in). The state lives in tiramisu.db, never in config.json.
 	authSvc, authTrusted := auth.Start(http.DefaultServeMux, stateDB, GetStateDir(), gc().AuthTrustedProxies, logger.Printf)
+	apidocs.Register(http.DefaultServeMux, authSvc.Enabled)
 
 	http.HandleFunc("/plex/webhook", handlePlexWebhook)
 
@@ -5227,9 +5230,12 @@ func main() {
 		raTotal, raActive, raEntries := raCache.Stats()
 		raStale := raTotal - raActive
 		raBudget := gc().ReadAheadBudget
-		raPercent := float64(raTotal) / float64(raBudget) * 100
-		raActivePercent := float64(raActive) / float64(raBudget) * 100
-		raStalePercent := float64(raStale) / float64(raBudget) * 100
+		var raPercent, raActivePercent, raStalePercent float64 // 0, not NaN, with no budget
+		if raBudget > 0 {
+			raPercent = float64(raTotal) / float64(raBudget) * 100
+			raActivePercent = float64(raActive) / float64(raBudget) * 100
+			raStalePercent = float64(raStale) / float64(raBudget) * 100
+		}
 
 		natPort := atomic.LoadInt64(&natpmp.CurrentNatPort)
 
@@ -5264,9 +5270,11 @@ func main() {
 		shortStream, shortFetch := native.ShortReadCounts()
 		repairedStream, unfilledStream := native.ShortReadRepairCounts()
 
-		fmt.Fprintf(w, `{"version":"%s", "config_source":"%s", "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":"%s", "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d, "peer_conns_tcp":%d, "peer_conns_utp":%d, "peer_rated_tcp":%d, "peer_rated_utp":%d, "peer_useful_bps_tcp":%.0f, "peer_useful_bps_utp":%.0f, "peer_eject_count_utp":%d, "peer_churn_count":%d, "peer_churn_count_utp":%d, "deadline_pieces":%d, "audio_namespace_state":"%s", "audio_namespace_entries":%d, "gradient2_peers":%d, "gradient2_backing_off":%d, "gradient2_limit_min":%d, "gradient2_limit_max":%d, "shield_active":%t, "shield_last_corruption":%d, "shield_need_s":%d}`,
-			AppVersion,
-			gc().ConfigPath,
+		jsonString := func(v string) string { b, _ := json.Marshal(v); return string(b) }
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"version":%s, "config_source":%s, "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":%s, "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d, "peer_conns_tcp":%d, "peer_conns_utp":%d, "peer_rated_tcp":%d, "peer_rated_utp":%d, "peer_useful_bps_tcp":%.0f, "peer_useful_bps_utp":%.0f, "peer_eject_count_utp":%d, "peer_churn_count":%d, "peer_churn_count_utp":%d, "deadline_pieces":%d, "audio_namespace_state":%s, "audio_namespace_entries":%d, "gradient2_peers":%d, "gradient2_backing_off":%d, "gradient2_limit_min":%d, "gradient2_limit_max":%d, "shield_active":%t, "shield_last_corruption":%d, "shield_need_s":%d, "github_stars":%d}`,
+			jsonString(AppVersion),
+			jsonString(gc().ConfigPath),
 			time.Since(startTime),
 			cacheStats.Entries, float64(cacheStats.Size)/(1024*1024),
 			cleanupStats.DeletedHashesTotal, cleanupStats.OffsetsTotal, cleanupStats.ActivitiesTotal,
@@ -5280,7 +5288,7 @@ func main() {
 			raTotal, raActive, raStale, raEntries, raBudget,
 			raPercent, raActivePercent, raStalePercent,
 			natPort,
-			updater.LatestVersion(), updater.UpdateAvailable(),
+			jsonString(updater.LatestVersion()), updater.UpdateAvailable(),
 			warmupBucketsJSON,
 			hedgeTriggerTotal, hedgeCircuitOpenAny, fetchFlightDedupCount.Load(), peerStats.EjectTotal, torr.V304BannedCount(),
 			torrent.IPBlocklistRejections(), torrent.IPBlocklistDistinctIPs(),
@@ -5288,9 +5296,9 @@ func main() {
 			peerStats.ConnsTCP, peerStats.ConnsUTP, peerStats.RatedTCP, peerStats.RatedUTP,
 			peerStats.UsefulBpsTCP, peerStats.UsefulBpsUTP,
 			peerStats.EjectUTP, peerStats.ChurnTotal, peerStats.ChurnUTP, deadlinePieces,
-			audioNamespaceState(), audioNamespaceEntries(),
+			jsonString(audioNamespaceState()), audioNamespaceEntries(),
 			g2Stats.Peers, g2Stats.BackingOff, g2Stats.LimitMin, g2Stats.LimitMax,
-			shieldOn, shieldLastCorr, shieldNeed)
+			shieldOn, shieldLastCorr, shieldNeed, updater.Stars())
 	})
 
 	// Which blocklist ranges are actually rejecting peers. The aggregate counters say
@@ -5342,6 +5350,7 @@ func main() {
 	})
 
 	http.HandleFunc("/metrics/ttff", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"sessions_completed":%d,"sessions_filtered":%d,`+
 			`"open_to_header_ms":%s,"open_to_deep_read_ms":%s,"seek_latency_ms":%s,`+
 			`"read_latency_ms":{"warmup_head":%s,"warmup_tail":%s,"racache_hit":%s,"fetch_block":%s},`+
@@ -5360,6 +5369,7 @@ func main() {
 		w.Write(settingsHTML)
 	})
 
+	var configMu sync.Mutex // one save at a time: each one patches the config the last one stored
 	http.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" {
 			w.Header().Set("Content-Type", "application/json")
@@ -5367,25 +5377,41 @@ func main() {
 			json.NewEncoder(w).Encode(gc().Redacted()) // secrets are write-only (issue #26)
 			return
 		}
-		if r.Method == "POST" {
-			var newCfg config.Config
-			if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
+		if r.Method != "POST" {
+			w.Header().Set("Allow", "GET, POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		{
+			configMu.Lock()
+			defer configMu.Unlock()
+			body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+			if err != nil {
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			newCfg.KeepSecrets(gc()) // an empty secret means "unchanged"
-			// Update file
-			data, _ := json.MarshalIndent(newCfg, "", "  ")
-			if err := os.WriteFile(gc().ConfigPath, data, 0600); err != nil {
+			// A merge: keys left out keep their value, so a partial body cannot zero the ports.
+			newCfg, err := gc().Patch(body)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			// Trusted proxies decide whose X-Forwarded-For the login rate limit believes: a
+			// sign-in setting, so only a browser session may change it, not an API token.
+			if authSvc.Enabled() && auth.SessionFrom(r) == "" && !slices.Equal(newCfg.AuthTrustedProxies, gc().AuthTrustedProxies) {
+				http.Error(w, "auth_trusted_proxies changes only from the Control Panel, signed in", http.StatusForbidden)
+				return
+			}
+			if err := newCfg.WriteFile(gc().ConfigPath); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			_ = os.Chmod(gc().ConfigPath, 0600) // existing installs were written 0644
 			// Reload in memory (V1.4.0 Live Update)
 			oldEnabled := gc().BlockListEnabled
 			oldURL := gc().BlockListURL
 			oldFilter := gc().BlockListFilter
 			cfg := config.LoadConfig()
+			cfg.RootPath = gc().RootPath // comes from --path at start, not from the file
 			globalConfig.Store(&cfg)
 			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
 
@@ -5604,32 +5630,8 @@ func main() {
 
 		sched := scheduler.New(schedCfg, syncers, statePath)
 
-		http.HandleFunc("/api/scheduler/status", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(sched.Status())
-		})
-		http.HandleFunc("/api/scheduler/", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				http.Error(w, "POST only", 405)
-				return
-			}
-			path := strings.TrimPrefix(r.URL.Path, "/api/scheduler/")
-			if strings.HasSuffix(path, "/stop") {
-				name := strings.TrimSuffix(path, "/stop")
-				if err := sched.StopJob(name); err != nil {
-					http.Error(w, err.Error(), 409)
-					return
-				}
-				w.WriteHeader(http.StatusAccepted)
-				return
-			}
-			name := strings.TrimSuffix(path, "/run")
-			if err := sched.TriggerRun(name); err != nil {
-				http.Error(w, err.Error(), 409)
-				return
-			}
-			w.WriteHeader(http.StatusAccepted)
-		})
+		http.HandleFunc("/api/scheduler/status", sched.ServeStatus)
+		http.HandleFunc("/api/scheduler/", sched.ServeAction)
 
 		if gc().Scheduler.Enabled {
 			safeGo(func() {
@@ -5735,6 +5737,7 @@ func main() {
 			Logger:   logger,
 
 			InternalToken: authSvc.InternalToken(),
+			SignInOn:      authSvc.Enabled,
 		})
 	}
 

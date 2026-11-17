@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tiramisu — API</title>
+<link rel="stylesheet" href="/ui/theme.css">
+<script src="/ui/theme.js"></script>
+<script src="/ui/auth.js"></script>
+<style>
+.mcp { border-color: var(--ink); }
+.mcp .card-body { flex-direction: row; gap: 32px; }
+.mcp .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.mcp .col.l { flex: 0 0 440px; }
+.mcp .col.r { flex: 1; }
+.urlbox { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; background: var(--well); border: 1px solid var(--hair2); border-radius: 4px; }
+.urlbox code { flex: 1; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+.note { display: flex; gap: 12px; }
+.note::before { content: ""; flex: 0 0 2px; background: var(--hair2); }
+.note.on::before { background: var(--accent); }
+.note > div { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.tools .chip-tag { text-transform: none; letter-spacing: 0; font-family: var(--mono); font-size: 10px; }
+.snip { margin: 0; padding: 14px 16px; background: var(--term); color: var(--term-text); border-radius: 4px; font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.snip-head { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.snip-head .spacer { flex: 1; }
+.authstrip { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 14px 20px; background: var(--well); border: 1px solid var(--hair); border-radius: 6px; }
+.jump { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.jump a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--hair2); border-radius: 4px; color: var(--ink2); text-decoration: none; font-size: 12px; }
+.jump a:hover { border-color: var(--ink); color: var(--ink); }
+.jump a .mono { font-size: 10px; color: var(--ink3); }
+.grp { scroll-margin-top: 16px; }
+.grp .card-head .desc { color: var(--ink3); font-size: 12px; text-transform: none; letter-spacing: 0; }
+.ep { border-top: 1px solid var(--hair); }
+.ep > summary { list-style: none; display: grid; grid-template-columns: 58px minmax(0, 300px) minmax(0, 1fr) 12px; gap: 16px; align-items: center; padding: 12px 24px; cursor: pointer; }
+.ep > summary::-webkit-details-marker { display: none; }
+.ep > summary:hover { background: var(--well); }
+.ep[open] > summary, .ep[open] .ep-body { background: var(--well); }
+.ep .path { font-family: var(--mono); font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+.ep .sum { color: var(--ink2); }
+.ep .chev { width: 8px; height: 8px; border-right: 1.3px solid var(--ink3); border-bottom: 1.3px solid var(--ink3); transform: rotate(-45deg); }
+.ep[open] .chev { transform: rotate(45deg); }
+.mth { display: inline-flex; justify-content: center; padding: 3px 0; border: 1px solid var(--hair2); border-radius: 3px; font: 500 10px var(--mono); color: var(--ink2); }
+.mth.post { background: var(--ink); border-color: var(--ink); color: var(--inv); }
+.mth.delete { border-color: var(--accent-ink); color: var(--accent-ink); }
+.ep-body { display: flex; flex-direction: column; gap: 18px; padding: 4px 24px 24px 98px; }
+.ep-body p { margin: 0; color: var(--ink2); max-width: 820px; }
+.params { width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid var(--hair); }
+.params th { text-align: left; padding: 8px 14px; background: var(--panel); font-size: 10px; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; color: var(--ink3); }
+.params td { padding: 9px 14px; border-top: 1px solid var(--hair); color: var(--ink2); vertical-align: top; }
+.params td:first-child { font-family: var(--mono); color: var(--ink); white-space: nowrap; }
+.params td.t { font-family: var(--mono); font-size: 11px; color: var(--ink3); white-space: nowrap; }
+.ex { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.ex > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.codes { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; font-size: 12px; color: var(--ink3); }
+.codes b { font: 500 11px var(--mono); color: var(--ink); margin-right: 6px; }
+.empty-filter { padding: 24px; color: var(--ink3); }
+.filter-m { display: none; }
+@media (max-width: 900px) {
+  .filter-m { display: flex; }
+  .mcp .card-body { flex-direction: column; }
+  .mcp .col.l { flex: none; }
+  .ep > summary { grid-template-columns: 52px minmax(0, 1fr) 12px; padding: 12px 16px; }
+  .ep .sum { grid-column: 2 / 3; }
+  .ep .chev { grid-row: 1; grid-column: 3; }
+  .ep-body { padding: 4px 16px 20px; }
+  .ex { grid-template-columns: minmax(0, 1fr); }
+  .params td.t, .params th.t { display: none; }
+}
+</style>
+</head>
+<body data-origin="{{.Origin}}">
+<div class="app">
+  <aside class="rail" aria-label="Navigation">
+    <a class="brand" href="/dashboard">
+      <span class="grille" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      <span><span class="word">tiramisu</span><br><span class="sub">unified engine</span></span>
+    </a>
+    <nav class="nav">
+      <span class="label">Monitor</span>
+      <a href="/dashboard"><span class="num">◉</span>Dashboard</a>
+    </nav>
+    <nav class="nav">
+      <span class="label">Settings</span>
+      <a href="/control#streaming"><span class="num">01</span>Streaming &amp; FUSE</a>
+      <a href="/control#network"><span class="num">02</span>Network &amp; VPN</a>
+      <a href="/control#sources"><span class="num">03</span>Sources &amp; Media</a>
+      <a href="/control#engine"><span class="num">04</span>Engine</a>
+      <a href="/control#release"><span class="num">05</span>Release Selection</a>
+      <a href="/control#scheduler"><span class="num">06</span>Scheduler</a>
+      <a href="/control#access"><span class="num">07</span>Access</a>
+    </nav>
+    <nav class="nav">
+      <span class="label">Reference</span>
+      <a href="/api-docs" class="active"><span class="num">{}</span>API</a>
+    </nav>
+    <div class="rail-foot">
+      <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Engine online</span></div>
+      <span class="mono faint small" id="rail-version">—</span>
+      <a class="row" id="rail-update" hidden href="https://github.com/MrRobotoGit/tiramisu/releases/latest" target="_blank" rel="noopener"><span class="chip-tag">Update</span><span class="txt small"></span></a>
+      <hr>
+      <div class="row">
+        <div class="seg sm" role="group" aria-label="Theme">
+          <button type="button" data-theme-choice="light" onclick="TiramisuUI.setTheme('light')">Light</button>
+          <button type="button" data-theme-choice="dark" onclick="TiramisuUI.setTheme('dark')">Dark</button>
+          <button type="button" data-theme-choice="auto" onclick="TiramisuUI.setTheme('auto')">Auto</button>
+        </div>
+      </div>
+      <a href="https://github.com/sponsors/MrRobotoGit" target="_blank" rel="noopener">♥&nbsp; Support the project</a>
+      <a href="https://github.com/MrRobotoGit/tiramisu" target="_blank" rel="noopener">★&nbsp; Star on GitHub <span class="chip-tag" id="rail-stars" hidden></span></a>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button type="button" class="btn sm menu-btn" onclick="TiramisuUI.toggleRail(true)" aria-label="Open navigation">≡</button>
+      <span class="crumb hide-sm">Reference &nbsp;/&nbsp; API</span>
+      <span class="spacer"></span>
+      <div class="search hide-sm"><div class="input"><span class="faint" aria-hidden="true">⌕</span><input type="search" id="filter" placeholder="Filter endpoints…" autocomplete="off" aria-label="Filter endpoints"><span class="kbd">/</span></div></div>
+      <a class="btn sm ghost" href="https://github.com/MrRobotoGit/tiramisu/blob/main/docs/api.md" target="_blank" rel="noopener"><span class="ico">↗</span><span class="hide-sm">api.md on GitHub</span></a>
+    </header>
+
+    <div class="content">
+      <div class="page-head">
+        <div class="text">
+          <span class="label">Reference</span>
+          <h1 class="h1">API</h1>
+          <p>The HTTP API on :9080 for scripts, agents and integrations. Only the stable contract is listed: these request and response shapes hold across versions. Everything else the UI calls may change.</p>
+        </div>
+      </div>
+
+      <section class="card mcp" aria-label="MCP server">
+        <div class="card-head"><span class="label ink">MCP server</span><span class="chip-tag">Streamable HTTP</span><span class="spacer"></span><span class="lamp run"></span><span class="small faint">{{len .MCPTools}} tools</span></div>
+        <div class="card-body">
+          <div class="col l">
+            <p style="margin:0;color:var(--ink2)">Library tools for AI agents: search releases with this instance's scoring profile, add the one you pick, list and remove entries. Any MCP client that speaks Streamable HTTP can connect.</p>
+            <div class="urlbox"><code id="mcp-url" data-o>{{.Origin}}/mcp</code><button type="button" class="btn sm" data-copy="#mcp-url">Copy</button></div>
+            {{if .AuthEnabled}}
+            <div class="note on"><div><span class="small" style="color:var(--ink2)">Sign-in is on: the client must send an MCP token in the Authorization header. An API token is refused here.</span><a class="btn sm" href="/control#access">Create an MCP token in Access &nbsp;→</a></div></div>
+            {{else}}
+            <div class="note"><div><span class="small" style="color:var(--ink2)">Sign-in is off: no token needed today, but /mcp refuses requests that a reverse proxy on this machine forwards to 127.0.0.1 with another host name. Create an MCP token anyway, so clients keep working when you turn sign-in on.</span><a class="btn sm" href="/control#access">Create an MCP token in Access &nbsp;→</a></div></div>
+            {{end}}
+            <div class="tools">{{range .MCPTools}}<span class="chip-tag">{{.}}</span>{{end}}</div>
+          </div>
+          <div class="col r">
+            <div class="seg sm" role="tablist" aria-label="Client" id="client-seg">
+              <button type="button" class="active" data-client="claude">Claude Code</button>
+              <button type="button" data-client="hermes">Hermes</button>
+              <button type="button" data-client="curl">curl</button>
+            </div>
+            <pre class="snip" id="snip-claude" data-o>claude mcp add --transport http tiramisu \
+  {{.Origin}}/mcp{{if .AuthEnabled}} \
+  --header "Authorization: Bearer tmr_…"{{end}}</pre>
+            <pre class="snip" id="snip-hermes" data-o hidden># ~/.hermes/config.yaml
+mcp_servers:
+  Tiramisu:
+    url: {{.Origin}}/mcp{{if .AuthEnabled}}
+    headers:
+      Authorization: "Bearer tmr_…"{{end}}</pre>
+            <pre class="snip" id="snip-curl" data-o hidden>curl -X POST {{.Origin}}/mcp \{{if .AuthEnabled}}
+  -H 'Authorization: Bearer tmr_…' \{{end}}
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}'</pre>
+            <span class="small faint">Access › New token shows this config with the real token filled in.</span>
+          </div>
+        </div>
+      </section>
+
+      <div class="authstrip">
+        <span class="label">Authentication</span>
+        <code style="color:var(--ink)">Authorization: Bearer tmr_…</code>
+        <span class="small faint" style="flex:1;min-width:240px">An API token, created in Access (MCP tokens open only /mcp). {{if .AuthEnabled}}Every endpoint below needs it; without it the answer is 401 JSON. The browser uses its session.{{else}}Sign-in is off, so no header is needed today. Send it anyway: it starts to matter the moment sign-in is turned on.{{end}}</span>
+        <div class="codes" style="flex-basis:100%"><span class="label">Any endpoint</span>{{range .Common}}<span><b>{{.Code}}</b>{{.Desc}}</span>{{end}}</div>
+      </div>
+
+      <div class="input filter-m"><span class="faint" aria-hidden="true">⌕</span><input type="search" id="filter-m" placeholder="Filter endpoints…" autocomplete="off" aria-label="Filter endpoints"></div>
+
+      <nav class="jump" aria-label="Groups">
+        <span class="label">Jump to</span>
+        {{range .Groups}}<a href="#{{.ID}}">{{.Name}} <span class="mono">{{len .Endpoints}}</span></a>{{end}}
+      </nav>
+
+      {{range $i, $g := .Groups}}
+      <section class="card grp" id="{{$g.ID}}">
+        <div class="card-head"><span class="num">{{printf "%02d" (inc $i)}}</span><span class="label ink">{{$g.Name}}</span><span class="desc">{{$g.Desc}}</span></div>
+        {{range $g.Endpoints}}
+        <details class="ep" data-q="{{lower .Method}} {{lower .Path}} {{lower .Summary}}">
+          <summary><span class="mth {{lower .Method}}">{{.Method}}</span><span class="path">{{.Path}}</span><span class="sum">{{.Summary}}</span><span class="chev" aria-hidden="true"></span></summary>
+          <div class="ep-body">
+            {{if .Desc}}<p>{{.Desc}}</p>{{end}}
+            {{if .Params}}
+            <span class="label">{{if eq .ParamsIn "query"}}Query parameters{{else}}Body · application/json{{end}}</span>
+            <table class="params">
+              <thead><tr><th>Field</th><th class="t">Type</th><th>Description</th></tr></thead>
+              <tbody>{{range .Params}}<tr><td>{{.Name}}{{if .Required}} <span class="chip-tag">required</span>{{end}}</td><td class="t">{{.Type}}</td><td>{{.Desc}}</td></tr>{{end}}</tbody>
+            </table>
+            {{end}}
+            <div class="ex">
+              <div><div class="snip-head"><span class="label">Request</span><span class="spacer"></span><button type="button" class="btn sm ghost" data-copy-next>Copy</button></div><pre class="snip" data-o>{{$.Expand .Example}}</pre></div>
+              <div><div class="snip-head"><span class="label">Response</span><span class="chip-tag">{{.OK}}</span></div>{{if .Response}}<pre class="snip">{{.Response}}</pre>{{else}}<pre class="snip">{{if eq .OK 202}}(empty body){{else}}JSON{{end}}</pre>{{end}}</div>
+            </div>
+            {{if .Errors}}<div class="codes"><span class="label">Other answers</span>{{range .Errors}}<span><b>{{.Code}}</b>{{.Desc}}</span>{{end}}</div>{{end}}
+          </div>
+        </details>
+        {{end}}
+      </section>
+      {{end}}
+      <p class="empty-filter" id="no-match" hidden>No endpoint matches the filter.</p>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  const server = document.body.dataset.origin, here = location.origin;
+  if (server !== here) document.querySelectorAll('[data-o]').forEach(el => { el.textContent = el.textContent.split(server).join(here); });
+
+  // navigator.clipboard exists only on HTTPS or localhost; on http://<lan-ip> fall back to execCommand.
+  async function copy(text, btn) {
+    let ok = false;
+    if (navigator.clipboard && window.isSecureContext) { try { await navigator.clipboard.writeText(text); ok = true; } catch (_) { } }
+    if (!ok) {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand('copy'); } catch (_) { }
+      ta.remove();
+    }
+    const was = btn.textContent;
+    btn.textContent = ok ? 'Copied' : 'Copy failed';
+    setTimeout(() => { btn.textContent = was; }, 1500);
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-copy], [data-copy-next]');
+    if (!b) return;
+    const src = b.hasAttribute('data-copy') ? document.querySelector(b.dataset.copy) : b.closest('.snip-head').nextElementSibling;
+    if (src) copy(src.textContent, b);
+  });
+
+  document.querySelectorAll('#client-seg button').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('#client-seg button').forEach(x => x.classList.toggle('active', x === b));
+    ['claude', 'hermes', 'curl'].forEach(c => { document.getElementById('snip-' + c).hidden = c !== b.dataset.client; });
+  }));
+
+  // One endpoint open at a time.
+  const eps = [...document.querySelectorAll('details.ep')];
+  eps.forEach(d => d.addEventListener('toggle', () => { if (d.open) eps.forEach(o => { if (o !== d) o.open = false; }); }));
+
+  const f = document.getElementById('filter'), fm = document.getElementById('filter-m');
+  function apply(src) {
+    const q = src.value.trim().toLowerCase();
+    (src === f ? fm : f).value = src.value;
+    let any = false;
+    document.querySelectorAll('section.grp').forEach(s => {
+      let n = 0;
+      s.querySelectorAll('details.ep').forEach(d => { const hit = !q || d.dataset.q.includes(q); d.hidden = !hit; if (hit) n++; });
+      s.hidden = n === 0;
+      any = any || n > 0;
+    });
+    document.getElementById('no-match').hidden = any;
+  }
+  [f, fm].forEach(i => i.addEventListener('input', () => apply(i)));
+  document.addEventListener('keydown', e => {
+    if (e.key !== '/' || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    const target = f.offsetParent ? f : fm.offsetParent ? fm : null; // the one on screen
+    if (target) { e.preventDefault(); target.focus(); }
+  });
+  if (location.hash.length > 1) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+
+  fetch('/api/health').then(r => r.ok ? r.json() : null).then(h => {
+    if (!h) return;
+    TiramisuUI.setUptime(h.uptime);
+    const ok = h.gostorm && h.gostorm.ok;
+    document.getElementById('rail-lamp').className = 'lamp ' + (ok ? 'run' : 'err pulse');
+    document.getElementById('rail-state').textContent = ok ? 'Engine online' : 'Engine unreachable';
+  }).catch(() => { }).finally(() => TiramisuUI.checkUpdate());
+})();
+</script>
+</body>
+</html>

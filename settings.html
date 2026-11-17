@@ -177,6 +177,10 @@
                 <a href="#scheduler" data-sec="sec-scheduler"><span class="num">06</span>Scheduler<span class="dirty"></span></a>
                 <a href="#access" data-sec="sec-access"><span class="num">07</span>Access</a>
             </nav>
+            <nav class="nav">
+                <span class="label">Reference</span>
+                <a href="/api-docs"><span class="num">{}</span>API</a>
+            </nav>
             <div class="rail-foot">
                 <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Engine online</span></div>
                 <span class="mono faint small" id="rail-version">—</span>
@@ -190,7 +194,7 @@
                     </div>
                 </div>
                 <a href="https://github.com/sponsors/MrRobotoGit" target="_blank" rel="noopener">♥&nbsp; Support the project</a>
-                <a href="https://github.com/MrRobotoGit/tiramisu" target="_blank" rel="noopener">★&nbsp; Star on GitHub</a>
+                <a href="https://github.com/MrRobotoGit/tiramisu" target="_blank" rel="noopener">★&nbsp; Star on GitHub <span class="chip-tag" id="rail-stars" hidden></span></a>
             </div>
         </aside>
 
@@ -867,12 +871,12 @@
                     </div>
 
                     <div class="card" id="acc-tokens-card">
-                        <div class="card-head"><span class="num">07.2</span><span class="label ink">API tokens</span><span class="spacer"></span><button type="button" class="btn primary sm" onclick="accNewToken()">+ New token</button></div>
+                        <div class="card-head"><span class="num">07.2</span><span class="label ink">Tokens</span><span class="spacer"></span><button type="button" class="btn primary sm" onclick="accNewToken()">+ New token</button></div>
                         <div class="card-body flush">
-                            <p class="small faint acc-pad">Tokens act with full access, as the signed-in user. They do not expire: revoke the ones you no longer use. The value is shown once, when it is created.</p>
+                            <p class="small faint acc-pad">An MCP token opens only the MCP server (/mcp) and its library tools: give it to agents such as Hermes or Claude Code. An API token opens the HTTP API, for scripts and the menubar app. Neither can manage tokens or sign-in: that needs this page, signed in. Tokens do not expire; the value is shown once, when it is created.</p>
                             <div class="acc-table-wrap">
                                 <table class="acc-table">
-                                    <thead><tr><th>Name</th><th>Token</th><th>Created</th><th>Last used</th><th>From</th><th></th></tr></thead>
+                                    <thead><tr><th>Name</th><th>Type</th><th>Token</th><th>Created</th><th>Last used</th><th>From</th><th></th></tr></thead>
                                     <tbody id="acc-tokens"></tbody>
                                 </table>
                             </div>
@@ -926,9 +930,10 @@
 
     <script>
         // --- Restart ---
-        async function restartTiramisu() {
+        // confirmed: the caller already asked (Apply & restart asks before saving anything).
+        async function restartTiramisu(confirmed) {
             const btn = document.getElementById('btn-restart');
-            if (!confirm('Restart tiramisu? The service will be unavailable for a few seconds.')) return;
+            if (confirmed !== true && !confirm('Restart tiramisu? The service will be unavailable for a few seconds.')) return;
             btn.disabled = true;
             btn.textContent = 'Restarting…';
             try {
@@ -2215,6 +2220,8 @@
             const dirty = Object.keys(GROUPS).filter(isDirty);
             if (!dirty.length) return;
             const wantRestart = dirty.some(g => GROUPS[g].scope === 'restart');
+            // Ask before saving: "Cancel" must leave everything as it was, not save without restarting.
+            if (wantRestart && !confirm('Save and restart tiramisu? The service will be unavailable for a few seconds.')) return;
             applying = true;
             lastError = '';
             // Freeze the form while saving: an edit typed now would be snapshotted as saved.
@@ -2250,8 +2257,7 @@
             lastError = errors.join(' · ');
             if (!errors.length) savedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             refreshDirty();
-            // "Apply & restart": the restart asks for its own confirmation.
-            if (!errors.length && wantRestart) restartTiramisu();
+            if (!errors.length && wantRestart) restartTiramisu(true);
         }
 
         async function discardChanges() {
@@ -2533,10 +2539,10 @@
                     body.appendChild(el('div', 'hint', 'Pick the credentials for this Tiramisu. After saving, this browser stays signed in and every other client on this port will need a token.'));
                     u = field('Username', 'text', null, 'admin'); p = field('Password', 'password', 'At least 10 characters.'); c = field('Confirm password', 'password');
                     body.append(u.node, p.node, c.node);
-                    const names = tokens.map(t => t.name).join(', ');
+                    const names = tokens.map(t => t.name + ' (' + (t.scope === 'api' ? 'API' : 'MCP') + ')').join(', ');
                     body.appendChild(el('div', 'warn-note', tokens.length
-                        ? (tokens.length === 1 ? '1 token exists (' : tokens.length + ' tokens exist (') + names + ') and keeps working after sign-in is on: revoke any you do not recognise. Any other client stops working until it has one.'
-                        : 'No API token exists yet: Hermes, the menubar app and scripts stop working until they have one.'));
+                        ? (tokens.length === 1 ? '1 token exists (' : tokens.length + ' tokens exist (') + names + ') and keeps working after sign-in is on, for its type only: an MCP token opens /mcp, an API token the API. Revoke any you do not recognise; any other client stops working until it has one.'
+                        : 'No token exists yet: Hermes (MCP token), the menubar app and scripts (API token) stop working until they have one.'));
                 }, async () => {
                     samePasswords(p.input, c.input);
                     await api('POST', 'setup', { username: u.input.value, password: p.input.value });
@@ -2548,7 +2554,7 @@
                 let p;
                 openDialog('Enable sign-in', 'Enable sign-in', 'primary', body => {
                     body.appendChild(el('div', 'hint', 'Sign-in was set up before. Enter the password of ' + (st.username || 'the user') + ' to turn it back on; the existing tokens work again.'));
-                    if (tokens.length) body.appendChild(el('div', 'warn-note', 'These tokens work again: ' + tokens.map(t => t.name + ' (' + t.prefix + '…)').join(', ') + '. Revoke any you do not recognise.'));
+                    if (tokens.length) body.appendChild(el('div', 'warn-note', 'These tokens work again: ' + tokens.map(t => t.name + ' (' + (t.scope === 'api' ? 'API' : 'MCP') + ', ' + t.prefix + '…)').join(', ') + '. Revoke any you do not recognise.'));
                     p = field('Password', 'password'); body.appendChild(p.node);
                 }, async () => { await api('POST', 'enable', { password: p.input.value }); location.reload(); });
             }
@@ -2572,26 +2578,40 @@
             };
 
             // ---------- tokens ----------
+            const SCOPE_NOTE = {
+                mcp: 'Opens only /mcp: the library tools, nothing else. For agents such as Hermes and Claude Code. No expiry.',
+                api: 'Opens the HTTP API (library, scheduler, configuration, restart), not /mcp and not tokens or sign-in. For scripts and the menubar app. No expiry.',
+            };
             window.accNewToken = function () {
-                let n;
-                openDialog('New API token', 'Create token', 'primary', body => {
+                let n, scope = 'mcp';
+                openDialog('New token', 'Create token', 'primary', body => {
                     n = field('Name', 'text', 'Where it will be used. Shown in the table, never sent by clients.');
                     body.appendChild(n.node);
+                    const lbl = el('span', 'label', 'Type');
+                    const seg = el('div', 'seg sm full'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', 'Token type');
+                    const note = el('span', 'small faint', SCOPE_NOTE.mcp);
+                    [['mcp', 'MCP'], ['api', 'API']].forEach(([v, label]) => {
+                        const b = el('button', v === scope ? 'active' : '', label); b.type = 'button';
+                        b.onclick = () => { scope = v; seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b)); note.textContent = SCOPE_NOTE[v]; };
+                        seg.appendChild(b);
+                    });
                     const i = el('div', 'acc-note'); i.style.paddingTop = '0';
-                    i.append(lamp('off'), el('span', 'small faint', 'Full access, no expiry. Revoke it from this page at any time.'));
-                    body.appendChild(i);
+                    i.append(lamp('off'), note);
+                    body.append(lbl, seg, i);
                 }, async () => {
-                    const r = await api('POST', 'tokens', { name: n.input.value.trim() });
+                    const r = await api('POST', 'tokens', { name: n.input.value.trim(), scope });
                     showCreated(r);
                     loadTokens(r.id);
                 });
             };
-            function snippets(tok) {
+            function snippets(tok, scope) {
                 const url = accMcpURL();
+                if (scope === 'api') return {
+                    'curl': 'curl -H "Authorization: Bearer ' + tok + '" ' + location.origin + '/api/health',
+                };
                 return {
                     'Hermes': '# ~/.hermes/config.yaml\nmcp_servers:\n  Tiramisu:\n    url: ' + url + '\n    headers:\n      Authorization: "Bearer ' + tok + '"',
                     'Claude Code': 'claude mcp add --transport http tiramisu ' + url + ' \\\n  --header "Authorization: Bearer ' + tok + '"',
-                    'curl': 'curl -H "Authorization: Bearer ' + tok + '" ' + location.origin + '/api/health',
                 };
             }
             function showCreated(r) {
@@ -2605,8 +2625,8 @@
                     const copy = el('button', 'btn primary sm', 'Copy'); copy.type = 'button';
                     copy.onclick = () => accCopy(r.token, copy);
                     box.append(code, copy);
-                    body.append(t, box, el('span', 'label', 'MCP client config'));
-                    const sn = snippets(r.token);
+                    body.append(t, box, el('span', 'label', r.scope === 'api' ? 'Example request' : 'MCP client config'));
+                    const sn = snippets(r.token, r.scope);
                     const seg = el('div', 'seg sm'); seg.setAttribute('role', 'group');
                     const pre = el('pre', 'acc-snippet');
                     Object.keys(sn).forEach((k, i) => {
@@ -2614,13 +2634,13 @@
                         b.onclick = () => { seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b)); pre.textContent = sn[k]; };
                         seg.appendChild(b);
                     });
-                    pre.textContent = sn['Hermes'];
+                    pre.textContent = sn[Object.keys(sn)[0]];
                     const row = el('div'); row.style.display = 'flex'; row.style.alignItems = 'center'; row.style.gap = '10px';
                     const cp = el('button', 'btn ghost sm', 'Copy snippet'); cp.type = 'button';
                     cp.onclick = () => accCopy(pre.textContent, cp);
                     row.append(seg, el('span', 'spacer'), cp); row.lastChild.previousSibling.style.flex = '1';
                     body.append(row, pre);
-                }, async () => accClose(), { noCancel: true, note: 'Stored as a SHA-256 hash · name: ' + r.name });
+                }, async () => accClose(), { noCancel: true, note: 'Stored as a SHA-256 hash · ' + (r.scope === 'api' ? 'API' : 'MCP') + ' · name: ' + r.name });
             }
             function revoke(t) {
                 openDialog('Revoke “' + t.name + '”?', 'Revoke', 'danger', body => {
@@ -2633,7 +2653,7 @@
                 try { list = await api('GET', 'tokens'); } catch (e) { tb.replaceChildren(); return; }
                 tb.replaceChildren();
                 if (!list.length) {
-                    const tr = el('tr', 'acc-empty'); const td = el('td', null, 'No tokens yet.'); td.colSpan = 6; tr.appendChild(td); tb.appendChild(tr);
+                    const tr = el('tr', 'acc-empty'); const td = el('td', null, 'No tokens yet.'); td.colSpan = 7; tr.appendChild(td); tb.appendChild(tr);
                 }
                 list.forEach(t => {
                     const tr = el('tr', t.id === highlight ? 'new' : '');
@@ -2641,7 +2661,8 @@
                     if (t.id === highlight) { const c = el('span', 'chip-tag sig-green', 'new'); c.style.marginLeft = '8px'; nm.appendChild(c); }
                     const rv = el('button', 'btn ghost sm', 'Revoke'); rv.type = 'button'; rv.onclick = () => revoke(t);
                     const last = el('td'); last.appendChild(rv);
-                    tr.append(nm, el('td', 'mono', t.prefix + '…'), el('td', null, day(t.created_at)), el('td', null, ago(t.last_used)), el('td', 'mono', t.last_ip || '—'), last);
+                    const ty = el('td'); ty.appendChild(el('span', 'chip-tag', t.scope === 'api' ? 'API' : 'MCP'));
+                    tr.append(nm, ty, el('td', 'mono', t.prefix + '…'), el('td', null, day(t.created_at)), el('td', null, ago(t.last_used)), el('td', 'mono', t.last_ip || '—'), last);
                     tb.appendChild(tr);
                 });
             }
@@ -2697,7 +2718,7 @@
                     btn.hidden = true;
                 } else if (on) {
                     $('acc-title').textContent = 'Sign-in required';
-                    $('acc-hint').textContent = 'Every request on this port needs a session cookie or an API token. Signed in as ' + (st.username || '?') + '.';
+                    $('acc-hint').textContent = 'Every request on this port needs a session cookie or a token (MCP for /mcp, API for the rest). Signed in as ' + (st.username || '?') + '.';
                     btn.className = 'btn sm'; btn.textContent = 'Change password'; btn.onclick = dlgPassword;
                 } else {
                     $('acc-title').textContent = 'Open access';

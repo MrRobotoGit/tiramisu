@@ -41,6 +41,7 @@ nano ~/Tiramisu/config.json
 | `blocklist_enabled` | `false` | Load the peer IP blocklist (not needed behind a VPN) |
 | `blocklist_url` | *(iblocklist Level 1)* | Gzipped blocklist URL, refreshed every 24 h; compression is detected from the content |
 | `blocklist_filter` | `(?i)\bap2p\b\|anti-?p2p` | Keep only ranges whose description matches this regexp; empty loads the list whole |
+| `peer_geoip_enabled` | `false` | Show each peer's country and network (AS and owner) on hover in the swarm view. Downloads the DB-IP Lite country and ASN databases (about 10 MB) once a month into `STATE/geoip/`; peer addresses never reach the browser |
 | `plex.url` | *(none)* | Media server URL: Plex or Jellyfin |
 | `plex.token` | *(none)* | Plex token, or Jellyfin API key |
 | `plex.library_id` | `0` | Plex movies library section ID (0 = skip the refresh) |

@@ -19,10 +19,20 @@
   }
 
   let version = '', uptime = '';
+  // One uptime format in both panels, the Dashboard's: a Go duration rounded to the second
+  // ("12m30s", "1h2m3s"). /metrics sends it unrounded ("12m30.17s").
+  function fmtUptime(u) {
+    if (!u) return '';
+    const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?$/.exec(String(u).trim());
+    if (!m) return u;
+    const t = (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + Math.round(+m[3] || 0);
+    const h = Math.floor(t / 3600), mi = Math.floor(t % 3600 / 60), sec = t % 60;
+    return h ? `${h}h${mi}m${sec}s` : mi ? `${mi}m${sec}s` : `${sec}s`;
+  }
   window.TiramisuUI = {
     // The dashboard polls uptime every 5 s; keep the rail line in step with it.
     setUptime(u) {
-      uptime = u;
+      uptime = fmtUptime(u);
       const ver = document.getElementById('rail-version');
       if (ver && version) ver.textContent = version + ' · up ' + u;
     },
@@ -42,7 +52,12 @@
         const d = await r.json();
         const ver = document.getElementById('rail-version');
         version = d.version || 'dev';
-        if (ver) ver.textContent = version + ' · up ' + (uptime || d.uptime || '—');
+        if (ver) ver.textContent = version + ' · up ' + (uptime || fmtUptime(d.uptime) || '—');
+        const star = document.getElementById('rail-stars');
+        if (star && d.github_stars > 0) {
+          star.textContent = d.github_stars >= 1000 ? (d.github_stars / 1000).toFixed(1) + 'k' : String(d.github_stars);
+          star.hidden = false;
+        }
         const box = document.getElementById('rail-update');
         if (!box || !d.update_available || !d.latest_version) return;
         const isDev = !d.version || d.version === 'dev';

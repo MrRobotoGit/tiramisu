@@ -66,6 +66,24 @@ func limitKey(ip string) string {
 	return ip
 }
 
+// fromTrustedProxy reports whether the connection comes from a configured proxy.
+func fromTrustedProxy(r *http.Request, trusted []netip.Prefix) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	for _, p := range trusted {
+		if p.Contains(addr.Unmap()) {
+			return true
+		}
+	}
+	return false
+}
+
 // clientIP trusts X-Forwarded-For only when the peer is a configured proxy.
 func clientIP(r *http.Request, trusted []netip.Prefix) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
