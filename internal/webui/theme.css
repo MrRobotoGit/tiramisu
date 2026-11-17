@@ -593,7 +593,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-more-ring { fill: var(--panel); stroke: var(--ink3); stroke-width: 1.5; }
 .sw-pipe.paused { stroke: var(--hair2); stroke-dasharray: 4 4; }
 .sw-client.paused { stroke: var(--hair2); }
-.sw-name.dim { fill: var(--ink3); }
+.sw-name.dim, .sw-sub.dim { fill: var(--ink3); }
 .sw-dot.off { fill: var(--hair2); opacity: .45; }
 
 .sw-box.strict { fill: var(--accent); }

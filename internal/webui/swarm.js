@@ -76,6 +76,11 @@
   function closeSoon() { clearTimeout(closeTimer); closeTimer = setTimeout(closeDetails, 250); }
   function closeDetails() { clearTimeout(closeTimer); anchor = null; document.querySelectorAll('.sw-card, .sw-sheet, .sw-scrim').forEach(n => n.remove()); }
   // A card whose mark was redrawn away has nothing left to describe.
+  // One speed scale everywhere: megabits per second, like the header and the chart.
+  function mbps(mbs) {
+    const v = mbs * 8;
+    return (v >= 100 ? Math.round(v) : v >= 1 ? v.toFixed(1) : v >= 0.05 ? v.toFixed(2) : '<0.05') + ' Mbps';
+  }
   function closeOrphan() { if (anchor && !anchor.isConnected) closeDetails(); }
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetails(); });
   document.addEventListener('click', e => { if (!e.target.closest || !e.target.closest('.sw-card, .sw-sheet')) closeDetails(); });
@@ -249,27 +254,30 @@
       // Peers. With per-peer rates from the engine each node is a real peer (stable id, real
       // seeder flag, its own rate); without them (older engine) nodes are numbered slots.
       const rates = Array.isArray(t.peer_rates) ? t.peer_rates.slice(0, MAX_PEERS) : null;
-      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps }))
-        : Array.from({ length: n }, (_, k) => ({ key: String(k), seed: k < seeds, kbps: null }));
+      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps, utp: !!p.utp }))
+        : Array.from({ length: n }, (_, k) => ({ key: String(k), seed: k < seeds, kbps: null, utp: null }));
       // Track arrivals and departures between polls, by key.
       let L = life.get(t.hash);
       const keys = new Set(list.map(p => p.key));
       if (!L || L.byId !== !!rates) { L = { keys, byId: !!rates, born: {}, dying: {} }; life.set(t.hash, L); }
       else {
-        L.keys.forEach(kk => { if (!keys.has(kk)) { L.dying[kk] = { at: now, seed: !!(L.seedOf && L.seedOf[kk]) }; delete L.born[kk]; } });
+        L.keys.forEach(kk => { if (!keys.has(kk)) { L.dying[kk] = { at: now, seed: !!(L.seedOf && L.seedOf[kk]), utp: L.utpOf ? L.utpOf[kk] : null }; delete L.born[kk]; } });
         keys.forEach(kk => { if (!L.keys.has(kk)) { L.born[kk] = now; delete L.dying[kk]; } });
         L.keys = keys;
       }
       L.seedOf = Object.fromEntries(list.map(p => [p.key, p.seed]));
+      L.utpOf = Object.fromEntries(list.map(p => [p.key, p.utp]));
       const delay = (ms, total) => `${-Math.min(ms, total)}ms`;
-      const isUtp = key => tot && rng(t.hash + ':u' + key)() < utpShare;
+      // uTP vs TCP: real per peer when the engine reports it; an older engine only gives the
+      // aggregate share, applied per key as an approximation.
+      const isUtp = (key, utp) => utp != null ? utp : !!(tot && rng(t.hash + ':u' + key)() < utpShare);
       // Dash speed follows the peer's own rate: ~3 s along the path at 100 KB/s, faster above.
       const flowDur = kbps => Math.max(0.5, Math.min(6, 30 / Math.sqrt(kbps)));
       list.forEach(p => {
         const pp = spot(p.key, ':');
         const edge = el('path', { d: curve(pp, tp), class: 'sw-edge' }, edgeLayer);
         // uTP vs TCP is known only in aggregate: the share is applied per peer, by its key.
-        const node = isUtp(p.key) ? el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: p.seed ? 'sw-peer seed' : 'sw-peer' }, peerLayer)
+        const node = isUtp(p.key, p.utp) ? el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: p.seed ? 'sw-peer seed' : 'sw-peer' }, peerLayer)
           : el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: p.seed ? 'sw-peer seed' : 'sw-peer' }, peerLayer);
         const live = p.kbps == null ? t.speed_mbs > 0.01 : p.kbps >= 0.5;
         const fl = live ? el('path', { d: curve(pp, tp), class: 'sw-peer-flow', pathLength: 100 }, edgeLayer)
@@ -281,7 +289,7 @@
           fl.style.animationDelay = `${-((now / 1000 + rng(t.hash + ':f' + p.key)() * dur) % dur).toFixed(2)}s`;
         }
         // The rate on the peer node, where the pointer can actually land.
-        if (p.kbps != null) el('title', {}, node).textContent = `${p.kbps >= 1024 ? (p.kbps / 1024).toFixed(1) + ' MB/s' : Math.round(p.kbps) + ' KB/s'}${p.seed ? ' · seeder' : ''}`;
+        if (p.kbps != null) el('title', {}, node).textContent = `${mbps(p.kbps / 1024)}${p.seed ? ' · seeder' : ''}`;
         const b = L.born[p.key];
         if (b !== undefined) {
           const age = now - b;
@@ -313,14 +321,15 @@
         const ring = el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: 'sw-death-ring' }, g);
         ring.style.animationDelay = delay(age, DYING_MS);
         const cls = L.dying[key].seed ? 'sw-peer seed' : 'sw-peer';
-        if (isUtp(key)) el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: cls }, g);
+        if (isUtp(key, L.dying[key].utp)) el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: cls }, g);
         else el('circle', { cx: pp[0], cy: pp[1], r: 3.3, class: cls }, g);
       });
       // Torrent → cache pipe, width = throughput.
       const d = curve(tp, cacheP);
       const live = t.speed_mbs > 0.01;
       el('path', { d, class: live ? 'sw-pipe' : 'sw-pipe idle', 'stroke-width': width(t.speed_mbs) }, edgeLayer);
-      pipes.push({ t, d, w: width(t.speed_mbs), tp, live });
+      // What the graph leaves out, so the labels can say so: peers past MAX_PEERS, half-open past MAX_PENDING.
+      pipes.push({ t, d, w: width(t.speed_mbs), tp, live, shown: list.length, pendShown: pend });
       curKey = null;
     });
 
@@ -498,7 +507,7 @@
         const r = g.querySelector('circle, rect').getBoundingClientRect();
         details(`${hidden.length} more active torrent${hidden.length > 1 ? 's' : ''}`,
           hidden.map(t => [short(t.clean_title || t.title || t.hash.slice(0, 8), 30),
-            t.speed_mbs > 0.01 ? `${t.speed_mbs < 0.05 ? '<0.1' : t.speed_mbs.toFixed(1)} MB/s · ${t.peers} peer${t.peers === 1 ? '' : 's'}` : 'warming up']),
+            t.speed_mbs > 0.01 ? `${mbps(t.speed_mbs)} · ${t.peers} peer${t.peers === 1 ? '' : 's'}` : 'warming up']),
           { rect: r, node: g });
       });
     }
@@ -523,15 +532,21 @@
       node.addEventListener('click', e => { e.stopPropagation(); toggleFocus(t.hash); });
       el('circle', { cx: p.tp[0], cy: p.tp[1], r: rad, class: p.live ? 'sw-torrent' : 'sw-torrent idle' }, nodeLayer).style.pointerEvents = 'none';
       const name = short(t.clean_title || t.title || t.hash.slice(0, 8), vertical ? (torrents.length > 3 ? 9 : 12) : 24);
-      const sub = p.live ? `${t.speed_mbs.toFixed(1)} MB/s · ${t.peers} peers` : `idle · ${t.peers} peers`;
+      const hiddenPeers = Math.max(0, (t.peers || 0) - p.shown), hiddenPend = Math.max(0, (t.half_open || 0) - p.pendShown);
+      const sub = (p.live ? `${mbps(t.speed_mbs)} · ${t.peers} peers` : `idle · ${t.peers} peers`);
+      // Third line, only when something is left out: the graph never passes a sample for the whole.
+      const trunc = [hiddenPeers ? `${p.shown} of ${t.peers} peers drawn` : '', hiddenPend ? `${p.pendShown} of ${t.half_open} connecting` : '']
+        .filter(Boolean).join(' · ');
       if (vertical) {
         txt(nodeLayer, p.tp[0], p.tp[1] + rad + 14, name, 'sw-name', 'middle');
-        txt(nodeLayer, p.tp[0], p.tp[1] + rad + 26, p.live ? `${t.speed_mbs.toFixed(1)} MB/s` : 'idle', 'sw-sub', 'middle');
+        txt(nodeLayer, p.tp[0], p.tp[1] + rad + 26, (p.live ? mbps(t.speed_mbs) : 'idle') + (hiddenPeers ? ` · ${p.shown}/${t.peers}` : ''), 'sw-sub', 'middle');
       } else {
         const below = i > 0 && i === pipes.length - 1;
         const y = below ? p.tp[1] + rad + 14 : p.tp[1] - rad - 18;
-        txt(nodeLayer, p.tp[0] + rad + 8, y, name, 'sw-name');
-        txt(nodeLayer, p.tp[0] + rad + 8, y + 12, sub, 'sw-sub');
+        const yy = below || !trunc ? y : y - 12;
+        txt(nodeLayer, p.tp[0] + rad + 8, yy, name, 'sw-name');
+        txt(nodeLayer, p.tp[0] + rad + 8, yy + 12, sub, 'sw-sub');
+        if (trunc) txt(nodeLayer, p.tp[0] + rad + 8, yy + 24, trunc, 'sw-sub dim');
       }
       curKey = null;
     });
@@ -576,7 +591,7 @@
         const bar = document.createElement('div');
         bar.className = vertical ? 'sw-focusbar' : 'sw-chip';
         bar.innerHTML = vertical
-          ? `<span>${esc(label.join(' → '))}${t && t.speed_mbs > 0.01 ? ' · ' + t.speed_mbs.toFixed(1) + ' MB/s' : ''}</span><button type="button" aria-label="Show all streams">✕</button>`
+          ? `<span>${esc(label.join(' → '))}${t && t.speed_mbs > 0.01 ? ' · ' + mbps(t.speed_mbs) : ''}</span><button type="button" aria-label="Show all streams">✕</button>`
           : `<b>${esc(label[0] || '')}</b><span>${label[1] ? ' · ' + esc(label[1]) : ''}</span><button type="button" class="sw-showall">Show all ✕</button>`;
         bar.onclick = () => toggleFocus(focusKey);
         ui.appendChild(bar);
@@ -671,6 +686,6 @@
     },
     update(d) { data = d; draw(); },
     redraw: () => draw(true),
-    details, closeDetails, closeOrphan, hoverable,
+    details, closeDetails, closeOrphan, hoverable, mbps,
   };
 })();

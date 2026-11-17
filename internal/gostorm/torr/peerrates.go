@@ -46,7 +46,7 @@ func (p *peerRates) sample(snaps []torrent.PeerSnapshot, now time.Time) []state.
 		if prev, ok := p.prev[s.Addr]; ok && dt > 0 && s.UsefulBytes >= prev {
 			kbps = float64(s.UsefulBytes-prev) / 1024 / dt
 		}
-		out = append(out, state.PeerRate{ID: peerID(s.Addr), KBps: float64(int64(kbps*10)) / 10, Seed: s.Seed})
+		out = append(out, state.PeerRate{ID: peerID(s.Addr), KBps: float64(int64(kbps*10)) / 10, Seed: s.Seed, UTP: s.UTP})
 	}
 	// Ties broken by id: conns come from a map, and a random order would read as churn.
 	sort.Slice(out, func(i, j int) bool {

@@ -1057,4 +1057,5 @@ type PeerRate struct {
 	ID   string  `json:"id"`
 	KBps float64 `json:"kbps"`
 	Seed bool    `json:"seed"`
+	UTP  bool    `json:"utp,omitempty"`
 }

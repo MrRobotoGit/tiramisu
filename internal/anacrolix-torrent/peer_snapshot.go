@@ -6,6 +6,7 @@ type PeerSnapshot struct {
 	Addr        string
 	UsefulBytes int64
 	Seed        bool
+	UTP         bool
 }
 
 // PeerSnapshots lists the connected peers (tiramisu: per-peer rates for the swarm view).
@@ -19,7 +20,7 @@ func (t *Torrent) PeerSnapshots() []PeerSnapshot {
 		if c.RemoteAddr != nil {
 			addr = c.RemoteAddr.String()
 		}
-		out = append(out, PeerSnapshot{Addr: addr, UsefulBytes: c._stats.BytesReadUsefulData.Int64(), Seed: all && known})
+		out = append(out, PeerSnapshot{Addr: addr, UsefulBytes: c._stats.BytesReadUsefulData.Int64(), Seed: all && known, UTP: c.utp()})
 	}
 	return out
 }
