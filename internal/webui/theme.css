@@ -553,6 +553,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-torrent-pulse { fill: none; stroke: var(--ink); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; animation: sw-torrent-pulse 1.6s ease-out infinite; }
 @keyframes sw-torrent-pulse { from { transform: scale(1); opacity: .55; } to { transform: scale(2.1); opacity: 0; } }
 .sw-hit { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: .7; }
+.sw-peer-hit { fill: transparent; stroke: none; pointer-events: all; }
 .sw-box { fill: var(--ink); stroke: var(--panel); stroke-width: 5px; paint-order: stroke fill; }
 .sw-gauge > path { fill: none; stroke-linecap: butt; }
 .sw-gauge-rim { stroke: var(--hair2); }
@@ -571,6 +572,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-card { position: absolute; z-index: 5; width: 250px; font: 400 12px/1.4 var(--sans); color: var(--ink); padding: 10px 12px; background: var(--panel); border: 1px solid var(--hair2); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.12); display: flex; flex-direction: column; gap: 4px; }
 .sw-d-title { font-weight: 500; font-size: 13px; color: var(--ink); }
 .sw-d-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--ink); }
+.sw-d-sub { font-size: 11px; line-height: 15px; color: var(--ink2); margin: -2px 0 6px; overflow-wrap: anywhere; }
 .sw-d-row .mono, .sw-d-row.col { flex-direction: column; gap: 1px; }
 .sw-card .sw-d-act { align-self: flex-start; margin-top: 4px; }
 .sw-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.35); }

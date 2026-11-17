@@ -1084,4 +1084,7 @@ type PeerRate struct {
 	KBps float64 `json:"kbps"`
 	Seed bool    `json:"seed"`
 	UTP  bool    `json:"utp,omitempty"`
+	CC   string  `json:"cc,omitempty"`
+	ASN  uint    `json:"asn,omitempty"`
+	Org  string  `json:"org,omitempty"` // network owner, e.g. "Hetzner Online GmbH"
 }

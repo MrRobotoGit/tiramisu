@@ -35,6 +35,7 @@ import (
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/catalog/mediaserver"
 	"tiramisu/internal/config"
+	"tiramisu/internal/geoip"
 	server "tiramisu/internal/gostorm"
 	"tiramisu/internal/gostorm/native"
 	"tiramisu/internal/gostorm/settings"
@@ -5002,6 +5003,9 @@ func main() {
 		settings.Args = &settings.ExecArgs{}
 	}
 	settings.Args.IP = gc().ApplyGoStormBind(logger.Printf)
+	if gc().PeerGeoIPEnabled {
+		torr.PeerInfo = geoip.Start(context.Background(), GetStateDir(), logger.Printf).PeerInfo
+	}
 
 	go func() {
 		logger.Println("Starting Embedded GoStorm Engine...")

@@ -44,10 +44,23 @@
   // Details: a card next to the mark on desktop (hover), a bottom sheet on phones (tap).
   // rows = [[label, value], …]; action = { text, run }.
   let anchor = null;
+  // Peer country from its ISO code (peer_geoip_enabled); the browser supplies the name.
+  let regionNames = null;
+  function countryName(cc) {
+    if (!cc) return '';
+    try {
+      regionNames = regionNames || new Intl.DisplayNames(['en'], { type: 'region' });
+      return regionNames.of(cc) || cc;
+    } catch (_) { return cc; }
+  }
+
   function details(title, rows, at, action) {
     closeDetails();
     anchor = at && at.node;
-    const body = `<div class="sw-d-title">${esc(title)}</div>` + rows.map(([a, b]) =>
+    // title may carry a subtitle: { title, sub } (a peer's network under its country).
+    const head = typeof title === 'object' ? title : { title };
+    const body = `<div class="sw-d-title">${esc(head.title)}</div>` +
+      (head.sub ? `<div class="sw-d-sub">${esc(head.sub)}</div>` : '') + rows.map(([a, b]) =>
       `<div class="sw-d-row"><span>${esc(a)}</span><span class="mono">${esc(b)}</span></div>`).join('') +
       (action ? `<button type="button" class="btn sm sw-d-act">${esc(action.text)}</button>` : '');
     if (phone()) {
@@ -81,7 +94,13 @@
     const v = mbs * 8;
     return (v >= 100 ? Math.round(v) : v >= 1 ? v.toFixed(1) : v >= 0.05 ? v.toFixed(2) : '<0.05') + ' Mbps';
   }
-  function closeOrphan() { if (anchor && !anchor.isConnected) closeDetails(); }
+  function closeOrphan() {
+    if (!anchor || anchor.isConnected) return;
+    // A peer card follows the same peer into the new drawing; anything else closes.
+    const k = anchor.getAttribute && anchor.getAttribute('data-peer');
+    const again = k && host && host.querySelector(`[data-peer="${CSS.escape(k)}"]`);
+    if (again) anchor = again; else closeDetails();
+  }
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetails(); });
   document.addEventListener('click', e => { if (!e.target.closest || !e.target.closest('.sw-card, .sw-sheet')) closeDetails(); });
   // Hover on desktop (with a short grace so the pointer can reach the card), tap on touch screens.
@@ -254,7 +273,7 @@
       // Peers. With per-peer rates from the engine each node is a real peer (stable id, real
       // seeder flag, its own rate); without them (older engine) nodes are numbered slots.
       const rates = Array.isArray(t.peer_rates) ? t.peer_rates.slice(0, MAX_PEERS) : null;
-      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps, utp: !!p.utp }))
+      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps, utp: !!p.utp, cc: p.cc || '', asn: p.asn || 0, org: p.org || '' }))
         : Array.from({ length: n }, (_, k) => ({ key: String(k), seed: k < seeds, kbps: null, utp: null }));
       // Track arrivals and departures between polls, by key.
       let L = life.get(t.hash);
@@ -288,8 +307,19 @@
           fl.style.animationDuration = `${dur.toFixed(2)}s, ${BORN_MS / 1000}s`;
           fl.style.animationDelay = `${-((now / 1000 + rng(t.hash + ':f' + p.key)() * dur) % dur).toFixed(2)}s`;
         }
-        // The rate on the peer node, where the pointer can actually land.
-        if (p.kbps != null) el('title', {}, node).textContent = `${mbps(p.kbps / 1024)}${p.seed ? ' · seeder' : ''}`;
+        // A 6px node is too small to hover and is redrawn every few seconds, which resets a native
+        // tooltip: a larger invisible target opens the details card, re-anchored across redraws.
+        if (p.kbps != null) {
+          const hit = el('circle', { cx: pp[0], cy: pp[1], r: 9, class: 'sw-peer-hit', 'data-peer': t.hash + ':' + p.key }, nodeLayer);
+          hoverable(hit, () => details({
+            title: countryName(p.cc) || 'Peer',
+            sub: p.org ? p.org + (p.asn ? ` · AS${p.asn}` : '') : '',
+          }, [
+            ['Download', mbps(p.kbps / 1024)],
+            ['Role', p.seed ? 'seeder' : 'leecher'],
+            ['Transport', p.utp ? 'uTP' : 'TCP'],
+          ], { rect: hit.getBoundingClientRect(), node: hit }));
+        }
         const b = L.born[p.key];
         if (b !== undefined) {
           const age = now - b;

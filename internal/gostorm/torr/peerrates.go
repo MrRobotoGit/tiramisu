@@ -25,6 +25,10 @@ type peerRates struct {
 	last []state.PeerRate
 }
 
+// PeerInfo resolves a peer address to its country and network owner; nil (the default)
+// disables it. Only the resolved names reach the API: the address itself stays here.
+var PeerInfo func(addr string) (cc string, asn uint, org string)
+
 func peerID(addr string) string {
 	h := fnv.New32a()
 	h.Write([]byte(addr))
@@ -46,7 +50,11 @@ func (p *peerRates) sample(snaps []torrent.PeerSnapshot, now time.Time) []state.
 		if prev, ok := p.prev[s.Addr]; ok && dt > 0 && s.UsefulBytes >= prev {
 			kbps = float64(s.UsefulBytes-prev) / 1024 / dt
 		}
-		out = append(out, state.PeerRate{ID: peerID(s.Addr), KBps: float64(int64(kbps*10)) / 10, Seed: s.Seed, UTP: s.UTP})
+		pr := state.PeerRate{ID: peerID(s.Addr), KBps: float64(int64(kbps*10)) / 10, Seed: s.Seed, UTP: s.UTP}
+		if PeerInfo != nil {
+			pr.CC, pr.ASN, pr.Org = PeerInfo(s.Addr)
+		}
+		out = append(out, pr)
 	}
 	// Ties broken by id: conns come from a map, and a random order would read as churn.
 	sort.Slice(out, func(i, j int) bool {

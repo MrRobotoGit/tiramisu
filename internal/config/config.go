@@ -287,6 +287,8 @@ type Config struct {
 	MetricsPort      int    `json:"metrics_port"`
 	BlockListEnabled bool   `json:"blocklist_enabled"`
 	BlockListURL     string `json:"blocklist_url"`
+	// PeerGeoIPEnabled shows each peer's country in the swarm view (DB-IP Lite, downloaded monthly).
+	PeerGeoIPEnabled bool `json:"peer_geoip_enabled"`
 	// BlockListFilter keeps only the ranges whose description matches this regexp.
 	// Empty keeps the whole list. See blockedIP.go for why published lists need it.
 	BlockListFilter string `json:"blocklist_filter"`

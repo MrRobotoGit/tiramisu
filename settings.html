@@ -420,6 +420,16 @@
                                 </div>
                             </div>
                         </div>
+
+                        <div class="card adv-only">
+                            <div class="card-head"><span class="num">02.4</span><span class="label ink">Peer Countries</span><span class="spacer"></span><span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span></div>
+                            <div class="card-body">
+                                <div class="toggle-row" style="padding-top:0">
+                                    <div class="text"><div class="title">Show peer countries and networks</div><div class="hint">Hovering a peer in the swarm view shows its country and the network it belongs to (for example a home ISP or a datacenter). Downloads the DB-IP Lite country and ASN databases (about 10 MB) once a month into the state folder; peer addresses never leave this machine. IP geolocation by <a href="https://db-ip.com" target="_blank" rel="noopener">DB-IP</a>.</div></div>
+                                    <label class="switch"><input type="checkbox" name="peer_geoip_enabled"><span class="slider"></span></label>
+                                </div>
+                            </div>
+                        </div>
                     </section>
 
                     <!-- ================= 03 SOURCES & MEDIA ================= -->
@@ -1630,6 +1640,8 @@
                 });
                 const blEnabled = document.querySelector('[name="blocklist_enabled"]');
                 if (blEnabled) blEnabled.checked = originalEngine.blocklist_enabled || false;
+                const geoEnabled = document.querySelector('[name="peer_geoip_enabled"]');
+                if (geoEnabled) geoEnabled.checked = originalEngine.peer_geoip_enabled || false;
                 updateBlockListState();
                 const lang = originalEngine.language || originalEngine.Language;
                 if (lang) {
@@ -1697,6 +1709,7 @@
             });
 
             data.blocklist_enabled = formData.has('blocklist_enabled');
+            data.peer_geoip_enabled = formData.has('peer_geoip_enabled');
 
             const natpmpKey = originalEngine.NatPMP ? 'NatPMP' : 'natpmp';
             const oldNat = originalEngine[natpmpKey] || {};
