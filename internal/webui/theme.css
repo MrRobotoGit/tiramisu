@@ -26,11 +26,12 @@
   --hair2: #ACB4BA;
   --ink: #121518;
   --ink2: #4C555D;
-  --ink3: #7F8991;
+  --ink3: #5E6870;
   --inv: #F6F7F8;
   --accent: #E5482B;
+  --accent-ink: #B3341A;
   --ok: #2E9E5B;
-  --sig-yellow: #9A6E00; --sig-yellow-bg: rgba(237, 184, 46, .26);
+  --sig-yellow: #7A5600; --sig-yellow-bg: rgba(237, 184, 46, .26);
   --sig-blue: #2F64A8;   --sig-blue-bg: rgba(63, 111, 182, .14);
   --sig-green: #2E7A4C;  --sig-green-bg: rgba(46, 158, 91, .15);
   --accent-hi: #F8B6A4;
@@ -52,9 +53,10 @@
   --hair2: #3F474E;
   --ink: #E6EAED;
   --ink2: #9FA8AF;
-  --ink3: #6B757D;
+  --ink3: #8A949C;
   --inv: #0F1113;
   --accent: #FF5733;
+  --accent-ink: #FF5733;
   --ok: #3DCB74;
   --sig-yellow: #F2C94C; --sig-yellow-bg: rgba(242, 201, 76, .16);
   --sig-blue: #8DB4E8;   --sig-blue-bg: rgba(125, 165, 225, .16);
@@ -100,7 +102,7 @@ button, input, select { font: inherit; color: inherit; }
 .faint { color: var(--ink3); }
 .small { font-size: 11px; line-height: 15px; }
 .hint { font-size: 11px; line-height: 15px; color: var(--ink3); margin-top: 6px; }
-.accent { color: var(--accent); }
+.accent { color: var(--accent-ink); }
 
 /* ---------- app shell ---------- */
 .app { display: flex; min-height: 100vh; }
@@ -263,8 +265,8 @@ button, input, select { font: inherit; color: inherit; }
 .btn:disabled { opacity: .45; cursor: default; }
 .btn.sm { padding: 5px 10px; font-size: 11px; }
 .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--inv); }
-.btn.danger { border-color: var(--accent); color: var(--accent); }
-.btn.danger:hover { background: var(--accent); color: var(--inv); }
+.btn.danger { border-color: var(--accent-ink); color: var(--accent-ink); }
+.btn.danger:hover { background: var(--accent-ink); border-color: var(--accent-ink); color: var(--inv); }
 .btn.ghost { border-color: transparent; color: var(--ink2); }
 .btn.ghost:hover { color: var(--ink); }
 .btn .ico { font-size: 10px; }
@@ -283,7 +285,7 @@ button, input, select { font: inherit; color: inherit; }
   padding: 0;
   flex: 0 0 auto;
 }
-.key:hover { border-color: var(--accent); color: var(--accent); }
+.key:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
 
 /* ---------- segmented ---------- */
 .seg {
@@ -321,7 +323,7 @@ button, input, select { font: inherit; color: inherit; }
   white-space: nowrap;
 }
 .chip-tag.fill { background: var(--ink); border-color: var(--ink); color: var(--inv); }
-.chip-tag.accent { border-color: var(--accent); color: var(--accent); }
+.chip-tag.accent { border-color: var(--accent-ink); color: var(--accent-ink); }
 .chip-tag.soft { background: var(--well); border-color: transparent; }
 /* Signal chips (stream badges): tinted fill, coloured text, no frame. */
 .chip-tag.sig-yellow { background: var(--sig-yellow-bg); border-color: transparent; color: var(--sig-yellow); }
@@ -377,8 +379,8 @@ button, input, select { font: inherit; color: inherit; }
 .input input[type="time"]::-webkit-calendar-picker-indicator { display: none; }
 .input input[readonly], .input input:disabled { color: var(--ink3); }
 .field.is-disabled { opacity: .45; }
-input.warn { color: #b7791f; }
-input.danger, .input input.danger { color: var(--accent); }
+input.warn { color: var(--sig-yellow); }
+input.danger, .input input.danger { color: var(--accent-ink); }
 .input input[type="time"] { font-family: var(--sans); }
 
 /* ---------- switches (markup kept from the old panel) ---------- */
@@ -493,7 +495,7 @@ input.danger, .input input.danger { color: var(--accent); }
 .terminal .ln { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .terminal .ts { color: var(--term-dim); }
 .terminal .err { color: var(--accent); }
-.terminal .warn { color: var(--inv-strong, #fff); font-weight: 500; }
+.terminal .warn { color: #fff; font-weight: 500; }
 .terminal .ok { color: var(--term-text); font-weight: 500; }
 
 /* ---------- change bar ---------- */
@@ -524,7 +526,7 @@ input.danger, .input input.danger { color: var(--accent); }
 .changebar .count { display: flex; align-items: center; gap: 8px; font-weight: 500; white-space: nowrap; }
 .changebar.dirty .btn.ghost { color: var(--inv); }
 .changebar.dirty .btn.primary { background: var(--inv); border-color: var(--inv); color: var(--ink); }
-.changebar .msg.err { color: var(--accent); }
+.changebar .msg.err { color: var(--accent-ink); }
 
 /* ---------- swarm network ---------- */
 .swarm { display: block; overflow: visible; }
@@ -580,7 +582,7 @@ input.danger, .input input.danger { color: var(--accent); }
 @keyframes sw-wave-tail { 0% { stroke-dasharray: 0 200; } 25% { stroke-dasharray: 62 200; } 80% { stroke-dasharray: 62 200; opacity: var(--tail-op, .35); } 100% { stroke-dasharray: 62 200; opacity: 0; } }
 /* Recovery: the tint leaves the client pipes, translucent as in the mockup. */
 .sw-drain { fill: none; stroke: var(--accent); stroke-linecap: round; stroke-dasharray: 45 200; opacity: var(--drain-op, 1); animation: sw-drain ease-out forwards; }
-:root[data-theme="dark"] { --tint-op: .6; --tail-op: .35; --drain-op: .4; }
+:root[data-theme="dark"] { --tail-op: .35; --drain-op: .4; }
 :root:not([data-theme="dark"]) { --tail-op: 1; }
 @keyframes sw-move { from { stroke-dashoffset: 25; } to { stroke-dashoffset: 0; } }
 /* Peer → torrent data: short dark oblong segments. */
