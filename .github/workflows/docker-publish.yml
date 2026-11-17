@@ -163,8 +163,10 @@ jobs:
             echo "::error::sign-in is not off by default"; exit 1; }
           curl -fsS "$base/api/config" | jq -e '.secrets_configured != null and .plex.token == ""' >/dev/null || {
             echo "::error::GET /api/config does not redact secrets"; exit 1; }
-          tok=$(curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"ci"}' "$base/api/auth/tokens" | jq -r .token)
+          tok=$(curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"ci","scope":"api"}' "$base/api/auth/tokens" | jq -r .token)
           case "$tok" in tmr_*) ;; *) echo "::error::no token created"; exit 1 ;; esac
+          mcptok=$(curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"ci-mcp"}' "$base/api/auth/tokens" | jq -r .token)
+          case "$mcptok" in tmr_*) ;; *) echo "::error::no MCP token created"; exit 1 ;; esac
           curl -fsS -X POST -H 'Content-Type: application/json' \
             -d '{"username":"ci","password":"ci-password-123"}' "$base/api/auth/setup" >/dev/null
           code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/health")
@@ -172,7 +174,11 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/mcp")
           [ "$code" = 401 ] || { echo "::error::/mcp answered $code without credentials"; exit 1; }
           curl -fsS -H "Authorization: Bearer $tok" "$base/api/health" >/dev/null || {
-            echo "::error::the token created before sign-in was rejected"; exit 1; }
+            echo "::error::the API token created before sign-in was rejected"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $mcptok" "$base/api/health")
+          [ "$code" = 403 ] || { echo "::error::an MCP token opened the API ($code)"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" "$base/api/auth/tokens")
+          [ "$code" = 403 ] || { echo "::error::an API token reached token management ($code)"; exit 1; }
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/webhook")
           [ "$code" != 401 ] || { echo "::error::the media server webhook needs credentials"; exit 1; }
 
