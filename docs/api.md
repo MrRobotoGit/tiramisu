@@ -157,11 +157,53 @@ gap is cleared whenever the episode has a live release again, whoever put it
 there.
 
 > [!WARNING]
-> Nothing on `:9080` is authenticated. `/api/config` returns the whole
-> configuration, keys and tokens included, and accepts a POST that rewrites it;
 > `/api/library/add` and `/api/library/remove` write and delete files in the
-> library. Keep the port on a trusted network, or behind a reverse proxy that
-> requires authentication.
+> library. Turn on [sign-in](#sign-in-and-api-tokens) before exposing `:9080`
+> beyond a trusted network.
+
+---
+
+## Sign-in and API tokens
+
+Sign-in is optional and off by default. Turn it on in **Control Panel → Access**:
+it protects everything on `:9080` (Control Panel, Dashboard, `/api/*`,
+`/metrics`, `/debug/pprof`, `/mcp`). The Plex and Jellyfin webhooks stay open, so
+playback tracking keeps working without changes on the media server.
+
+- **One user**, with a password (bcrypt). The browser session lasts 30 days from
+  the last visit; **Sign out everywhere else** ends the others.
+- **API tokens** for agents, scripts and the menu bar app: create one per client
+  in **Access → New token**. A token has full access and does not expire; its
+  value (`tmr_…`) is shown once and stored only as a SHA-256 hash. Revoke it from
+  the same table.
+- Tokens can be created while sign-in is still off: configure your clients first,
+  then turn sign-in on.
+
+Clients send the token as a bearer header:
+
+```bash
+export TIRAMISU_TOKEN=tmr_...
+curl -H "Authorization: Bearer $TIRAMISU_TOKEN" http://127.0.0.1:9080/api/health
+```
+
+Without credentials, browsers are redirected to `/login` and API clients get
+`401` with `WWW-Authenticate: Bearer realm="tiramisu"`. The login is limited to
+5 attempts per minute per IP. Behind a reverse proxy, list it in
+`auth_trusted_proxies` so the limit applies per client, and forward `Host` and
+`X-Forwarded-Proto` (the session cookie is marked `Secure` on HTTPS).
+
+**Forgotten password:** stop the service, run `tiramisu --reset-auth` on the
+host, start it again. It clears the user, the sessions and the tokens and turns
+sign-in off. With Docker, start the container once with `TIRAMISU_RESET_AUTH=1`
+and remove the variable afterwards: while it is set, sign-in cannot be turned on.
+
+The user, sessions and tokens live in `STATE/tiramisu.db`, never in
+`config.json`. If sign-in is on and that database cannot be read, `:9080` answers
+`503` (webhooks excepted) instead of opening up.
+
+**Secrets are write-only.** `GET /api/config` never returns `plex.token`,
+`tmdb_api_key` or `prowlarr.api_key`: it reports whether each is set in
+`secrets_configured`. A `POST` that leaves one empty keeps the stored value.
 
 ---
 
@@ -173,6 +215,7 @@ profile, the same pipeline the sync uses, files the one you pick, lists and
 removes entries:
 
 - Claude Code: `claude mcp add --transport http tiramisu http://<host>:9080/mcp`
+  (with sign-in on, add `--header "Authorization: Bearer tmr_..."`)
 - Any MCP client that speaks Streamable HTTP: point it at the same URL.
 
 | Tool | What it does |
@@ -200,8 +243,9 @@ is Dummy Bunny (2024) already in the library, and in what quality?
 
 The MCP server needs v1.11.5 or later.
 
-> **Trust model:** like the rest of `:9080`, `/mcp` has no authentication.
-> Keep the port on your LAN.
+> **Authentication:** with [sign-in](#sign-in-and-api-tokens) on, `/mcp` needs an
+> API token in the `Authorization: Bearer` header. **Access → New token** shows a
+> ready-to-paste config for Hermes, Claude Code and curl.
 
 ---
 
@@ -213,6 +257,11 @@ its own section above). Handy for scripts, and for checking what is happening
 without opening the web UI.
 
 ### GoStorm API (`:8090`)
+
+The GoStorm API listens on `127.0.0.1` only: run these commands on the Tiramisu
+host (or inside the container). Only the engine itself calls it. To reach it from
+the network, as before v1.11.14, set `"gostorm_listen_ip": "all"` in
+`config.json`; it has no authentication, so do that only on a trusted network.
 
 ```bash
 # List all torrents (count)
@@ -286,6 +335,6 @@ curl -s http://127.0.0.1:9080/api/scheduler/status | jq
 # An empty array means Prowlarr is not configured, not that nothing was found.
 curl -s "http://127.0.0.1:9080/api/prowlarr/search?imdb_id=tt0088196&type=movie&year=1985" | jq
 
-# Running configuration, including the quality_scoring profile in use
+# Running configuration, including the quality_scoring profile in use (secrets are never returned)
 curl -s http://127.0.0.1:9080/api/config | jq '.quality_scoring'
 ```

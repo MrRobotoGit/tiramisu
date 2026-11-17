@@ -156,7 +156,6 @@ Host port bases (first choice; if taken, increment within a safe range):
 
 - Plex: `32400`
 - Jellyfin: `8096` (+ optional `8920`)
-- GoStorm API: `8090`
 - Metrics/Control Panel: `9080` (Tiramisu's `metrics_port` in `config.json`; the installer resets it to `9080` if left at the old default)
 
 ---

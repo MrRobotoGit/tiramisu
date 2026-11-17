@@ -15,5 +15,8 @@ Only the latest release receives security fixes.
 
 ## Scope
 
-Tiramisu is designed to run on a trusted home network. The Control Panel, the Dashboard and the APIs
-on `:9080` and `:8090` have no authentication; do not expose them to the internet.
+Tiramisu is designed to run on a trusted home network. Sign-in for `:9080` (Control Panel,
+Dashboard, APIs, MCP) is optional and off by default; turn it on in **Control Panel → Access**
+before exposing the port beyond your LAN, and put HTTPS in front of it. The GoStorm API on
+`:8090` has no authentication and listens on `127.0.0.1` only. Do not expose either port to the
+internet without a reverse proxy.

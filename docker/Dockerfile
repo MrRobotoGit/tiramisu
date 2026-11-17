@@ -45,7 +45,8 @@ ENV TIRAMISU_LOG_DIR=/state/logs
 ENV GOSTREAM_SOURCE_PATH=/mnt/tiramisu-mkv-real
 ENV GOSTREAM_MOUNT_PATH=/mnt/tiramisu-mkv-virtual
 
-EXPOSE 8090 9080
+# The GoStorm API (:8090) listens on 127.0.0.1 inside the container: only :9080 is published.
+EXPOSE 9080
 
 # tini is used as PID 1 to forward signals (e.g. SIGTERM on docker stop) to
 # tiramisu and reap zombie processes. Without it, the shell entrypoint script

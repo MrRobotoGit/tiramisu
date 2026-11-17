@@ -32,6 +32,8 @@ nano ~/Tiramisu/config.json
 | `metadata_cache_size_mb` | `50` | Metadata LRU cache budget |
 | `fuse_max_inflight_mb` | `0` | Cap on the RAM go-fuse checks out for in-flight requests; `0` leaves go-fuse's own default |
 | `gostorm_url` | `http://127.0.0.1:8090` | GoStorm internal API URL |
+| `gostorm_listen_ip` | *(empty)* | Where the GoStorm API (`:8090`) listens: empty = `127.0.0.1` only; `"all"` = every interface (the behaviour before v1.11.14), or a specific IP. Stays on every interface if `gostorm_url` is not a loopback address |
+| `auth_trusted_proxies` | *(empty)* | Reverse proxies (IPs or CIDRs) whose `X-Forwarded-For` the sign-in rate limit trusts |
 | `proxy_listen_port` | `8080` | Legacy field kept for config compatibility: no listener uses it today |
 | `metrics_port` | `9080` | Metrics, Control Panel, Webhook port |
 | `media_server_type` | `plex` | `plex` or `jellyfin`; selects how the post-sync library refresh is issued and which API the music sync reads |
@@ -153,6 +155,10 @@ Release-name language signals, used by the scoring and by the rejection gates:
 block is optional, and omitting it keeps these defaults.
 
 ### Runtime Environment Variables
+
+`TIRAMISU_RESET_AUTH=1` clears sign-in at start-up (Docker equivalent of
+`tiramisu --reset-auth`); remove it afterwards. See
+[Sign-in and API tokens](api.md#sign-in-and-api-tokens).
 
 ```ini
 Environment="GOMEMLIMIT=2200MiB"

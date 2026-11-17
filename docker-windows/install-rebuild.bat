@@ -368,7 +368,6 @@ echo.
 echo Ports (host -> container):
 echo   PLEX_HOST_PORT     : %PLEX_HOST_PORT% ^> 32400
 echo   JELLYFIN_HOST_PORT : %JELLYFIN_HOST_PORT% ^> 8096
-echo   GOSTORM_HOST_PORT  : %GOSTORM_HOST_PORT% ^> 8090
 echo   METRICS_HOST_PORT  : %METRICS_HOST_PORT% ^> %TIRAMISU_METRICS_PORT%
 echo   Internal metrics   : %TIRAMISU_METRICS_PORT%
 echo.

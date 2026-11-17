@@ -39,7 +39,6 @@ docker run -d \
   -v /path/to/state:/state \
   -v /mnt/tiramisu-mkv-real:/mnt/tiramisu-mkv-real \
   -v /mnt/tiramisu-mkv-virtual:/mnt/tiramisu-mkv-virtual:rshared \
-  -p 8090:8090 \
   -p 9080:9080 \
   mrrobotogit/tiramisu:latest
 ```

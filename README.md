@@ -72,6 +72,7 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 - **Native Plex and Jellyfin integration.** Playback webhooks switch the stream to Priority Mode, and titles are matched by IMDb id, so localized names still match.
 - **Control Panel and Dashboard.** Every setting in one place, and a live view of the swarm, streams, services, scheduler and logs, on desktop and phone. Each stream shows its piece map: what is ready ahead of the player and where the download frontier is.
 - **Library API and MCP server.** Add or remove titles over HTTP, or let an AI agent (Hermes, OpenClaw, Claude Code) search and file releases with your own scoring profile.
+- **Optional sign-in.** One user and a password for the Control Panel, the Dashboard and every API, plus named API tokens for agents, scripts and the menu bar app. Keys and tokens in the config are write-only, and the GoStorm API answers on the host only.
 - **VPN friendly.** NAT-PMP port mapping for WireGuard and an optional IP blocklist, loaded before the engine starts when a cached copy exists.
 - **One binary.** GoStorm, a deeply patched fork of [TorrServer Matrix](https://github.com/YouROK/TorrServer) and [anacrolix/torrent](https://github.com/anacrolix/torrent), ships inside the single `tiramisu` binary.
 
@@ -208,7 +209,6 @@ docker run -d \
   -v /path/to/state:/state \
   -v /mnt/tiramisu-mkv-real:/mnt/tiramisu-mkv-real \
   -v /mnt/tiramisu-mkv-virtual:/mnt/tiramisu-mkv-virtual:rshared \
-  -p 8090:8090 \
   -p 9080:9080 \
   mrrobotogit/tiramisu:latest
 ```

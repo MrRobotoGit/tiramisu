@@ -136,6 +136,35 @@ Expected hot paths: `sha1.blockGeneric` (no crypto extensions on Pi 4 A72), `io.
 
 ---
 
+<details>
+<summary><b>Forgot the sign-in password, or <code>:9080</code> answers 503</b></summary>
+
+Stop the service, reset sign-in, start it again:
+```bash
+sudo systemctl stop tiramisu
+~/Tiramisu/tiramisu --reset-auth
+sudo systemctl start tiramisu
+```
+This clears the user, the sessions and the API tokens and turns sign-in off. With
+Docker, start the container once with `-e TIRAMISU_RESET_AUTH=1`, then remove the
+variable.
+
+A `503` with "authentication state unavailable" means sign-in was on but
+`STATE/tiramisu.db` could not be read (or was replaced by an empty one): Tiramisu
+stays closed instead of opening up. Restore the database, or reset as above.
+
+</details>
+
+<details>
+<summary><b>Scripts or tools get 401, or cannot reach <code>:8090</code></b></summary>
+
+With sign-in on, every call to `:9080` needs an API token
+(`-H "Authorization: Bearer tmr_..."`), created in **Control Panel → Access**.
+The GoStorm API on `:8090` listens on `127.0.0.1` only since v1.11.14: run its
+commands on the host, or set `"gostorm_listen_ip": "all"` in `config.json`.
+
+</details>
+
 ## Key File Locations
 
 Paths below use the defaults set by `install.sh`. All are configurable during installation.

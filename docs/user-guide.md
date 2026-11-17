@@ -144,9 +144,9 @@ curl -s http://<tiramisu-host>:9080/api/scheduler/status | jq
 # Live log key events only
 ssh pi@<tiramisu-host> "tail -f /home/pi/Tiramisu/logs/tiramisu.log | grep -E '(OPEN|NATIVE|Interrupt|Jump|DiskWarmup|Emergency)'"
 
-# Active torrents in RAM with speed
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"active"}' http://<tiramisu-host>:8090/torrents | \
+# Active torrents in RAM with speed (the GoStorm API answers on the host only)
+ssh pi@<tiramisu-host> "curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{\"action\":\"active\"}' http://127.0.0.1:8090/torrents" | \
   jq '.[] | {title: .title[:60], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
 ```
 
@@ -243,8 +243,8 @@ http://<your-pi-ip>:9080/control
 
 ### Layout
 
-Six sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
-**Sources & Media**, **Engine**, **Release Selection** and **Scheduler**. Each section says when
+Seven sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
+**Sources & Media**, **Engine**, **Release Selection**, **Scheduler** and **Access**. Each section says when
 its settings take effect: on restart (Tiramisu settings, written to `config.json`) or live
 (GoStorm engine settings, pushed through its API). Find any setting with <kbd>⌘K</kbd>.
 
@@ -259,6 +259,10 @@ its settings take effect: on restart (Tiramisu settings, written to `config.json
 | **Engine** *(live)* | Cache Size, Readahead Cache; Warmup Cache, path and SSD quota; Connections Limit, DL/UP Rate, Disconnect Timeout; Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt; Smart Responsive Mode, Adaptive Shield, Debug Log |
 | **Release Selection** | Preferred and excluded language flags, preferred terms; quality scoring preset and bonuses for Movies and TV Series, with a preview of what wins right now |
 | **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule from `config.json`) |
+| **Access** *(live)* | Optional sign-in for `:9080` (one user, password), API tokens for agents and scripts, browser sessions. See [Sign-in and API tokens](api.md#sign-in-and-api-tokens) |
+
+Keys and tokens (media server token, TMDB and Prowlarr API keys) are write-only: the
+Control Panel shows whether one is set, never its value. Leave the field empty to keep it.
 
 ---
 
