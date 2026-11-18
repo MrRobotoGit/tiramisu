@@ -82,6 +82,7 @@ type cacheEntry struct {
 	expiresAt int64  // sessions only
 	tokenID   int64  // tokens only
 	scope     string // tokens only
+	name      string // tokens only
 	lastTouch time.Time
 }
 
@@ -494,8 +495,14 @@ func (s *Service) AuthenticateSession(session string) (ok, renewed bool) {
 
 // AuthenticateToken reports whether tok is a valid API token, and its scope.
 func (s *Service) AuthenticateToken(tok, ip string) (scope string, ok bool) {
+	scope, _, ok = s.AuthenticateTokenNamed(tok, ip)
+	return scope, ok
+}
+
+// AuthenticateTokenNamed is AuthenticateToken that also returns the token's name.
+func (s *Service) AuthenticateTokenNamed(tok, ip string) (scope, name string, ok bool) {
 	if s.store == nil || !strings.HasPrefix(tok, tokenPrefixLiteral) || len(tok) != len(tokenPrefixLiteral)+43 {
-		return "", false
+		return "", "", false
 	}
 	h := hashSecret(tok)
 	key := "t:" + h
@@ -504,15 +511,15 @@ func (s *Service) AuthenticateToken(tok, ip string) (scope string, ok bool) {
 	if e == nil {
 		t, found, err := s.store.GetAuthTokenByHash(h)
 		if err != nil || !found {
-			return "", false
+			return "", "", false
 		}
-		e = &cacheEntry{at: now, tokenID: t.ID, scope: t.Scope, lastTouch: time.Unix(t.LastUsed, 0)}
+		e = &cacheEntry{at: now, tokenID: t.ID, scope: t.Scope, name: t.Name, lastTouch: time.Unix(t.LastUsed, 0)}
 		s.store_(key, e, gen, now)
 	}
 	if s.claimTouch(e, tokenTouch, now) {
 		_ = s.store.TouchAuthToken(e.tokenID, now.Unix(), ip)
 	}
-	return e.scope, true
+	return e.scope, e.name, true
 }
 
 func (s *Service) Sessions() ([]metadb.AuthSession, error) {

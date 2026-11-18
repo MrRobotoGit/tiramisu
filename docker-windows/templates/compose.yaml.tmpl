@@ -31,7 +31,6 @@ services:
       - "${METRICS_HOST_PORT}:${TIRAMISU_METRICS_PORT}"
 
     environment:
-      - MKV_PROXY_CONFIG_PATH=/config.json
       - TIRAMISU_ROOT_PATH=/tiramisu/state
       - TIRAMISU_SOURCE_PATH=/tiramisu/source
       - TIRAMISU_MOUNT_PATH=/tiramisu/mount
@@ -48,14 +47,12 @@ services:
       # Tiramisu source + state
       - "${BASE_DIR}/tiramisu-mkv-real:/tiramisu/source"
       - "${BASE_DIR}/tiramisu:/tiramisu/state"
+      # The configuration lives in STATE/tiramisu.db. A config.json in this folder is
+      # imported on start (the BAT writes one only for a fresh install) and then renamed.
 
       # LinuxServer (Plex/Jellyfin) state
       - "${BASE_DIR}/${CONTAINER_NAME}/config:/config"
       - "${BASE_DIR}/${CONTAINER_NAME}/transcode:/transcode"
-
-      # Tiramisu config.json (BAT writes/patches this into the real-source tree)
-      # Not :ro - the Control Panel saves settings back to this file.
-      - "${BASE_DIR}/tiramisu-mkv-real/config/config.json:/config.json"
 
       # s6-overlay hooks (mounted read-only; deterministic custom startup)
       - "${STACK_DIR}/custom-services:/custom-services.d:ro"

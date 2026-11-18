@@ -279,22 +279,46 @@ call :ensure_dir "%BASE_DIR_WIN%\tiramisu-mkv-real\tv"
 call :ensure_dir "%BASE_DIR_WIN%\%CONTAINER_NAME%\config"
 call :ensure_dir "%BASE_DIR_WIN%\%CONTAINER_NAME%\transcode"
 
-REM Ensure config.json exists
-set "CONFIG_PATH=%BASE_DIR_WIN%\tiramisu-mkv-real\config\config.json"
-if not exist "%CONFIG_PATH%" (
+REM The configuration lives in the state DB (tiramisu\STATE\tiramisu.db). A config.json in
+REM tiramisu\ is imported on the next start and then renamed, so one is written only to import:
+REM  - the single-file config of an older install, moved here once (then renamed .migrated);
+REM  - config.json.example, on a fresh install with no state DB.
+REM A rebuild of a migrated install writes nothing: a file now would undo Control Panel changes.
+call :ensure_dir "%BASE_DIR_WIN%\tiramisu"
+set "CONFIG_PATH=%BASE_DIR_WIN%\tiramisu\config.json"
+set "LEGACY_CONFIG=%BASE_DIR_WIN%\tiramisu-mkv-real\config\config.json"
+set "STATE_DB=%BASE_DIR_WIN%\tiramisu\STATE\tiramisu.db"
+set "CONFIG_IMPORT=0"
+if exist "%CONFIG_PATH%" set "CONFIG_IMPORT=1"
+if "%CONFIG_IMPORT%"=="0" if exist "%LEGACY_CONFIG%" (
+  copy /y "%LEGACY_CONFIG%" "%CONFIG_PATH%" >nul
+  if errorlevel 1 (
+    echo ERROR: Failed to move %LEGACY_CONFIG% to %CONFIG_PATH%
+    exit /b 1
+  )
+  move /y "%LEGACY_CONFIG%" "%LEGACY_CONFIG%.migrated" >nul
+  set "CONFIG_IMPORT=1"
+)
+if "%CONFIG_IMPORT%"=="0" if not exist "%STATE_DB%" (
   copy /y "%REPO_ROOT%\config.json.example" "%CONFIG_PATH%" >nul
   if errorlevel 1 (
     echo ERROR: Failed to create config.json from config.json.example
     exit /b 1
   )
   set "CONFIG_CREATED=1"
+  set "CONFIG_IMPORT=1"
 )
 
-REM Patch config.json + read internal metrics port
-call :patch_config "%CONFIG_PATH%" "%BASE_DIR_WIN%\tiramisu-mkv-real\backup" "%FLAVOR%"
-if errorlevel 1 (
-  echo ERROR: Failed to patch/read config.json at %CONFIG_PATH%
-  exit /b !ERRORLEVEL!
+if "%CONFIG_IMPORT%"=="1" (
+  REM Patch the file to import + read internal metrics port
+  call :patch_config "%CONFIG_PATH%" "%BASE_DIR_WIN%\tiramisu-mkv-real\backup" "%FLAVOR%"
+  if errorlevel 1 (
+    echo ERROR: Failed to patch/read config.json at %CONFIG_PATH%
+    exit /b !ERRORLEVEL!
+  )
+) else (
+  REM Already in the state DB: the internal metrics port is the default unless changed there.
+  if "%TIRAMISU_METRICS_PORT%"=="" set "TIRAMISU_METRICS_PORT=9080"
 )
 if "%TIRAMISU_METRICS_PORT%"=="" (
   echo ERROR: Failed to determine internal metrics port from config.json
@@ -371,9 +395,11 @@ echo   JELLYFIN_HOST_PORT : %JELLYFIN_HOST_PORT% ^> 8096
 echo   METRICS_HOST_PORT  : %METRICS_HOST_PORT% ^> %TIRAMISU_METRICS_PORT%
 echo   Internal metrics   : %TIRAMISU_METRICS_PORT%
 echo.
-echo config.json:
-if "%CONFIG_CREATED%"=="1" (echo   - created from config.json.example) else (echo   - existed)
-if "%CONFIG_CHANGED%"=="1" (echo   - patched keys) else (echo   - no changes required)
+echo configuration:
+if "%CONFIG_IMPORT%"=="0" (echo   - kept in the state DB, nothing written) else (
+  if "%CONFIG_CREATED%"=="1" (echo   - config.json created from config.json.example, imported on start) else (echo   - config.json imported on start)
+  if "%CONFIG_CHANGED%"=="1" (echo   - patched keys) else (echo   - no changes required)
+)
 if /i "%FLAVOR%"=="jellyfin" (
   if not "%CONFIG_BACKUP%"=="" echo   - backup: %CONFIG_BACKUP%
 )

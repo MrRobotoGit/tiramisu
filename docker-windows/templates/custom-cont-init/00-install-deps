@@ -5,7 +5,6 @@ set -euo pipefail
 # - Ensure all bind-mounted directories exist
 # - Clean up only stale FUSE layers that can survive an unclean container restart
 
-: "${MKV_PROXY_CONFIG_PATH:=/config.json}"
 : "${TIRAMISU_ROOT_PATH:=${GOSTREAM_ROOT_PATH:-/tiramisu/state}}"
 : "${TIRAMISU_SOURCE_PATH:=${GOSTREAM_SOURCE_PATH:-/tiramisu/source}}"
 : "${TIRAMISU_MOUNT_PATH:=${GOSTREAM_MOUNT_PATH:-/tiramisu/mount}}"
@@ -29,6 +28,5 @@ if mountpoint -q "$TIRAMISU_MOUNT_PATH" 2>/dev/null; then
   fi
 fi
 
-if [ ! -f "$MKV_PROXY_CONFIG_PATH" ]; then
-  echo "WARNING: Missing config at $MKV_PROXY_CONFIG_PATH (tiramisu will fail until mounted)" >&2
-fi
+# The configuration lives in $TIRAMISU_STATE_DIR/tiramisu.db; a config.json in
+# $TIRAMISU_ROOT_PATH is imported on start and renamed. Neither is required.

@@ -64,11 +64,14 @@ If you already created your own deploy files, you can point the installer to the
 
 ### Paths and config rule (repo-specific)
 
-The Tiramisu config file is expected at:
+The Tiramisu configuration lives in the state DB, `{base}\tiramisu\STATE\tiramisu.db`, and is
+changed from the Control Panel (its History section keeps the last 50 versions).
 
-`{base}\tiramisu-mkv-real\config\config.json`
-
-The installer creates it from `config.json.example` if missing.
+On a fresh install (no state DB) the installer writes `{base}\tiramisu\config.json` from
+`config.json.example`; Tiramisu imports it on the first start and renames it
+`config.json.imported-<date>`. An older install's `{base}\tiramisu-mkv-real\config\config.json` is moved
+there once and renamed `.migrated`. Later rebuilds write no config file. To replace the configuration,
+drop a `config.json` in `{base}\tiramisu\` and restart the container.
 
 ### Rebuild semantics (Mode A)
 
@@ -156,7 +159,7 @@ Host port bases (first choice; if taken, increment within a safe range):
 
 - Plex: `32400`
 - Jellyfin: `8096` (+ optional `8920`)
-- Metrics/Control Panel: `9080` (Tiramisu's `metrics_port` in `config.json`; the installer resets it to `9080` if left at the old default)
+- Metrics/Control Panel: `9080` (Tiramisu's `metrics_port`; the installer resets it to `9080` in the file it imports if left at the old default)
 
 ---
 

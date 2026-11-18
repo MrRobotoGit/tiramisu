@@ -32,6 +32,8 @@ COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
  && mkdir -p /state
 
+# Read only to import a configuration: on the first start, or later as a drop-in. The
+# configuration itself lives in /state/STATE/tiramisu.db; mounting this file is optional.
 ENV MKV_PROXY_CONFIG_PATH=/config.json
 # Everything that must outlive the container lives under /state. It is deliberately
 # a plain directory and not a VOLUME: an anonymous volume looks mounted, so the

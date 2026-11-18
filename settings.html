@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/ui/theme.css">
     <script src="/ui/theme.js"></script>
     <script src="/ui/auth.js"></script>
+    <script src="/ui/restart.js"></script>
     <style>
         .page-intro { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; scroll-margin-top: 80px; }
         .page-intro .row { display: flex; align-items: flex-end; gap: 16px; }
@@ -174,6 +175,40 @@
         #tls-warn, #tls-err { margin-top: 12px; }
         @media (max-width: 900px) { .acc-status { flex-direction: column; align-items: flex-start; } .acc-row .dev { min-width: 0; } }
         @media (max-width: 900px) { .tls-kv { grid-template-columns: 1fr; gap: 2px 0; } .tls-kv dd { margin-bottom: 8px; } }
+        .hist-row { padding: 14px 24px; display: flex; flex-direction: column; gap: 12px; }
+        .hist-row + .hist-row { border-top: 1px solid var(--hair); }
+        .hist-row.open, .hist-row.restoring { background: var(--well); }
+        .hist-head { display: flex; align-items: center; gap: 16px; min-width: 0; }
+        .hist-head .id { width: 44px; flex: 0 0 44px; color: var(--ink2); font-weight: 500; }
+        .hist-head .when { width: 130px; flex: 0 0 130px; color: var(--ink2); }
+        .hist-head .who { width: 230px; flex: 0 0 230px; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+        .hist-head .who b { font-weight: 500; }
+        .hist-head .who span { color: var(--ink3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .hist-head .sum { flex: 1 1 auto; min-width: 0; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .hist-detail { display: flex; flex-direction: column; gap: 8px; padding-left: 60px; }
+        .hist-detail > .label { color: var(--ink3); }
+        .hist-ch { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .hist-ch .k { width: 300px; flex: 0 0 300px; overflow-wrap: anywhere; }
+        .hist-ch .v { display: flex; gap: 8px; align-items: center; min-width: 0; flex-wrap: wrap; }
+        .hist-ch .from { color: var(--ink3); overflow-wrap: anywhere; }
+        .hist-ch .to { overflow-wrap: anywhere; }
+        .hist-actions { display: flex; align-items: center; gap: 12px; padding-top: 4px; flex-wrap: wrap; }
+        .hist-row.open .chip-tag.soft, .hist-row.restoring .chip-tag.soft { border-color: var(--hair); }
+        .hist-foot { display: flex; align-items: center; gap: 10px; padding: 12px 24px; border-top: 1px solid var(--hair); }
+        .hist-empty { padding: 18px 24px; }
+        @media (max-width: 900px) {
+            .hist-row { padding: 12px 16px; gap: 8px; }
+            .hist-head { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 8px; }
+            .hist-head .id, .hist-head .when, .hist-head .who { width: auto; flex: none; }
+            .hist-head .who { grid-column: 1 / -1; grid-row: 2; }
+            .hist-head .sum { grid-column: 1 / 3; grid-row: 3; white-space: normal; }
+            .hist-head .btn { grid-column: 3; grid-row: 3; }
+            .hist-head .chip-tag { justify-self: end; }
+            .hist-detail { padding-left: 0; }
+            .hist-ch { flex-direction: column; align-items: flex-start; gap: 2px; }
+            .hist-ch .k { width: auto; flex: none; color: var(--ink2); font-size: 12px; }
+            .hist-foot { padding: 12px 16px; }
+        }
     </style>
 </head>
 
@@ -199,6 +234,7 @@
                 <a href="#release" data-sec="sec-release"><span class="num">05</span>Release Selection<span class="dirty"></span></a>
                 <a href="#scheduler" data-sec="sec-scheduler"><span class="num">06</span>Scheduler<span class="dirty"></span></a>
                 <a href="#access" data-sec="sec-access"><span class="num">07</span>Access</a>
+                <a href="#history" data-sec="sec-history"><span class="num">08</span>History<span class="dirty"></span></a>
             </nav>
             <nav class="nav">
                 <span class="label">Reference</span>
@@ -968,6 +1004,31 @@
                     </div>
 
                 </section>
+
+                <section class="settings" id="sec-history" data-title="History">
+                    <div class="page-intro">
+                        <span class="label">Settings · 08</span>
+                        <div class="row">
+                            <h1 class="h1">History</h1><span class="spacer"></span>
+                            <span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span>
+                        </div>
+                        <p>Every saved change to the configuration, newest first. Restore an older version: it goes through the bar below like any other change. The last 50 versions are kept.</p>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-head"><span class="num">08.1</span><span class="label ink">Versions</span><span class="spacer"></span>
+                            <div class="seg sm" role="group" aria-label="Filter versions" id="hist-filter">
+                                <button type="button" data-f="all" class="active" aria-pressed="true">All</button>
+                                <button type="button" data-f="restart" aria-pressed="false">Restart</button>
+                                <button type="button" data-f="secret" aria-pressed="false">Secrets</button>
+                            </div>
+                        </div>
+                        <div class="card-body flush">
+                            <div id="hist-list"><div class="hist-empty small faint">Loading…</div></div>
+                            <div class="hist-foot"><span class="lamp off"></span><span class="small faint">Keys and tokens are never shown, only that they changed. Export a copy with <code>tiramisu --export-config</code>.</span></div>
+                        </div>
+                    </div>
+                </section>
             </div>
 
             <!-- ============ CHANGE BAR ============ -->
@@ -986,48 +1047,15 @@
     <script>
         // --- Restart ---
         // confirmed: the caller already asked (Apply & restart asks before saving anything).
+        // Saved changes that wait for a restart, as the change bar listed them.
+        let savedForRestart = [];
         async function restartTiramisu(confirmed) {
-            const btn = document.getElementById('btn-restart');
-            if (confirmed !== true && !confirm('Restart tiramisu? The service will be unavailable for a few seconds.')) return;
-            btn.disabled = true;
-            btn.textContent = 'Restarting…';
-            try {
-                await fetch('/api/restart', { method: 'POST' });
-            } catch (_) { /* expected: connection drops on restart */ }
-            // HTTPS switched on or off: the page changes scheme once the new process answers. The old
-            // process keeps answering through its shutdown, so it has to go down first.
-            const move = window.tlsSchemeAfterRestart ? window.tlsSchemeAfterRestart() : '';
-            const go = scheme => { clearInterval(poll); location.href = scheme + '//' + location.host + '/control#access'; };
-            const t0 = Date.now();
-            let wentDown = false, downAt = 0;
-            const poll = setInterval(async () => {
-                if (move === 'http:') {
-                    // From https:// the new plain-only process cannot be reached: every fetch fails.
-                    // Give it time to start, then go.
-                    if ((wentDown && Date.now() - downAt > 10000) || Date.now() - t0 > 60000) return go('http:');
-                }
-                try {
-                    const r = await fetch('/api/config', { signal: AbortSignal.timeout(2000) });
-                    if (move === 'https:') {
-                        if (!wentDown && Date.now() - t0 < 60000) return;
-                        // The new process answers in clear (403 with sign-in on): only move if it runs TLS.
-                        const t = await fetch('/api/auth/tls', { cache: 'no-store', signal: AbortSignal.timeout(2000) }).catch(() => null);
-                        const ok = t && (t.status === 403 || (t.ok && (await t.json().catch(() => ({}))).running));
-                        if (ok) return go('https:');
-                        if (t) { clearInterval(poll); location.reload(); }
-                        return;
-                    }
-                    if (move === 'http:') return;
-                    if (r.ok) {
-                        clearInterval(poll);
-                        btn.disabled = false;
-                        btn.innerHTML = '<span class="ico">↻</span><span class="hide-sm">Restart</span>';
-                        restartPending = false;
-                        renderChangeBar();
-                        if (window.tlsLoad) window.tlsLoad();
-                    }
-                } catch (_) { if (!wentDown) downAt = Date.now(); wentDown = true; }
-            }, 1500);
+            if (confirmed !== true && !(await TiramisuRestart.confirm({ title: 'Restart Tiramisu?', changes: savedForRestart,
+                discarded: allChanges().map(c => c.text), ok: 'Restart' }))) return;
+            document.getElementById('btn-restart').disabled = true;
+            // HTTPS switched on or off: the page changes scheme once the new process answers.
+            const scheme = window.tlsSchemeAfterRestart ? window.tlsSchemeAfterRestart() : undefined;
+            await TiramisuRestart.run({ changes: savedForRestart.length, scheme });
         }
 
         // --- NAT-PMP state → Listen Port readonly ---
@@ -2173,8 +2201,11 @@
             core: { scope: 'live', label: 'Engine' },
             sched: { scope: 'restart', label: 'Scheduler' },
             https: { scope: 'restart', label: 'HTTPS' },
+            restore: { scope: 'restart', label: 'Restore' },
         };
-        const SECTION_OF = { tiramisu: null, release: 'sec-release', core: 'sec-engine', sched: 'sec-scheduler', https: 'sec-access' };
+        const HIST_OTHERS = 'Apply or discard the other changes before restoring a version';
+        const HIST_ALONE = 'Restore a version on its own: apply or discard the other changes first';
+        const SECTION_OF = { tiramisu: null, release: 'sec-release', core: 'sec-engine', sched: 'sec-scheduler', https: 'sec-access', restore: 'sec-history' };
         const snapshots = {};
         let restartPending = false;
         let applying = false;
@@ -2233,6 +2264,7 @@
         }
 
         function changesOf(group) {
+            if (group === 'restore') return histRestoreChanges();
             const base = snapshots[group];
             if (!base) return [];
             const out = [];
@@ -2251,6 +2283,8 @@
 
         function refreshDirty() {
             const changes = allChanges();
+            // A restore refused because of other edits: once those are gone, so is the message.
+            if ((lastError === HIST_OTHERS || lastError === HIST_ALONE) && !changes.some(c => c.group !== 'restore')) lastError = '';
             // Rail dots: the section each pending change lives in.
             const secs = new Set();
             changes.forEach(c => {
@@ -2298,8 +2332,16 @@
             const dirty = Object.keys(GROUPS).filter(isDirty);
             if (!dirty.length) return;
             const wantRestart = dirty.some(g => GROUPS[g].scope === 'restart');
+            // A restore replaces the whole configuration: saving other edits with it would undo it.
+            if (dirty.includes('restore') && dirty.length > 1) {
+                lastError = HIST_ALONE;
+                renderChangeBar();
+                return;
+            }
             // Ask before saving: "Cancel" must leave everything as it was, not save without restarting.
-            if (wantRestart && !confirm('Save and restart tiramisu? The service will be unavailable for a few seconds.')) return;
+            // Only what waits for the restart: engine settings apply live.
+            const pending = allChanges().filter(c => GROUPS[c.group].scope === 'restart').map(c => c.text);
+            if (wantRestart && !(await TiramisuRestart.confirm({ title: 'Apply and restart Tiramisu?', changes: pending, ok: 'Apply & restart', unsaved: true }))) return;
             applying = true;
             lastError = '';
             // Freeze the form while saving: an edit typed now would be snapshotted as saved.
@@ -2310,6 +2352,10 @@
             try {
                 // Order matters: the engine save writes the whole config, the schedule save
                 // re-reads it and writes it again, so the schedule goes last.
+                if (dirty.includes('restore')) {
+                    const r = await histApplyRestore();
+                    if (r.ok) { if (r.restart) restartPending = true; } else errors.push(r.message);
+                }
                 if (dirty.includes('core')) {
                     const r = await saveCore();
                     if (!r.ok) errors.push(r.message);
@@ -2340,7 +2386,9 @@
             lastError = errors.join(' · ');
             if (!errors.length) savedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             refreshDirty();
-            if (!errors.length && wantRestart) restartTiramisu(true);
+            histLoad(); // every save is a new version
+            if (!errors.length && wantRestart) { savedForRestart = savedForRestart.concat(pending); restartTiramisu(true); }
+            else if (!errors.length && restartPending) savedForRestart = savedForRestart.concat(pending);
         }
 
         async function discardChanges() {
@@ -2351,13 +2399,247 @@
             if (dirty.includes('core')) await loadCore();
             if (dirty.includes('sched')) { snapshots.sched = null; await loadScheduler(); }
             if (dirty.includes('https')) await window.tlsLoad();
+            if (dirty.includes('restore')) histCancelRestore();
             refreshDirty();
         }
+
+        // =============================================================
+        // 08 History: configuration versions and restore
+        // =============================================================
+        const HIST_SOURCE = { ui: 'Control Panel', api: 'API token', internal: 'Engine', import: 'Import', cli: 'Command line', rollback: 'Restore', default: 'Defaults' };
+        let histEntries = [];
+        let histOpen = null;      // version whose changes are shown
+        let histRestore = null;   // version waiting in the change bar
+        let histPreview = null;   // what restoring it changes, computed by the server
+        let histFocus = '';       // control to focus after a re-render
+        let histFilter = 'all';
+
+        function histFmt(v) {
+            if (v === undefined || v === '' || v === 'null' || v === '""' || v === '[]') return '∅';
+            try {
+                const x = JSON.parse(v);
+                if (x === true) return 'on';
+                if (x === false) return 'off';
+                if (Array.isArray(x)) return x.length ? x.map(e => typeof e === 'object' ? JSON.stringify(e) : String(e)).join(', ') : '∅';
+                if (typeof x === 'object' && x) return JSON.stringify(x);
+                return String(x);
+            } catch (_) { return v; }
+        }
+
+        function histWhen(ts) {
+            const d = new Date(ts * 1000), now = new Date();
+            const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const mins = Math.round((now - d) / 60000);
+            if (mins >= 0 && mins < 60) return mins < 1 ? 'just now' : `${mins} min ago`;
+            const day = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+            const days = Math.round((day(now) - day(d)) / 86400000);
+            if (days === 0) return 'today ' + hm;
+            if (days === 1) return 'yesterday ' + hm;
+            return d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + hm;
+        }
+
+        function histSummary(e) {
+            if (e.baseline) return 'Oldest version kept';
+            if (e.note) return e.note.replace(/^rollback to #/, 'Restored version #');
+            if (e.source === 'import') return e.changes.length ? `Imported, ${e.changes.length} setting${e.changes.length > 1 ? 's' : ''} changed` : 'Imported, nothing changed';
+            if (!e.changes.length) return e.source === 'default' ? 'Default settings' : 'No changes';
+            return e.changes[0].key + (e.changes.length > 1 ? ` and ${e.changes.length - 1} more` : '');
+        }
+
+        function histRestoreChanges() {
+            if (!histRestore || !histPreview) return [];
+            const ch = histPreview.changes;
+            const fmt = v => { const t = histFmt(v); return t.length > 24 ? t.slice(0, 22) + '…' : t; };
+            const items = ch.map(c => ({ group: 'restore', el: null,
+                text: c.secret ? `${c.key} changed` : `${c.key} ${fmt(c.from)} → ${fmt(c.to)}` }));
+            // Restoring a version identical to the one in use still has to be applyable.
+            return items.length ? items : [{ group: 'restore', el: null, text: `Restore #${histRestore} (same as the saved configuration)` }];
+        }
+
+        function histEl(tag, cls, text) {
+            const el = document.createElement(tag);
+            if (cls) el.className = cls;
+            if (text !== undefined) el.textContent = text;
+            return el;
+        }
+
+        function histChange(c) {
+            const r = histEl('div', 'hist-ch');
+            r.appendChild(histEl('span', 'k mono', c.key));
+            const v = histEl('span', 'v');
+            if (c.secret) {
+                v.appendChild(histEl('span', 'chip-tag soft', 'secret'));
+                v.appendChild(histEl('span', 'small faint', 'changed'));
+            } else {
+                v.appendChild(histEl('span', 'from mono', histFmt(c.from)));
+                v.appendChild(histEl('span', 'small faint', '→'));
+                v.appendChild(histEl('span', 'to mono', histFmt(c.to)));
+            }
+            r.appendChild(v);
+            return r;
+        }
+
+        function histRender() {
+            const list = document.getElementById('hist-list');
+            list.replaceChildren();
+            const shown = histEntries.filter(e => histFilter === 'all'
+                || (histFilter === 'restart' && e.restart)
+                || (histFilter === 'secret' && e.changes.some(c => c.secret)));
+            if (!shown.length) {
+                list.appendChild(histEl('div', 'hist-empty small faint', histEntries.length ? 'No version matches this filter.' : 'No saved versions yet.'));
+                return;
+            }
+            shown.forEach(e => {
+                const restoring = histRestore === e.id, open = histOpen === e.id && !restoring;
+                const row = histEl('div', 'hist-row' + (open ? ' open' : '') + (restoring ? ' restoring' : ''));
+                const head = histEl('div', 'hist-head');
+                head.appendChild(histEl('span', 'id mono', '#' + e.id));
+                head.appendChild(histEl('span', 'when small', histWhen(e.created_at)));
+                const who = histEl('span', 'who');
+                who.appendChild(histEl('b', '', HIST_SOURCE[e.source] || e.source));
+                if (e.actor) who.appendChild(histEl('span', 'small', '· ' + e.actor));
+                head.appendChild(who);
+                head.appendChild(histEl('span', 'sum small', histSummary(e)));
+                if (e.current) head.appendChild(restartPending ? histEl('span', 'chip-tag soft', 'saved, restart pending') : histEl('span', 'chip-tag sig-green', 'in use'));
+                else if (restoring) head.appendChild(histEl('span', 'chip-tag accent', 'will be restored'));
+                else if (e.restart && e.changes.length) head.appendChild(histEl('span', 'chip-tag soft', 'restart'));
+                if (!e.current && !restoring) {
+                    const b = histEl('button', 'btn ghost sm', open ? 'Hide' : 'Show changes');
+                    b.type = 'button';
+                    b.setAttribute('aria-expanded', open);
+                    b.dataset.hf = e.id + ':toggle';
+                    b.onclick = () => { histOpen = open ? null : e.id; histFocus = e.id + ':toggle'; histRender(); };
+                    head.appendChild(b);
+                }
+                row.appendChild(head);
+                if (restoring) {
+                    const d = histEl('div', 'hist-detail');
+                    d.appendChild(histEl('span', 'label', `Restoring #${e.id} brings back`));
+                    const ch = histPreview ? histPreview.changes : [];
+                    if (ch.length) ch.forEach(c => d.appendChild(histChange(c)));
+                    else d.appendChild(histEl('span', 'small faint', 'The same settings as the version in use.'));
+                    if (ch.some(c => c.secret)) d.appendChild(histEl('div', 'warn-note', 'This brings back the keys and tokens this version had. If one was replaced because it leaked or was revoked, set it again after the restore.'));
+                    const a = histEl('div', 'hist-actions');
+                    const b = histEl('button', 'btn sm', 'Cancel restore');
+                    b.type = 'button';
+                    b.dataset.hf = e.id + ':cancel';
+                    b.onclick = () => { histCancelRestore(); histFocus = e.id + ':toggle'; histRender(); refreshDirty(); };
+                    a.appendChild(b);
+                    const newer = histEntries.filter(x => x.id > e.id).map(x => '#' + x.id);
+                    a.appendChild(histEl('span', 'small faint', `Apply & restart in the bar below to restore. ${newer.length > 3 ? 'The newer versions' : newer.length > 1 ? newer.slice(0, -1).join(', ') + ' and ' + newer.at(-1) : newer[0]} stay${newer.length === 1 ? 's' : ''} in the list.`));
+                    d.appendChild(a);
+                    row.appendChild(d);
+                } else if (open) {
+                    const d = histEl('div', 'hist-detail');
+                    d.appendChild(histEl('span', 'label', `What #${e.id} changed`));
+                    if (e.changes.length) e.changes.forEach(c => d.appendChild(histChange(c)));
+                    else d.appendChild(histEl('span', 'small faint', e.baseline ? 'The versions before it are no longer kept, so what it changed is not known.' : 'Nothing changed against the version before.'));
+                    const a = histEl('div', 'hist-actions');
+                    const b = histEl('button', 'btn sm', 'Restore this version');
+                    b.type = 'button';
+                    b.dataset.hf = e.id + ':restore';
+                    b.onclick = () => histStartRestore(e.id);
+                    a.appendChild(b);
+                    a.appendChild(histEl('span', 'small faint', `Brings back the settings as they were right after #${e.id}; newer versions stay in the list.`));
+                    d.appendChild(a);
+                    row.appendChild(d);
+                }
+                list.appendChild(row);
+            });
+            if (histFocus) {
+                const el = list.querySelector(`[data-hf="${histFocus}"]`);
+                histFocus = '';
+                if (el) el.focus();
+            }
+        }
+
+        async function histStartRestore(id) {
+            const others = Object.keys(GROUPS).filter(g => g !== 'restore' && isDirty(g));
+            if (others.length) {
+                lastError = HIST_OTHERS;
+                renderChangeBar();
+                return;
+            }
+            lastError = '';
+            await histLoad(); // the preview is computed against what is saved now
+            let p;
+            try {
+                const r = await fetch(`/api/config/history/${id}/restore`, { cache: 'no-store' });
+                if (!r.ok) throw new Error((await r.text()).trim() || r.status);
+                p = await r.json();
+            } catch (err) {
+                lastError = 'Restore: ' + err.message;
+                renderChangeBar();
+                return;
+            }
+            histRestore = id;
+            histPreview = p;
+            GROUPS.restore.scope = p.restart ? 'restart' : 'live';
+            histOpen = null;
+            histFocus = id + ':cancel';
+            histRender();
+            refreshDirty();
+        }
+
+        function histCancelRestore() {
+            if (histRestore) histOpen = histRestore;
+            histRestore = null;
+            histPreview = null;
+            histRender();
+        }
+
+        async function histApplyRestore() {
+            let r;
+            try {
+                r = await fetch('/api/config/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: histRestore }) });
+            } catch (_) { return { ok: false, message: 'Restore: connection error' }; }
+            if (!r.ok) {
+                const msg = 'Restore: ' + ((await r.text()).trim() || r.status);
+                await histLoad(); // a version pruned meanwhile leaves the bar
+                return { ok: false, message: msg };
+            }
+            const res = await r.json().catch(() => ({}));
+            histRestore = null;
+            histPreview = null;
+            // The engine already uses the restored configuration: show it, so the next save builds on it
+            // and the restart knows whether the scheme changes.
+            await loadEngine();
+            snapshots.sched = null;
+            await loadScheduler();
+            if (window.tlsLoad) await window.tlsLoad();
+            await histLoad();
+            return { ok: true, restart: !!(res.changed && res.restart) };
+        }
+
+        async function histLoad() {
+            try {
+                const r = await fetch('/api/config/history?limit=50', { cache: 'no-store' });
+                if (!r.ok) throw new Error(r.status);
+                histEntries = await r.json();
+            } catch (_) {
+                histEntries = [];
+                document.getElementById('hist-list').replaceChildren(histEl('div', 'hist-empty small faint', 'The history could not be loaded.'));
+                return;
+            }
+            if (histRestore && !histEntries.some(e => e.id === histRestore)) { histRestore = null; histPreview = null; }
+            histRender();
+            refreshDirty();
+        }
+
+        document.querySelectorAll('#hist-filter button').forEach(b => b.addEventListener('click', () => {
+            histFilter = b.dataset.f;
+            document.querySelectorAll('#hist-filter button').forEach(x => {
+                x.classList.toggle('active', x === b);
+                x.setAttribute('aria-pressed', x === b);
+            });
+            histRender();
+        }));
+        histLoad();
 
         document.addEventListener('input', () => refreshDirty());
         document.addEventListener('change', () => refreshDirty());
         window.addEventListener('beforeunload', e => {
-            if (allChanges().length) { e.preventDefault(); e.returnValue = ''; }
+            if (allChanges().length && !TiramisuRestart.leaving) { e.preventDefault(); e.returnValue = ''; }
         });
 
         // Build pickers then load data
@@ -3008,7 +3290,7 @@
                 btn.disabled = !st.available || st.reset_pending;
                 if (!st.available) {
                     $('acc-title').textContent = 'Sign-in unavailable';
-                    $('acc-hint').textContent = 'Sign-in needs the state database (enable_state_db in config.json), which is off or could not be opened.';
+                    $('acc-hint').textContent = 'Sign-in needs the state database (STATE/tiramisu.db), which could not be opened: see the log.';
                     btn.hidden = true;
                 } else if (on) {
                     $('acc-title').textContent = 'Sign-in required';

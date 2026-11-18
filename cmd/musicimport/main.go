@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,11 +24,11 @@ import (
 )
 
 func main() {
-	plexURL := flag.String("plex-url", "", "Plex base URL (default: plex.url from config.json)")
-	plexToken := flag.String("plex-token", "", "Plex token (default: plex.token from config.json)")
+	plexURL := flag.String("plex-url", "", "Plex base URL (default: plex.url from the configuration)")
+	plexToken := flag.String("plex-token", "", "Plex token (default: plex.token from the configuration)")
 	section := flag.String("section", "", "Plex artist section key (default: the only artist section)")
-	prowlarrURL := flag.String("prowlarr-url", "", "Prowlarr base URL (default: prowlarr.url from config.json)")
-	prowlarrKey := flag.String("prowlarr-key", "", "Prowlarr API key (default: prowlarr.api_key from config.json)")
+	prowlarrURL := flag.String("prowlarr-url", "", "Prowlarr base URL (default: prowlarr.url from the configuration)")
+	prowlarrKey := flag.String("prowlarr-key", "", "Prowlarr API key (default: prowlarr.api_key from the configuration)")
 	libraryURL := flag.String("library-url", "http://127.0.0.1:9080", "Tiramisu Library API base URL")
 	libraryToken := flag.String("token", os.Getenv("TIRAMISU_TOKEN"), "API token for :9080 when sign-in is on (default $TIRAMISU_TOKEN)")
 	statePath := flag.String("state", "musicimport-state.json", "state file, created when missing")
@@ -52,9 +53,22 @@ func main() {
 	reapMinFailures := flag.Int("reap-min-failures", 3, "failures needed before an album is condemned")
 	reapMinSpan := flag.Duration("reap-min-span", 24*time.Hour, "how long the failures must span")
 	reapLimit := flag.Int("reap-limit", 25, "most albums removed in one run (0 = no cap)")
+	stateDB := flag.String("state-db", "", "tiramisu.db holding the configuration (default: TIRAMISU_STATE_DB, else STATE/tiramisu.db next to the binary)")
 	flag.Parse()
 
-	cfg := config.LoadConfig()
+	dbPath := *stateDB
+	if dbPath == "" {
+		exe, _ := os.Executable()
+		dbPath = config.DBPath(config.StateDir(filepath.Dir(exe)))
+	}
+	cfg, err := config.ReadSaved(dbPath)
+	if err != nil {
+		if *plexURL == "" || *plexToken == "" || *prowlarrURL == "" || *prowlarrKey == "" {
+			log.Fatalf("musicimport: cannot read the configuration: %v (pass --state-db, or the URL and key flags)", err)
+		}
+		log.Printf("musicimport: WARNING cannot read the configuration (%v): using the defaults with the flags given", err)
+		cfg, _ = config.Resolve([]byte("{}"), config.Env{WithEnv: true})
+	}
 	if *plexURL == "" {
 		*plexURL = cfg.Plex.URL
 	}
@@ -68,10 +82,10 @@ func main() {
 		*prowlarrKey = cfg.Prowlarr.APIKey
 	}
 	if *plexURL == "" || *plexToken == "" {
-		log.Fatal("musicimport: Plex URL and token are required (flags or config.json)")
+		log.Fatal("musicimport: Plex URL and token are required (flags or the configuration)")
 	}
 	if *prowlarrURL == "" || *prowlarrKey == "" {
-		log.Fatal("musicimport: Prowlarr URL and API key are required (flags or config.json)")
+		log.Fatal("musicimport: Prowlarr URL and API key are required (flags or the configuration)")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)

@@ -17,9 +17,10 @@ type Logger interface {
 
 // DB wraps a SQLite database connection for tiramisu state persistence.
 type DB struct {
-	db     *sql.DB
-	path   string
-	logger Logger
+	db       *sql.DB
+	path     string
+	logger   Logger
+	readOnly bool // from OpenReadOnly: SELECT only, no checkpoint on close
 }
 
 // New opens or creates a SQLite database at dbPath, applies pragmas,
@@ -27,6 +28,10 @@ type DB struct {
 func New(dbPath string, logger Logger) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("metadb: create dir: %w", err)
+	}
+	// The DB holds the configuration and its secrets: created owner-only.
+	if f, err := os.OpenFile(dbPath, os.O_CREATE|os.O_WRONLY, 0600); err == nil {
+		f.Close()
 	}
 
 	d, err := sql.Open("sqlite", dbPath)
@@ -46,6 +51,7 @@ func New(dbPath string, logger Logger) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("metadb: pragmas: %w", err)
 	}
+	db.tightenPerms()
 
 	if err := db.ExecSchema(); err != nil {
 		d.Close()
@@ -55,9 +61,12 @@ func New(dbPath string, logger Logger) (*DB, error) {
 	return db, nil
 }
 
-// Close performs a WAL checkpoint and closes the database connection.
+// Close performs a WAL checkpoint and closes the database connection. A handle from
+// OpenReadOnly only closes: the checkpoint belongs to the engine that owns the DB.
 func (d *DB) Close() error {
-	_, _ = d.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	if !d.readOnly {
+		_, _ = d.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	}
 	return d.db.Close()
 }
 
@@ -91,6 +100,19 @@ func (d *DB) addColumn(table, column, ddl string) error {
 func (d *DB) SetLogger(l Logger) {
 	if l != nil {
 		d.logger = l
+	}
+}
+
+// tightenPerms makes the DB and its WAL files owner-only; older installs created them 0644.
+func (d *DB) tightenPerms() {
+	for _, p := range []string{d.path, d.path + "-wal", d.path + "-shm"} {
+		fi, err := os.Stat(p)
+		if err != nil || fi.Mode().Perm() == 0600 {
+			continue
+		}
+		if err := os.Chmod(p, 0600); err != nil && d.logger != nil {
+			d.logger.Printf("[StateDB] WARN cannot restrict %s to 0600: %v", p, err)
+		}
 	}
 }
 
@@ -252,5 +274,27 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 	if err := d.execAuthSchema(); err != nil {
 		return err
 	}
+	if err := d.execConfigSchema(); err != nil {
+		return err
+	}
 	return d.execAudioSchema()
+}
+
+// OpenReadOnly opens an existing DB for reading next to a running engine: no directory,
+// no pragmas, no schema. It is opened read-write on purpose: mode=ro fails on a stopped
+// engine's DB that has no -wal/-shm yet. Callers only SELECT.
+func OpenReadOnly(dbPath string) (*DB, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("metadb: %w", err)
+	}
+	d, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("metadb: open: %w", err)
+	}
+	d.SetMaxOpenConns(1)
+	if _, err := d.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("metadb: busy_timeout: %w", err)
+	}
+	return &DB{db: d, path: dbPath, readOnly: true}, nil
 }

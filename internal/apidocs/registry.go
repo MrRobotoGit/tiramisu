@@ -222,7 +222,7 @@ var Groups = []Group{
 				"first update check), update_available, config_source, read_ahead_*, shield_active, github_stars. The " +
 				"other fields are diagnostic and may change between releases.",
 			Example: "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/metrics | jq '{version, uptime, update_available}'",
-			Response: "{\n  \"version\": \"v1.11.15\",\n  \"config_source\": \"/home/pi/Tiramisu/config.json\",\n  \"uptime\": \"3h12m5.183746291s\",\n" +
+			Response: "{\n  \"version\": \"v1.11.15\",\n  \"config_source\": \"/home/pi/Tiramisu/STATE/tiramisu.db#42\",\n  \"uptime\": \"3h12m5.183746291s\",\n" +
 				"  \"latest_version\": \"v1.11.15\",\n  \"update_available\": false,\n  \"read_ahead_budget\": 268435456,\n  \"shield_active\": false,\n  \"github_stars\": 159,\n  …\n}",
 			OK: 200,
 		},
@@ -239,7 +239,7 @@ var Groups = []Group{
 			OK: 200,
 		},
 	}},
-	{ID: "config", Name: "Configuration", Desc: "config.json over HTTP. Secrets are write-only. Error bodies are plain text.", Endpoints: []Endpoint{
+	{ID: "config", Name: "Configuration", Desc: "The configuration, stored in tiramisu.db as versions. Secrets are write-only. Error bodies are plain text.", Endpoints: []Endpoint{
 		{
 			Method: "GET", Path: "/api/config", Summary: "Current configuration, secrets left empty",
 			Desc: "The values in effect, environment overrides included. The secrets (Plex token, TMDB and Prowlarr keys) come " +
@@ -251,15 +251,63 @@ var Groups = []Group{
 			Method: "POST", Path: "/api/config", Summary: "Change settings",
 			Desc: "Send only the keys to change: the rest keeps its value, nested objects merge key by key, arrays are " +
 				"replaced whole; null resets only arrays and optional objects. A scoring profile never saved starts from the " +
-				"defaults. The whole object GET returns works too. An empty secret keeps the stored one. Values set by " +
-				"environment variables are written to the file as well, and comments in config.json are dropped. Most " +
-				"settings apply at once; ports, FUSE, the scheduler switch and auth_trusted_proxies need POST /api/restart.",
+				"defaults. The whole object GET returns works too. An empty secret keeps the stored one. Each change is saved " +
+				"as a new version; values set by environment variables are never saved, a key sent back with the env's value " +
+				"keeps the saved one. A request that changes nothing adds no version. The blocklist, log_level and telemetry " +
+				"apply at once; everything else is read at start-up (mount, syncers, clients) and needs POST /api/restart.",
 			ParamsIn: "body",
 			Example: "curl -X POST -H 'Authorization: Bearer tmr_…' \\\n" +
 				"  -H 'Content-Type: application/json' \\\n  -d '{\"log_level\":\"DEBUG\"}' {{ORIGIN}}/api/config",
 			Response: "(empty body)",
 			OK:       200,
-			Errors:   []Status{{400, "not a JSON object, a field of the wrong type, or over 1 MiB"}, {405, "not GET or POST"}, {500, "config.json could not be written"}},
+			Errors:   []Status{{400, "not a JSON object, a field of the wrong type, or over 1 MiB"}, {405, "not GET or POST"}, {403, "with sign-in on, an API token changed a key that only a signed-in session may change"}, {500, "the configuration could not be saved"}},
+		},
+		{
+			Method: "GET", Path: "/api/config/history", Summary: "Configuration versions, newest first",
+			Desc: "The last 50 saved versions, each with who saved it (source ui, api, internal, import, cli, rollback, " +
+				"default; actor the user or the token name) and the keys it changed against the version before. The very first " +
+				"version is compared to the defaults; once older versions are pruned the oldest kept one is a baseline " +
+				"(baseline true, no changes). Secrets show as changed, never their values. restart says the version's changes " +
+				"need POST /api/restart; it is not a restart pending. With sign-in on, only a signed-in Control Panel session: " +
+				"tokens get 403.",
+			ParamsIn: "query",
+			Params:   []Param{{Name: "limit", Type: "int", Desc: "how many versions, 1-50 (default 50)"}},
+			Example:  "curl {{ORIGIN}}/api/config/history?limit=5",
+			Errors:   []Status{{403, "sign-in on and no Control Panel session"}},
+			Response: "[\n  {\"id\": 42, \"created_at\": 1795530000, \"source\": \"ui\", \"actor\": \"admin\", \"note\": \"\",\n" +
+				"   \"changes\": [{\"key\": \"log_level\", \"from\": \"\\\"INFO\\\"\", \"to\": \"\\\"DEBUG\\\"\"}],\n" +
+				"   \"restart\": false, \"current\": true}\n]",
+			OK: 200,
+		},
+		{
+			Method: "GET", Path: "/api/config/history/{id}", Summary: "One saved version",
+			Desc:    "The configuration as version id saved it, secrets left empty as in GET /api/config. Same access rule as the history.",
+			Example: "curl {{ORIGIN}}/api/config/history/41",
+			OK:      200,
+			Errors:  []Status{{400, "id is not a number"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version: the history keeps the last 50"}},
+		},
+		{
+			Method: "GET", Path: "/api/config/history/{id}/restore", Summary: "What restoring a version would change",
+			Desc: "The changes POST /api/config/rollback would make for id, without saving anything: the same answer, computed " +
+				"against the configuration saved now. A key or token changed and later set back is no change. Same access rule as the history.",
+			Example:  "curl {{ORIGIN}}/api/config/history/41/restore",
+			Response: "{\"id\": 41, \"changed\": true, \"changes\": [{\"key\": \"metrics_port\", \"from\": \"9191\", \"to\": \"9080\"}], \"restart\": true}",
+			OK:       200,
+			Errors:   []Status{{400, "id is not a number"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version"}},
+		},
+		{
+			Method: "POST", Path: "/api/config/rollback", Summary: "Restore a saved version",
+			Desc: "Saves version id again as the newest one (source rollback, note \"rollback to #id\"): nothing is deleted, so a " +
+				"rollback can be rolled back. It keeps the install's telemetry id, and brings back the keys and tokens that version " +
+				"had. It applies like POST /api/config; restart says whether POST /api/restart is needed. Unlike POST /api/config " +
+				"it answers with the new version and what changed; changed is false when the version equals the one in use " +
+				"(nothing is saved). Same access rule as the history.",
+			ParamsIn: "body",
+			Params:   []Param{{Name: "id", Type: "int", Required: true, Desc: "the version to restore"}},
+			Example:  "curl -X POST -H 'Content-Type: application/json' -d '{\"id\":41}' {{ORIGIN}}/api/config/rollback",
+			Response: "{\"id\": 43, \"changed\": true, \"changes\": [{\"key\": \"metrics_port\", \"from\": \"9191\", \"to\": \"9080\"}], \"restart\": true}",
+			OK:       200,
+			Errors:   []Status{{400, "the body is not {\"id\": N}"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version"}, {500, "the configuration could not be saved"}},
 		},
 		{
 			Method: "POST", Path: "/api/restart", Summary: "Restart the engine",

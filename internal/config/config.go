@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
@@ -10,8 +9,6 @@ import (
 	"strings"
 	"time"
 	"tiramisu/internal/prowlarr"
-
-	"github.com/google/uuid"
 )
 
 // NatPMPConfig holds the configuration for NAT-PMP port forwarding.
@@ -398,18 +395,6 @@ type Config struct {
 	StateDBPath string      `json:"state_db_path"` // default: <STATE>/tiramisu.db
 }
 
-// Save persists the current configuration to config.json
-func (c *Config) Save() error {
-	// 1. Marshal config to JSON
-	data, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	// 2. Write to file
-	return os.WriteFile(c.ConfigPath, data, 0644)
-}
-
 // DefaultBlockListURL is the list the filter below is written for. It is a real default,
 // not just an example in config.json.example: a configuration without the key showed an
 // empty field in the Control Panel, and an empty field is skipped on save, so enabling the
@@ -424,8 +409,37 @@ const DefaultBlockListFilter = `(?i)\bap2p\b|anti-?p2p`
 
 // LoadConfig loads configuration from environment variables with defaults
 func LoadConfig() Config {
-	// 1. Initial Defaults (V138 Gold Standard)
-	cfg := Config{
+	path := LegacyConfigPath()
+	doc := []byte("{}")
+	if data, err := os.ReadFile(path); err == nil {
+		if d, skipped, err := ParseDocumentLenient(data); err != nil {
+			log.Printf("[Config] WARNING: Failed to parse %s: %v", path, err)
+		} else {
+			if skipped != nil {
+				log.Printf("[Config] WARNING: Failed to parse %s: %v", path, skipped)
+			}
+			log.Printf("[Config] Loaded settings from %s", path)
+			doc = d
+		}
+	}
+	cfg, _ := Resolve(doc, Env{LegacyPath: path, WithEnv: true})
+	return cfg
+}
+
+// LegacyConfigPath is where config.json lives: MKV_PROXY_CONFIG_PATH, else next to the binary.
+func LegacyConfigPath() string {
+	if p := os.Getenv("MKV_PROXY_CONFIG_PATH"); p != "" {
+		return p
+	}
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "config.json")
+	}
+	return "config.json" // fallback: CWD
+}
+
+// defaults is the configuration with nothing saved (V138 Gold Standard).
+func defaults() Config {
+	return Config{
 		MasterConcurrencyLimit: 25,
 		ReadAheadBudgetMB:      256,
 		MetadataCacheSizeMB:    50, // Default 50MB for metadata
@@ -497,74 +511,6 @@ func LoadConfig() Config {
 		UID:                     1000,
 		GID:                     1000,
 	}
-
-	// 2. Resolve Config Path — always co-located with the binary
-	if p := os.Getenv("MKV_PROXY_CONFIG_PATH"); p != "" {
-		cfg.ConfigPath = p
-	} else {
-		exe, err := os.Executable()
-		if err == nil {
-			cfg.ConfigPath = filepath.Join(filepath.Dir(exe), "config.json")
-		} else {
-			cfg.ConfigPath = "config.json" // fallback: CWD
-		}
-	}
-
-	// 3. Try to load JSON
-	if data, err := os.ReadFile(cfg.ConfigPath); err == nil {
-		// V138: Support comments in JSON by stripping them before unmarshaling
-		cleanData := stripJSONComments(data)
-		if err := json.Unmarshal(cleanData, &cfg); err != nil {
-			log.Printf("[Config] WARNING: Failed to parse %s: %v", cfg.ConfigPath, err)
-		} else {
-			log.Printf("[Config] Loaded settings from %s", cfg.ConfigPath)
-			// Backward compat: if gostorm_url was not present in config, fall back to legacy torrserver_url key
-			if cfg.GoStormBaseURL == "" {
-				var raw map[string]json.RawMessage
-				if json.Unmarshal(cleanData, &raw) == nil {
-					if v, ok := raw["torrserver_url"]; ok {
-						var s string
-						if json.Unmarshal(v, &s) == nil && s != "" {
-							cfg.GoStormBaseURL = s
-							log.Printf("[Config] Loaded GoStormBaseURL from legacy key 'torrserver_url': %s", s)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// 4. Override from environment (Highest Priority)
-	cfg.applyEnvOverrides()
-
-	// 5. Finalize and map derived fields
-	cfg.finalize()
-
-	if cfg.LogDir == "" {
-		cfg.LogDir = filepath.Join(filepath.Dir(cfg.ConfigPath), "logs")
-	}
-
-	// 5b. Populate engine script paths
-	exe, _ := os.Executable()
-	binDir := filepath.Dir(exe)
-	scriptsDir := filepath.Join(binDir, "scripts")
-	logsDir := filepath.Join(binDir, "logs")
-	cfg.EngineScripts = map[string]EngineConfig{
-		"movies":    {ScriptPath: filepath.Join(scriptsDir, "gostorm-sync-complete.py"), LogsDir: logsDir},
-		"tv":        {ScriptPath: filepath.Join(scriptsDir, "gostorm-tv-sync.py"), LogsDir: logsDir},
-		"watchlist": {ScriptPath: filepath.Join(scriptsDir, "plex-watchlist-sync.py"), LogsDir: logsDir},
-	}
-
-	// 6. Generate Telemetry ID if missing
-	if cfg.TelemetryID == "" {
-		cfg.TelemetryID = uuid.New().String()
-		log.Printf("[Telemetry] Generated new ID: %s", cfg.TelemetryID)
-		if err := cfg.Save(); err != nil {
-			log.Printf("[Telemetry] ERROR: Failed to persist generated ID: %v", err)
-		}
-	}
-
-	return cfg
 }
 
 // stripJSONComments removes // comments from JSON data and preserves valid syntax.

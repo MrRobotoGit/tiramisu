@@ -481,6 +481,13 @@ generate_config_json() {
     local output_path="${INSTALL_DIR}/config.json"
     local example_path="${INSTALL_DIR}/config.json.example"
 
+    # The configuration lives in STATE/tiramisu.db once Tiramisu has started: a config.json
+    # written now would be imported over it as a drop-in. Only a fresh install gets one.
+    if [ -f "$output_path" ] || [ -f "${INSTALL_DIR}/STATE/tiramisu.db" ]; then
+        print_ok "Existing configuration kept (STATE/tiramisu.db or config.json)"
+        return
+    fi
+
     if [ ! -f "$example_path" ]; then
         print_err "config.json.example not found — cannot generate config."
         exit 1

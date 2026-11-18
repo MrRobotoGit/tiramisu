@@ -103,6 +103,9 @@ var globalConfig atomic.Pointer[config.Config]
 
 func gc() *config.Config { return globalConfig.Load() }
 
+// configBoot holds the state DB and the configuration store opened at start-up.
+var configBoot *config.Boot
+
 // Global Prowlarr client for indexer queries (nil when disabled).
 var prowlarrClient *prowlarr.Client
 
@@ -4929,6 +4932,8 @@ func main() {
 	var dbPath string
 	flag.StringVar(&dbPath, "path", "", "path to database and config")
 	resetAuth := flag.Bool("reset-auth", false, "clear the :9080 user, sessions and tokens and turn sign-in off")
+	exportCfg := flag.String("export-config", "", "write the saved configuration to a file (- for stdout) and exit")
+	importCfg := flag.String("import-config", "", "save a config.json as the configuration (applied at the next start) and exit")
 	flag.Parse()
 
 	// Default --path to the directory containing the binary (portable install)
@@ -4954,25 +4959,35 @@ func main() {
 
 	source, mount := flag.Arg(0), flag.Arg(1)
 
-	cfg := config.LoadConfig()
-
-	if dbPath != "" {
-		// If dbPath is a directory, use it as RootPath; if a file, use its parent.
-		if fi, err := os.Stat(dbPath); err == nil && fi.IsDir() {
-			cfg.RootPath = dbPath
-		} else {
-			cfg.RootPath = filepath.Dir(dbPath)
-		}
-	} else {
-		// Default to /home/pi if no flag provided (for backward compat)
-		cfg.RootPath = "/home/pi"
+	// The configuration lives in the state DB: paths first, then the DB, then the configuration.
+	boot, bootErr := config.Prepare(dbPath)
+	if bootErr != nil {
+		config.Fatal(bootErr)
 	}
-
-	globalConfig.Store(&cfg)
 	if *resetAuth {
 		// Before anything starts: a second engine next to the running service would mount FUSE twice.
-		os.Exit(auth.RunResetFlag(gc().StateDBPath, GetStateDir()))
+		os.Exit(auth.RunResetFlag(boot.DBPath, boot.StateDir))
 	}
+	if bootErr := boot.Open(logger, logger.Printf); bootErr != nil {
+		config.Fatal(bootErr)
+	}
+	if *exportCfg != "" || *importCfg != "" {
+		code := 0
+		if *exportCfg != "" {
+			code = config.RunExport(boot.Store, *exportCfg)
+		} else {
+			code = config.RunImport(boot.Store, *importCfg)
+		}
+		boot.DB.Close() // checkpoint: no -wal left behind, owned by whoever ran this
+		config.WarnOwner(boot.DBPath)
+		os.Exit(code)
+	}
+	cfg, _, bootErr := boot.Load()
+	if bootErr != nil {
+		config.Fatal(bootErr)
+	}
+	configBoot = boot
+	globalConfig.Store(&cfg)
 	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
 	telemetry.SendHeartbeat(*gc(), AppVersion)
 	logger.Printf("[DEBUG] BlockListURL loaded: '%s'", gc().BlockListURL)
@@ -5085,22 +5100,14 @@ func main() {
 		logger.Printf("WARNING: Failed to initialize inode map: %v (falling back to filename hash)", err)
 	}
 
-	// V1.7.1: Optional SQLite State DB for unified persistence.
-	if gc().EnableStateDB {
-		dbPath := gc().StateDBPath
-		if dbPath == "" {
-			dbPath = filepath.Join(GetStateDir(), "tiramisu.db")
-		}
-		var err error
-		stateDB, err = metadb.New(dbPath, logger)
-		if err != nil {
-			logger.Printf("WARNING: Failed to open StateDB: %v (falling back to JSON)", err)
-			stateDB = nil
-		} else {
-			// Migrate JSON files if needed
+	// The state DB, opened at start-up for the configuration, also holds the engine state.
+	{
+		stateDB = configBoot.DB
+		{
+			// Migrate JSON files if needed; on failure the state falls back to JSON, but the
+			// DB stays open: the configuration lives there.
 			if err := stateDB.MigrateFromJSON(GetStateDir()); err != nil {
 				logger.Printf("WARNING: StateDB migration failed: %v (falling back to JSON)", err)
-				stateDB.Close()
 				stateDB = nil
 			} else {
 				// Wire up DB to InodeMap, then reload from DB (covers boot 2+ where JSON is gone)
@@ -5112,7 +5119,7 @@ func main() {
 				// V750: Restore playback states from previous sessions
 				restorePlaybackStates(stateDB)
 				registry.SetStateDir(GetStateDir())
-				logger.Printf("[StateDB] Active: %s", dbPath)
+				logger.Printf("[StateDB] Active: %s", configBoot.DBPath)
 
 				// V304 ban persistence: restore prior bans (30-day TTL) and persist new ones.
 				if ips, err := stateDB.LoadV304Bans(30 * 24 * time.Hour); err != nil {
@@ -5216,7 +5223,8 @@ func main() {
 	}()
 
 	// Sign-in on :9080 (opt-in). The state lives in tiramisu.db, never in config.json.
-	authSvc, authTrusted := auth.Start(http.DefaultServeMux, stateDB, GetStateDir(), gc().AuthTrustedProxies, logger.Printf)
+	// The DB opened at start-up, not stateDB: a failed JSON migration leaves sign-in working.
+	authSvc, authTrusted := auth.Start(http.DefaultServeMux, configBoot.DB, GetStateDir(), gc().AuthTrustedProxies, logger.Printf)
 	apidocs.Register(http.DefaultServeMux, authSvc.Enabled)
 	tlsSrv := webtls.New(webtls.Options{
 		Settings: gc().HTTPS, StateDir: GetStateDir(),
@@ -5399,8 +5407,9 @@ func main() {
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			// A merge: keys left out keep their value, so a partial body cannot zero the ports.
-			newCfg, err := gc().Patch(body)
+			// A merge onto the saved document: keys left out keep their value, and environment
+			// overrides are never written.
+			base, newCfg, err := configBoot.PatchSaved(body)
 			if err != nil {
 				http.Error(w, err.Error(), 400)
 				return
@@ -5408,56 +5417,26 @@ func main() {
 			// Who is trusted and whether traffic is encrypted: only a browser session may change
 			// these, not an API token.
 			if authSvc.Enabled() && auth.SessionFrom(r) == "" {
-				if k := config.SignInOnlyChange(*gc(), newCfg); k != "" {
+				if k := config.SignInOnlyChange(base, newCfg); k != "" {
 					http.Error(w, k+" changes only from the Control Panel, signed in", http.StatusForbidden)
 					return
 				}
 			}
-			if err := newCfg.WriteFile(gc().ConfigPath); err != nil {
+			source, actor := authSvc.Actor(r)
+			cfg, _, _, err := configBoot.SaveConfig(newCfg, source, actor, "")
+			if err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			// Reload in memory (V1.4.0 Live Update)
-			oldEnabled := gc().BlockListEnabled
-			oldURL := gc().BlockListURL
-			oldFilter := gc().BlockListFilter
-			cfg := config.LoadConfig()
-			cfg.RootPath = gc().RootPath // comes from --path at start, not from the file
-			globalConfig.Store(&cfg)
-			prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
-
-			newEnabled := gc().BlockListEnabled
-			newURL := gc().BlockListURL
-			torrutils.SetBlockListEnabled(newEnabled)
-			newFilter := gc().BlockListFilter
-			if err := torrutils.SetBlockListFilter(newFilter); err != nil {
-				logger.Printf("[BlockList] %v — loading the list unfiltered", err)
-			}
-			// The filter changes which ranges the same file yields, so re-read it rather
-			// than waiting for the next download.
-			if newEnabled && newFilter != oldFilter {
-				if list, err := torrutils.ReadBlockedIP(); err == nil {
-					torr.SetIPBlocklist(list)
-					logger.Printf("[BlockList] Filter changed, reloaded from the existing file")
-				} else {
-					logger.Printf("[BlockList] WARNING: filter changed but reload failed: %v", err)
-				}
-			}
-			switch {
-			case newEnabled && (!oldEnabled || newURL != oldURL):
-				// was off -> on, or URL changed while staying on: (re)start with fresh URL
-				startBlockListLoop(newURL)
-			case !newEnabled && oldEnabled:
-				// was on -> off: stop future refreshes and clear the ranges already loaded
-				// into the engine, otherwise the file keeps banning peers until a restart.
-				stopBlockListLoop()
-				torr.SetIPBlocklist(nil)
-				logger.Printf("[BlockList] Disabled: cleared from running engine")
-			}
+			applyConfig(cfg)
 			logger.Printf("[Config] Updated via Dashboard API")
 			w.WriteHeader(200)
 		}
 	})
+	configBoot.RegisterHistory(http.DefaultServeMux, config.HistoryDeps{
+		Mu: &configMu, Actor: authSvc.Actor, Apply: applyConfig, Logf: logger.Printf,
+		// Also closes them to the internal token, which the middleware lets through.
+		Allowed: func(r *http.Request) bool { return !authSvc.Enabled() || auth.SessionFrom(r) != "" }})
 
 	http.HandleFunc("/api/prowlarr/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -5673,9 +5652,8 @@ func main() {
 			// the last one for a shared hash takes the torrent out from under any
 			// audio projection still backed by it.
 			//
-			// audioOwnershipRegistry(), not a raw stateDB value: on a boot where
-			// EnableStateDB is true but the DB failed to open, the raw value is nil
-			// and this path would permit exactly that drop.
+			// audioOwnershipRegistry(), not a raw stateDB value: when the state migration
+			// failed the raw value is nil and this path would permit exactly that drop.
 			AudioRegistry: audioOwnershipRegistry(),
 			// The audio sections live beside movies/ and tv/, and the projection
 			// registry is authoritative for what is published under them.
@@ -6351,10 +6329,8 @@ func audioOwnershipRegistry() library.AudioRegistry {
 	if stateDB != nil {
 		return stateDB
 	}
-	if gc().EnableStateDB {
-		return library.UnavailableAudioRegistry{Err: errStateDBUnavailable}
-	}
-	return nil
+	// The state DB is always on now: nil only when its migration failed.
+	return library.UnavailableAudioRegistry{Err: errStateDBUnavailable}
 }
 
 // audioNamespaceState reports the audio namespace readiness to external observers:
@@ -6486,4 +6462,44 @@ func stubMeta(fullPath string) (*vfs.Metadata, error) {
 		return meta, nil
 	}
 	return getOrReadMeta(fullPath)
+}
+
+// applyConfig puts a saved configuration in use and applies what can change live
+// (V1.4.0 Live Update). Callers hold configMu.
+func applyConfig(cfg config.Config) {
+	// Reload in memory (V1.4.0 Live Update)
+	oldEnabled := gc().BlockListEnabled
+	oldURL := gc().BlockListURL
+	oldFilter := gc().BlockListFilter
+	globalConfig.Store(&cfg)
+	prowlarrClient = prowlarr.NewClient(gc().Prowlarr)
+
+	newEnabled := gc().BlockListEnabled
+	newURL := gc().BlockListURL
+	torrutils.SetBlockListEnabled(newEnabled)
+	newFilter := gc().BlockListFilter
+	if err := torrutils.SetBlockListFilter(newFilter); err != nil {
+		logger.Printf("[BlockList] %v — loading the list unfiltered", err)
+	}
+	// The filter changes which ranges the same file yields, so re-read it rather
+	// than waiting for the next download.
+	if newEnabled && newFilter != oldFilter {
+		if list, err := torrutils.ReadBlockedIP(); err == nil {
+			torr.SetIPBlocklist(list)
+			logger.Printf("[BlockList] Filter changed, reloaded from the existing file")
+		} else {
+			logger.Printf("[BlockList] WARNING: filter changed but reload failed: %v", err)
+		}
+	}
+	switch {
+	case newEnabled && (!oldEnabled || newURL != oldURL):
+		// was off -> on, or URL changed while staying on: (re)start with fresh URL
+		startBlockListLoop(newURL)
+	case !newEnabled && oldEnabled:
+		// was on -> off: stop future refreshes and clear the ranges already loaded
+		// into the engine, otherwise the file keeps banning peers until a restart.
+		stopBlockListLoop()
+		torr.SetIPBlocklist(nil)
+		logger.Printf("[BlockList] Disabled: cleared from running engine")
+	}
 }

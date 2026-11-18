@@ -26,6 +26,33 @@ func sessionCookie(r *http.Request) (*http.Cookie, error) {
 
 type ctxKey struct{}
 
+// tokenKey carries the name of the token a request came with ("" for the internal one).
+type tokenKey struct{}
+
+// TokenNameFrom is the name of the API token r came with, and whether it came with one.
+func TokenNameFrom(r *http.Request) (string, bool) {
+	v, ok := r.Context().Value(tokenKey{}).(string)
+	return v, ok
+}
+
+// Actor names who made a change, for the configuration history: the signed-in user, a
+// token by name, the engine itself, or the Control Panel with sign-in off.
+func (s *Service) Actor(r *http.Request) (source, actor string) {
+	if name, ok := TokenNameFrom(r); ok {
+		if name == "" {
+			return "internal", "engine"
+		}
+		return "api", name
+	}
+	if SessionFrom(r) != "" {
+		if st := s.State(); st.Username != "" {
+			return "ui", st.Username
+		}
+		return "ui", "signed in"
+	}
+	return "ui", ""
+}
+
 // SessionFrom returns the session cookie value of an authenticated request, if any.
 func SessionFrom(r *http.Request) string {
 	v, _ := r.Context().Value(ctxKey{}).(string)
@@ -84,6 +111,14 @@ func Wrap(s *Service, trusted []netip.Prefix, next http.Handler) http.Handler {
 			return
 		}
 		if !s.Enabled() || exempt(path) {
+			// Sign-in off: nothing is checked, but a token still names who made a change.
+			if tok := bearer(r); tok != "" && !s.Enabled() {
+				if s.IsInternal(tok) {
+					r = r.WithContext(context.WithValue(r.Context(), tokenKey{}, ""))
+				} else if _, name, ok := s.AuthenticateTokenNamed(tok, clientIP(r, trusted)); ok {
+					r = r.WithContext(context.WithValue(r.Context(), tokenKey{}, name))
+				}
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -93,15 +128,15 @@ func Wrap(s *Service, trusted []netip.Prefix, next http.Handler) http.Handler {
 		}
 		if tok := bearer(r); tok != "" {
 			if s.IsInternal(tok) {
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), tokenKey{}, "")))
 				return
 			}
-			if scope, ok := s.AuthenticateToken(tok, clientIP(r, trusted)); ok {
+			if scope, name, ok := s.AuthenticateTokenNamed(tok, clientIP(r, trusted)); ok {
 				if msg := scopeRefusal(scope, path); msg != "" {
 					writeJSON(w, http.StatusForbidden, map[string]string{"error": msg})
 					return
 				}
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), tokenKey{}, name)))
 				return
 			}
 		} else if c, err := sessionCookie(r); err == nil {
@@ -145,6 +180,8 @@ func scopeRefusal(scope, path string) string {
 	switch {
 	case strings.HasPrefix(path, "/api/auth/"):
 		return "tokens and sign-in are managed from the Control Panel, signed in: no token opens /api/auth"
+	case strings.HasPrefix(path, "/api/config/history") || path == "/api/config/rollback":
+		return "the configuration history and rollback are for the Control Panel, signed in: a rollback can turn HTTPS off or change the trusted proxies"
 	case scope == ScopeMCP && path != "/mcp":
 		return "this is an MCP token: it opens /mcp only. Create an API token in Access for the HTTP API"
 	case scope == ScopeAPI && path == "/mcp":
