@@ -873,7 +873,7 @@
                     <div class="card" id="acc-tokens-card">
                         <div class="card-head"><span class="num">07.2</span><span class="label ink">Tokens</span><span class="spacer"></span><button type="button" class="btn primary sm" onclick="accNewToken()">+ New token</button></div>
                         <div class="card-body flush">
-                            <p class="small faint acc-pad">An MCP token opens only the MCP server (/mcp) and its library tools: give it to agents such as Hermes or Claude Code. An API token opens the HTTP API, for scripts and the menubar app. Neither can manage tokens or sign-in: that needs this page, signed in. Tokens do not expire; the value is shown once, when it is created.</p>
+                            <p class="small faint acc-pad">An MCP token opens only the MCP server (/mcp) and its library tools: give it to agents such as Hermes or Claude Code. An API token opens the HTTP API, for custom clients and apps built on Tiramisu, the menu bar app and scripts. Neither can manage tokens or sign-in: that needs this page, signed in. Tokens do not expire; the value is shown once, when it is created.</p>
                             <div class="acc-table-wrap">
                                 <table class="acc-table">
                                     <thead><tr><th>Name</th><th>Type</th><th>Token</th><th>Created</th><th>Last used</th><th>From</th><th></th></tr></thead>
@@ -896,7 +896,7 @@
                         <div class="card-head"><span class="num">07.3</span><span class="label ink">Before you enable it</span></div>
                         <div class="card-body tight">
                             <div class="acc-step"><span class="acc-num">1</span><div><div class="title">Choose a username and a password</div><div class="hint">Single user. Stored as a bcrypt hash in tiramisu.db, never in config.json.</div></div></div>
-                            <div class="acc-step"><span class="acc-num">2</span><div><div class="title">Create a token for each client first</div><div class="hint">Tokens can be created while access is open: configure Hermes, Claude Code, the menubar app and scripts (Authorization: Bearer), then enable sign-in.</div></div></div>
+                            <div class="acc-step"><span class="acc-num">2</span><div><div class="title">Create a token for each client first</div><div class="hint">Tokens can be created while access is open: configure Hermes, Claude Code, your apps, the menu bar app and scripts (Authorization: Bearer), then enable sign-in.</div></div></div>
                             <div class="acc-step"><span class="acc-num">3</span><div><div class="title">Forgot the password?</div><div class="hint">Stop the service, run <code>tiramisu --reset-auth</code> on the host and start it again (Docker: TIRAMISU_RESET_AUTH=1 for one start, then remove it). It clears the user, sessions and tokens and turns sign-in off.</div></div></div>
                         </div>
                     </div>
@@ -2542,7 +2542,7 @@
                     const names = tokens.map(t => t.name + ' (' + (t.scope === 'api' ? 'API' : 'MCP') + ')').join(', ');
                     body.appendChild(el('div', 'warn-note', tokens.length
                         ? (tokens.length === 1 ? '1 token exists (' : tokens.length + ' tokens exist (') + names + ') and keeps working after sign-in is on, for its type only: an MCP token opens /mcp, an API token the API. Revoke any you do not recognise; any other client stops working until it has one.'
-                        : 'No token exists yet: Hermes (MCP token), the menubar app and scripts (API token) stop working until they have one.'));
+                        : 'No token exists yet: agents such as Hermes (MCP token), your apps, the menu bar app and scripts (API token) stop working until they have one.'));
                 }, async () => {
                     samePasswords(p.input, c.input);
                     await api('POST', 'setup', { username: u.input.value, password: p.input.value });
@@ -2580,7 +2580,7 @@
             // ---------- tokens ----------
             const SCOPE_NOTE = {
                 mcp: 'Opens only /mcp: the library tools, nothing else. For agents such as Hermes and Claude Code. No expiry.',
-                api: 'Opens the HTTP API (library, scheduler, configuration, restart), not /mcp and not tokens or sign-in. For scripts and the menubar app. No expiry.',
+                api: 'Opens the HTTP API (library, scheduler, configuration, restart), not /mcp and not tokens or sign-in. For custom clients, apps built on Tiramisu, the menu bar app and scripts. No expiry.',
             };
             window.accNewToken = function () {
                 let n, scope = 'mcp';

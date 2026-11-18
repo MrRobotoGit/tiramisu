@@ -175,13 +175,13 @@ playback tracking keeps working without changes on the media server.
 - **Tokens** for everything that is not a browser: create one per client in
   **Access → New token** and pick its type. An **MCP token** opens only `/mcp`
   (agents such as Hermes and Claude Code); an **API token** opens the HTTP API
-  but not `/mcp` (the menu bar app, scripts). A token of the wrong type gets
+  but not `/mcp` (custom clients and apps built on Tiramisu, the menu bar app, scripts). A token of the wrong type gets
   `403`. No token can reach `/api/auth/*`: creating and revoking tokens, the
   password and turning sign-in off take the Control Panel, signed in, and so does
   changing `auth_trusted_proxies`. Tokens do not expire; the value (`tmr_…`) is
   shown once and stored only as a SHA-256 hash. Revoke it from the same table.
 - **Upgrading from v1.11.15:** tokens created before token types become MCP
-  tokens. Re-create the ones your menu bar app and scripts use as API tokens.
+  tokens. Re-create the ones your apps, menu bar app and scripts use as API tokens.
 - Tokens can be created while sign-in is still off: configure your clients first,
   then turn sign-in on.
 
