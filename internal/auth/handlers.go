@@ -101,7 +101,7 @@ func (h *handlers) sessionOK(r *http.Request) bool {
 	if !h.s.Enabled() {
 		return true
 	}
-	c, err := r.Cookie(cookieName)
+	c, err := sessionCookie(r)
 	if err != nil || bearer(r) != "" {
 		return false
 	}
@@ -120,7 +120,7 @@ func (h *handlers) authenticated(r *http.Request) bool {
 		_, ok := h.s.AuthenticateToken(tok, clientIP(r, h.trusted))
 		return ok
 	}
-	if c, err := r.Cookie(cookieName); err == nil {
+	if c, err := sessionCookie(r); err == nil {
 		ok, _ := h.s.AuthenticateSession(c.Value)
 		return ok
 	}
@@ -234,7 +234,7 @@ func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
+	if c, err := sessionCookie(r); err == nil {
 		h.s.Logout(c.Value)
 	}
 	clearSessionCookie(w)

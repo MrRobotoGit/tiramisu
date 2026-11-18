@@ -9,14 +9,15 @@ const csp = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 's
 	"form-action 'self'; frame-ancestors 'self'"
 
 // setSecurityHeaders runs on every :9080 response, signed in or not.
-func setSecurityHeaders(w http.ResponseWriter, r *http.Request) {
+func setSecurityHeaders(w http.ResponseWriter, hsts bool) {
 	h := w.Header()
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-Frame-Options", "SAMEORIGIN") // for browsers without frame-ancestors
 	h.Set("Referrer-Policy", "same-origin")
 	h.Set("Content-Security-Policy", csp)
-	// HSTS only over HTTPS (directly or behind a proxy that says so): on plain HTTP it is ignored anyway.
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+	// Never with the local CA on direct TLS: HSTS would remove the browser's way past a
+	// certificate it does not trust yet.
+	if hsts {
 		h.Set("Strict-Transport-Security", "max-age=15552000")
 	}
 }

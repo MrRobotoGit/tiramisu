@@ -23,7 +23,7 @@ http://<tiramisu-host>:9080/plex/webhook
 ```
 
 **Jellyfin**: Install the Webhook plugin, add one webhook (events: `PlaybackStart`, `PlaybackStop`, `PlaybackProgress`):
-- URL: `http://<tiramisu-host>:9080/plex/webhook`
+- URL: `http://<tiramisu-host>:9080/plex/webhook` (keep `http://` even with [HTTPS](api.md#https) on: webhooks stay on plain HTTP)
 - Header: Key `Content-Type` / Value `application/json`
 - Template:
 ```
@@ -241,6 +241,8 @@ Served at `:9080/control`.
 http://<your-pi-ip>:9080/control
 ```
 
+With [HTTPS](api.md#https) on, the same address moves to `https://<your-pi-ip>:9080/control`.
+
 ### Layout
 
 Seven sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
@@ -259,7 +261,7 @@ its settings take effect: on restart (Tiramisu settings, written to `config.json
 | **Engine** *(live)* | Cache Size, Readahead Cache; Warmup Cache, path and SSD quota; Connections Limit, DL/UP Rate, Disconnect Timeout; Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt; Smart Responsive Mode, Adaptive Shield, Debug Log |
 | **Release Selection** | Preferred and excluded language flags, preferred terms; quality scoring preset and bonuses for Movies and TV Series, with a preview of what wins right now |
 | **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule from `config.json`) |
-| **Access** *(live)* | Optional sign-in for `:9080` (one user, password), API tokens for agents and scripts, browser sessions. See [Sign-in and API tokens](api.md#sign-in-and-api-tokens) |
+| **Access** *(live)* | Optional sign-in for `:9080` (one user, password), API tokens for agents and scripts, browser sessions, and HTTPS *(restart)*: a guided card to turn it on, download and trust the CA, and move clients to `https://`. See [Sign-in and API tokens](api.md#sign-in-and-api-tokens) and [HTTPS](api.md#https) |
 
 Keys and tokens (media server token, TMDB and Prowlarr API keys) are write-only: the
 Control Panel shows whether one is set, never its value. Leave the field empty to keep it.
@@ -275,6 +277,8 @@ without reading a log.
 ```
 http://<your-pi-ip>:9080/dashboard
 ```
+
+With [HTTPS](api.md#https) on: `https://<your-pi-ip>:9080/dashboard`.
 
 ### Live Swarm
 

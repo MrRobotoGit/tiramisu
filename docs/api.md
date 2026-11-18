@@ -210,6 +210,83 @@ The user, sessions and tokens live in `STATE/tiramisu.db`, never in
 `config.json`. If sign-in is on and that database cannot be read, `:9080` answers
 `503` (webhooks excepted) instead of opening up.
 
+---
+
+## HTTPS
+
+`:9080` can serve HTTPS itself: **Control Panel → Access → HTTPS**, switch it on,
+**Apply & restart**. It is off by default, and a reverse proxy in front keeps
+working either way. The card then walks through the rest: download the CA,
+trust it on each device, move your clients to `https://`.
+
+**Certificate.** Tiramisu creates a local CA once (`STATE/tls/ca.pem`, ECDSA
+P-256, valid 10 years) and uses it to sign the server certificate
+(`STATE/tls/cert.pem`, 365 days). Devices trust the CA once; the server
+certificate renews on its own (expiry, a new IPv4 address, new extra hostnames)
+without anyone noticing. It covers the hostname, `<hostname>.local`, `localhost`,
+`127.0.0.1`, `::1`, the host's IPv4 addresses (IPv6 addresses rotate and are left
+out, and so are VPN tunnels, link-local addresses and Docker bridges) and
+`https.extra_hostnames`. The CA is
+downloaded from the card as `tiramisu-ca.crt` (also `GET /api/auth/tls/cert`):
+compare its SHA-256 with the one on the card before trusting it. Your own
+certificate (Let's Encrypt or any public CA) can replace it: set
+`https.cert_file` and `https.key_file`; renewed files are picked up within a
+minute, and if they cannot be read Tiramisu falls back to the local CA and logs
+`[TLS] ERROR`.
+
+**One port, both schemes.** TLS and plain HTTP share `:9080`. With HTTPS on, plain
+HTTP is answered like this:
+
+| Plain HTTP request | Sign-in off at start-up | Sign-in on at start-up |
+|---|---|---|
+| From the Tiramisu host itself (loopback or its own addresses) | served | served |
+| From a proxy listed in `auth_trusted_proxies` | served | served |
+| `/plex/webhook`, `/webhook` | served | served |
+| A page in a browser | `308` to `https://` | `308` to `https://` |
+| Anything else from the LAN | served | `403 {"error":"use https"}` |
+
+So the `http://127.0.0.1:9080` examples in this guide keep working on the host,
+and Plex and Jellyfin need no change. From another machine use `https://` and
+point the client at the CA:
+
+```bash
+curl --cacert tiramisu-ca.crt -H "Authorization: Bearer $TIRAMISU_TOKEN" \
+  https://<host>:9080/api/health
+```
+
+| Client | How it trusts the CA |
+|---|---|
+| macOS (Safari, Chrome, the menu bar app) | Open `tiramisu-ca.crt` → Keychain Access → Trust → *Always Trust* |
+| iOS / iPadOS | Install the profile, then enable full trust in *Settings → General → About → Certificate Trust Settings* |
+| Node clients (Claude Code and other MCP clients) | `export NODE_EXTRA_CA_CERTS=/path/to/tiramisu-ca.crt` |
+| Python (`requests`, `httpx`) | `export REQUESTS_CA_BUNDLE=/path/to/tiramisu-ca.crt` and `SSL_CERT_FILE=…`; `httpx` ignores the system store and uses `certifi` unless `SSL_CERT_FILE` is set |
+| curl | `--cacert tiramisu-ca.crt` |
+
+The macOS menu bar app picks `http://` or `https://` by itself: it moves to
+`https://` when the plain address answers `use https`, and back when HTTPS is
+turned off.
+
+- **Restart.** The setting is read at start-up, and so is the sign-in state the
+  plain-HTTP rule uses: turning sign-in on while HTTPS runs leaves plain HTTP open
+  until the next restart, and the card says so.
+- **Tokens seen in clear.** With HTTPS on, a valid token that still arrives over
+  plain HTTP from another machine is listed in the card (step 4) with its IP:
+  switch that client and consider revoking the token.
+- **HSTS** is never sent with the local CA (it would lock browsers out before the
+  CA is trusted). With your own certificate it is sent for 180 days: turning
+  HTTPS off afterwards keeps browsers on `https://` until it expires.
+- **Session cookie.** It is `__Host-tiramisu_session` over HTTPS and
+  `tiramisu_session` over plain HTTP, so turning HTTPS off does not lock you out.
+- **Docker.** The container's own IP and hostname change on every re-creation and
+  are not what clients use: add the host's IP or name to `https.extra_hostnames`.
+- **Reverse proxy.** With HTTPS on, a proxy on another machine must be listed in
+  `auth_trusted_proxies` (its IP, not a whole subnet: a subnet exempts the whole
+  LAN from the rule above).
+
+`GET /api/auth/tls` returns whether HTTPS runs, the certificate in use and
+whether a restart is pending; with sign-in on it needs a browser session, like the
+rest of `/api/auth/*` (tokens are refused).
+
 **Secrets are write-only.** `GET /api/config` never returns `plex.token`,
 `tmdb_api_key` or `prowlarr.api_key`: it reports whether each is set in
 `secrets_configured`. A `POST` that leaves one empty keeps the stored value.
@@ -218,13 +295,14 @@ The user, sessions and tokens live in `STATE/tiramisu.db`, never in
 
 ## MCP Server
 
-Tiramisu serves its library tools over MCP at `http://<host>:9080/mcp`
-(Streamable HTTP). An agent searches releases with the deployment's own scoring
+Tiramisu serves its library tools over MCP at `http://<host>:9080/mcp`, or
+`https://<host>:9080/mcp` with [HTTPS](#https) on (Streamable HTTP). An agent searches releases with the deployment's own scoring
 profile, the same pipeline the sync uses, files the one you pick, lists and
 removes entries:
 
 - Claude Code: `claude mcp add --transport http tiramisu http://<host>:9080/mcp`
-  (with sign-in on, add `--header "Authorization: Bearer tmr_..."`)
+  (with sign-in on, add `--header "Authorization: Bearer tmr_..."`; with HTTPS on,
+  use `https://` and set `NODE_EXTRA_CA_CERTS` to the CA file)
 - Any MCP client that speaks Streamable HTTP: point it at the same URL.
 
 | Tool | What it does |
@@ -316,6 +394,9 @@ rm /mnt/tiramisu-mkv-virtual/movies/<file>.mkv
 ```
 
 ### Tiramisu API (`:9080`)
+
+The examples run on the Tiramisu host. From another machine with [HTTPS](#https)
+on, use `https://<host>:9080` with `--cacert tiramisu-ca.crt`.
 
 ```bash
 # Key metrics fields

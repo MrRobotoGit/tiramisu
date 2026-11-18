@@ -23,7 +23,6 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +67,7 @@ import (
 	"tiramisu/internal/updater"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
+	"tiramisu/internal/webtls"
 	"tiramisu/internal/webui"
 
 	"github.com/anacrolix/torrent"
@@ -5218,6 +5218,14 @@ func main() {
 	// Sign-in on :9080 (opt-in). The state lives in tiramisu.db, never in config.json.
 	authSvc, authTrusted := auth.Start(http.DefaultServeMux, stateDB, GetStateDir(), gc().AuthTrustedProxies, logger.Printf)
 	apidocs.Register(http.DefaultServeMux, authSvc.Enabled)
+	tlsSrv := webtls.New(webtls.Options{
+		Settings: gc().HTTPS, StateDir: GetStateDir(),
+		AccessOn: authSvc.Enabled() || authSvc.FailClosed(), Trusted: authTrusted,
+		Saved: func() config.HTTPSConfig { return gc().HTTPS }, AccessNow: authSvc.Enabled,
+		OnBearer: authSvc.NoteCleartext, Logf: logger.Printf,
+	})
+	tlsSrv.Register(http.DefaultServeMux, func() any { return authSvc.CleartextUses() })
+	authSvc.SetHSTS(tlsSrv.OwnCertificate())
 
 	http.HandleFunc("/plex/webhook", handlePlexWebhook)
 
@@ -5397,11 +5405,13 @@ func main() {
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			// Trusted proxies decide whose X-Forwarded-For the login rate limit believes: a
-			// sign-in setting, so only a browser session may change it, not an API token.
-			if authSvc.Enabled() && auth.SessionFrom(r) == "" && !slices.Equal(newCfg.AuthTrustedProxies, gc().AuthTrustedProxies) {
-				http.Error(w, "auth_trusted_proxies changes only from the Control Panel, signed in", http.StatusForbidden)
-				return
+			// Who is trusted and whether traffic is encrypted: only a browser session may change
+			// these, not an API token.
+			if authSvc.Enabled() && auth.SessionFrom(r) == "" {
+				if k := config.SignInOnlyChange(*gc(), newCfg); k != "" {
+					http.Error(w, k+" changes only from the Control Panel, signed in", http.StatusForbidden)
+					return
+				}
 			}
 			if err := newCfg.WriteFile(gc().ConfigPath); err != nil {
 				http.Error(w, err.Error(), 500)
@@ -5805,7 +5815,11 @@ func main() {
 	})
 	logger.Printf("[Dashboard] enabled at :%d/dashboard", gc().MetricsPort)
 
-	go http.ListenAndServe(fmt.Sprintf(":%d", gc().MetricsPort), auth.Wrap(authSvc, authTrusted, http.DefaultServeMux))
+	go func() {
+		if err := tlsSrv.ListenAndServe(fmt.Sprintf(":%d", gc().MetricsPort), auth.Wrap(authSvc, authTrusted, http.DefaultServeMux)); err != nil {
+			logger.Printf("[Dashboard] ERROR :%d stopped: %v", gc().MetricsPort, err)
+		}
+	}()
 
 	// Graceful shutdown: saves inode map and sync caches before exit.
 	sigChan := make(chan os.Signal, 1)

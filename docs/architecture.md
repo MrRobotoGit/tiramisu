@@ -60,7 +60,7 @@ BitTorrent Peers ←→ GoStorm Engine (:8090)
 | Port | Purpose |
 |------|---------|
 | `:8090` | GoStorm API, JSON torrent management (`127.0.0.1` only; see `gostorm_listen_ip`) |
-| `:9080` | Control Panel, Metrics, Dashboard, Webhook, Scheduler, Library API |
+| `:9080` | Control Panel, Metrics, Dashboard, Webhook, Scheduler, Library API, MCP. Plain HTTP, and HTTPS on the same port when turned on ([HTTPS](api.md#https)) |
 
 ---
 

@@ -239,13 +239,15 @@ claude mcp add --transport http tiramisu http://<host>:9080/mcp \
 curl -H "Authorization: Bearer tmr_..." http://<host>:9080/api/health
 ```
 
+**HTTPS.** `:9080` can also encrypt everything itself: **Control Panel → Access → HTTPS**. Tiramisu creates a local CA valid for 10 years; each device trusts it once (download `tiramisu-ca.crt` from the same card), and the server certificate it signs renews on its own. Plain HTTP keeps working for the Plex and Jellyfin webhooks and for calls from the host itself; pages move to `https://`, and with sign-in on the API refuses plain HTTP from the LAN. Your own certificate works too. With HTTPS on, use `https://<host>:9080` in the examples above and point the client at the CA (`curl --cacert`, `NODE_EXTRA_CA_CERTS`): see [HTTPS](docs/api.md#https).
+
 **Forgot the password?** Stop the service, run `tiramisu --reset-auth` on the host, start it again: the user, the sessions and the tokens are cleared and sign-in is off. With Docker, start the container once with `-e TIRAMISU_RESET_AUTH=1`, then remove the variable.
 
 Every endpoint is documented inside Tiramisu too: **Reference → API** in the side menu (`/api-docs`) lists the stable API with parameters, a ready-to-copy `curl` for your own address and sample responses, and puts the MCP server address first.
 
 <p align="center"><img src="docs/screenshots/ui-api-light.png" alt="Reference, API page: the MCP server box with its address and client config, then the endpoints grouped by area, one of them open with its parameters, request and response" width="720"><br><sub><b>Reference → API</b>: the MCP server and the HTTP endpoints, documented in the app</sub></p>
 
-Sign-in is meant for your home network or a reverse proxy with HTTPS in front of it; see [Sign-in and API tokens](docs/api.md#sign-in-and-api-tokens) for the details: rate limits, reverse proxies and what happens if the state database cannot be read.
+Sign-in is meant for your home network, with Tiramisu's own HTTPS or a reverse proxy in front of it; see [Sign-in and API tokens](docs/api.md#sign-in-and-api-tokens) and [HTTPS](docs/api.md#https) for the details: rate limits, reverse proxies, certificates and what happens if the state database cannot be read.
 
 ---
 
@@ -257,7 +259,7 @@ Sign-in is meant for your home network or a reverse proxy with HTTPS in front of
 | [User Guide](docs/user-guide.md) | First-run steps, webhooks, the Control Panel and the Dashboard |
 | [Sync Engine](docs/sync-engine.md) | Movies, TV, Watchlist and Music sync, the dead-release reaper, Prowlarr |
 | [Configuration](docs/configuration.md) | Every `config.json` field, quality scoring, languages, environment variables |
-| [API and MCP Server](docs/api.md) | Sign-in and API tokens, Library API, MCP server for AI agents, HTTP endpoint reference |
+| [API and MCP Server](docs/api.md) | Sign-in and API tokens, HTTPS, Library API, MCP server for AI agents, HTTP endpoint reference |
 | [Architecture](docs/architecture.md) | How the FUSE layer, caches and engine work; performance figures |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes, file locations |
 
@@ -287,7 +289,7 @@ Not directly. Tiramisu has its own built-in sync engine that talks to TMDB, Prow
 Tiramisu is a general-purpose BitTorrent engine and streaming filesystem. It does not host, index, or distribute any copyrighted content itself; what you do with it is your responsibility, same as with any BitTorrent client.
 
 **Can I put Tiramisu on the internet?**
-Not directly. Turn on sign-in (Control Panel → Access) and put a reverse proxy with HTTPS in front of `:9080`. Never publish `:8090`: it listens on the host only by default, and it has no authentication.
+Not directly. Turn on sign-in and HTTPS (Control Panel → Access), or put a reverse proxy with HTTPS in front of `:9080`; for access from outside your home a VPN (WireGuard, Tailscale) is safer than an open port. Never publish `:8090`: it listens on the host only by default, and it has no authentication.
 
 **Is my data private?**
 Everything runs on your own hardware. No account, no third-party API key is required for the core engine to work (TMDB, Prowlarr, and Plex/Jellyfin integrations are optional and use your own credentials).

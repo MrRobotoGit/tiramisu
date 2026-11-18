@@ -11,6 +11,19 @@ import (
 
 const cookieName = "tiramisu_session"
 
+// secureCookieName is the session cookie over HTTPS. A separate name: browsers refuse to
+// let plain HTTP replace a Secure cookie of the same name, so turning HTTPS off would
+// otherwise lock the user out of http:// until the old cookie expires.
+const secureCookieName = "__Host-tiramisu_session"
+
+// sessionCookie returns the session cookie the request carries, the HTTPS one first.
+func sessionCookie(r *http.Request) (*http.Cookie, error) {
+	if c, err := r.Cookie(secureCookieName); err == nil {
+		return c, nil
+	}
+	return r.Cookie(cookieName)
+}
+
 type ctxKey struct{}
 
 // SessionFrom returns the session cookie value of an authenticated request, if any.
@@ -26,6 +39,9 @@ func exempt(path string) bool {
 	}
 	return strings.HasPrefix(path, "/ui/")
 }
+
+// CleanPath is the canonical path auth decides on; other guards in front of Wrap use it too.
+func CleanPath(p string) string { return cleanPath(p) }
 
 func cleanPath(p string) string {
 	if p == "" {
@@ -50,7 +66,7 @@ func bearer(r *http.Request) string {
 func Wrap(s *Service, trusted []netip.Prefix, next http.Handler) http.Handler {
 	cop := http.NewCrossOriginProtection()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		setSecurityHeaders(w, r)
+		setSecurityHeaders(w, (r.TLS != nil && s.HSTS()) || (r.TLS == nil && secureRequest(r)))
 		// Decide on the canonical path, so /ui/../api cannot ride the /ui/ exemption.
 		path := cleanPath(r.URL.Path)
 		// Always, sign-in or not: otherwise any page the user opens could rewrite the config or
@@ -88,7 +104,7 @@ func Wrap(s *Service, trusted []netip.Prefix, next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-		} else if c, err := r.Cookie(cookieName); err == nil {
+		} else if c, err := sessionCookie(r); err == nil {
 			if ok, renewed := s.AuthenticateSession(c.Value); ok {
 				if renewed {
 					setSessionCookie(w, r, c.Value)
@@ -139,12 +155,22 @@ func scopeRefusal(scope, path string) string {
 	return ""
 }
 
+// secureRequest: TLS here, or a proxy that says it terminated it. The header is believed
+// from anyone: forging it only marks the forger's own cookie Secure.
+func secureRequest(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
 func setSessionCookie(w http.ResponseWriter, r *http.Request, value string) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: value, Path: "/", HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL.Seconds()),
-		Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"})
+	name, secure := cookieName, secureRequest(r)
+	if secure {
+		name = secureCookieName
+	}
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL.Seconds()), Secure: secure})
 }
 
 func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", HttpOnly: true, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: secureCookieName, Value: "", Path: "/", HttpOnly: true, MaxAge: -1, Secure: true})
 }

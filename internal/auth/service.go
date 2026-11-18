@@ -1,10 +1,12 @@
 package auth
 
 import (
+	"cmp"
 	"crypto/subtle"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,8 +99,16 @@ type Service struct {
 	resetPending  bool
 	failClosed    bool
 	enabled       atomic.Bool
-	now           func() time.Time
-	logf          func(string, ...any)
+	hsts          atomic.Bool // only with the user's own certificate on :9080
+
+	ctMu       sync.Mutex
+	ctLookup   map[string]ctMeta
+	ctBudget   int             // DB lookups left in the current minute
+	ctPrefixes map[string]bool // visible prefixes of the existing tokens; nil = reload
+	ctWindow   time.Time
+	cleartext  map[int64]*CleartextUse
+	now        func() time.Time
+	logf       func(string, ...any)
 
 	mu    sync.Mutex
 	cache map[string]*cacheEntry
@@ -175,7 +185,11 @@ func (s *Service) State() State {
 	return st
 }
 
-func (s *Service) Enabled() bool         { return s.enabled.Load() }
+func (s *Service) Enabled() bool { return s.enabled.Load() }
+
+// SetHSTS: true only when :9080 serves the user's own certificate.
+func (s *Service) SetHSTS(on bool)       { s.hsts.Store(on) }
+func (s *Service) HSTS() bool            { return s.hsts.Load() }
 func (s *Service) FailClosed() bool      { return s.failClosed }
 func (s *Service) InternalToken() string { return s.internalToken }
 
@@ -530,6 +544,7 @@ func (s *Service) CreateToken(name, scope string) (int64, string, error) {
 	}
 	tok := newToken()
 	id, err := s.store.CreateAuthToken(name, tokenPrefix(tok), hashSecret(tok), scope, s.now().Unix())
+	s.forgetCleartext(0)
 	return id, tok, err
 }
 
@@ -546,6 +561,7 @@ func (s *Service) RevokeToken(id int64) error {
 	}
 	ok, err := s.store.DeleteAuthToken(id)
 	s.clearCache()
+	s.forgetCleartext(id)
 	if err != nil {
 		return err
 	}
@@ -577,3 +593,109 @@ type hashResult struct {
 }
 
 func (r hashResult) get() (string, error) { return r.v, r.err }
+
+// CleartextUse: a valid token seen over plain HTTP from another host, since start-up.
+type CleartextUse struct {
+	Name   string `json:"name"`
+	Prefix string `json:"prefix"`
+	IP     string `json:"ip"`
+	Last   int64  `json:"last"`
+	Count  int    `json:"count"`
+}
+
+type ctMeta struct {
+	at     time.Time
+	found  bool
+	id     int64
+	name   string
+	prefix string
+}
+
+// cleartextLookups caps DB lookups per minute: anyone on the LAN can send made-up tokens.
+const cleartextLookups = 30
+
+// NoteCleartext records tok if it is a real token; memory only, the 20 most recent tokens.
+func (s *Service) NoteCleartext(tok, ip string) {
+	if s.store == nil || !strings.HasPrefix(tok, tokenPrefixLiteral) || len(tok) != len(tokenPrefixLiteral)+43 {
+		return
+	}
+	h := hashSecret(tok)
+	now := s.now()
+	s.ctMu.Lock()
+	defer s.ctMu.Unlock()
+	m, ok := s.ctLookup[h]
+	if !ok || now.Sub(m.at) > time.Minute {
+		// A made-up token is dropped here, without a lookup, so it cannot use up the budget.
+		if s.ctPrefixes == nil {
+			list, err := s.store.ListAuthTokens()
+			if err != nil {
+				return
+			}
+			s.ctPrefixes = map[string]bool{}
+			for _, t := range list {
+				s.ctPrefixes[t.Prefix] = true
+			}
+		}
+		if !s.ctPrefixes[tokenPrefix(tok)] {
+			return
+		}
+		if now.Sub(s.ctWindow) > time.Minute {
+			s.ctWindow, s.ctBudget = now, cleartextLookups
+		}
+		if s.ctBudget <= 0 {
+			return
+		}
+		s.ctBudget--
+		t, found, err := s.store.GetAuthTokenByHash(h)
+		if err != nil {
+			return
+		}
+		if s.ctLookup == nil || len(s.ctLookup) >= 100 {
+			s.ctLookup = map[string]ctMeta{}
+		}
+		m = ctMeta{at: now, found: found, id: t.ID, name: t.Name, prefix: t.Prefix}
+		s.ctLookup[h] = m
+	}
+	if !m.found {
+		return
+	}
+	if s.cleartext == nil {
+		s.cleartext = map[int64]*CleartextUse{}
+	}
+	u := s.cleartext[m.id]
+	if u == nil {
+		if len(s.cleartext) >= 20 {
+			var oldest int64
+			for id, x := range s.cleartext {
+				if oldest == 0 || x.Last < s.cleartext[oldest].Last {
+					oldest = id
+				}
+			}
+			delete(s.cleartext, oldest)
+		}
+		u = &CleartextUse{Name: m.name, Prefix: m.prefix}
+		s.cleartext[m.id] = u
+	}
+	u.IP, u.Last = ip, now.Unix()
+	u.Count++
+}
+
+// forgetCleartext drops what the registry knows after a token is created or revoked (id).
+func (s *Service) forgetCleartext(id int64) {
+	s.ctMu.Lock()
+	defer s.ctMu.Unlock()
+	s.ctPrefixes, s.ctLookup = nil, nil
+	delete(s.cleartext, id)
+}
+
+// CleartextUses: newest first.
+func (s *Service) CleartextUses() []CleartextUse {
+	s.ctMu.Lock()
+	defer s.ctMu.Unlock()
+	out := make([]CleartextUse, 0, len(s.cleartext))
+	for _, u := range s.cleartext {
+		out = append(out, *u)
+	}
+	slices.SortFunc(out, func(a, b CleartextUse) int { return cmp.Compare(b.Last, a.Last) })
+	return out
+}

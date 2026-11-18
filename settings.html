@@ -150,7 +150,30 @@
         .acc-token { display: flex; align-items: center; gap: 10px; padding: 0 6px 0 12px; height: 40px; border: 1px solid var(--ink); border-radius: 4px; background: var(--well); }
         .acc-token code { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
         .acc-snippet { margin: 0; padding: 14px 16px; border-radius: 4px; background: var(--term); color: var(--term-text); font-family: var(--mono); font-size: 11px; line-height: 16px; white-space: pre-wrap; word-break: break-all; }
+        .tls-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .tls-step { display: flex; gap: 16px; padding: 16px 0; border-top: 1px solid var(--hair); }
+        .tls-step .b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+        .tls-step .t { font-weight: 500; }
+        .tls-step.later .t { color: var(--ink3); }
+        .tls-num { flex: 0 0 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--hair2); display: inline-flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 10px; color: var(--ink3); }
+        .tls-num.now { box-shadow: inset 0 0 0 1.5px var(--ink); color: var(--ink); }
+        .tls-num.done { background: var(--ink); box-shadow: none; color: var(--inv); font-family: inherit; font-size: 11px; }
+        .tls-addr { display: flex; align-items: center; gap: 10px; padding: 0 4px 0 12px; height: 36px; max-width: 520px; background: var(--well); border: 1px solid var(--hair); border-radius: 4px; }
+        .tls-addr code { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tls-step .b > .seg, .tls-step .b > .tls-line { align-self: flex-start; max-width: 100%; }
+        .tls-fp { min-width: 0; word-break: break-all; }
+        .tls-step pre.acc-snippet { word-break: normal; overflow-wrap: anywhere; max-width: 760px; }
+        #tls-details:not([hidden]) { display: flex; flex-direction: column; gap: 16px; padding-top: 16px; border-top: 1px solid var(--hair); }
+        .tls-details-head { display: flex; align-items: center; gap: 8px; }
+        .tls-details-head .label { color: var(--ink3); }
+        .tls-kv { display: grid; grid-template-columns: 150px 1fr; gap: 10px 16px; margin: 0; }
+        .tls-kv dt { font-size: 12px; font-weight: 500; color: var(--ink2); }
+        .tls-kv dd { margin: 0; font-family: var(--mono); font-size: 11px; word-break: break-all; }
+        .tls-use { display: flex; align-items: center; gap: 16px; padding: 8px 12px; border-radius: 4px; background: var(--well); flex-wrap: wrap; font-size: 12px; }
+        .tls-use .mono { font-family: var(--mono); font-size: 11px; }
+        #tls-warn, #tls-err { margin-top: 12px; }
         @media (max-width: 900px) { .acc-status { flex-direction: column; align-items: flex-start; } .acc-row .dev { min-width: 0; } }
+        @media (max-width: 900px) { .tls-kv { grid-template-columns: 1fr; gap: 2px 0; } .tls-kv dd { margin-bottom: 8px; } }
     </style>
 </head>
 
@@ -901,8 +924,41 @@
                         </div>
                     </div>
 
+                    <div class="card" id="acc-tls-card">
+                        <div class="card-head"><span class="num">07.4</span><span class="label ink">HTTPS</span><span class="spacer"></span><span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span></div>
+                        <div class="card-body tight">
+                            <div class="toggle-row" style="padding-top:0">
+                                <div class="text"><div class="title">Serve this port over HTTPS</div>
+                                    <div class="hint">Encrypts the Control Panel, the API and /mcp. Webhooks and calls from this machine keep working over http://; pages move to https://.</div></div>
+                                <label class="switch"><input type="checkbox" id="tls-enabled" data-label="https.enabled" aria-label="Serve this port over HTTPS" disabled><span class="slider"></span></label>
+                            </div>
+                            <div class="warn-note" id="tls-warn" hidden></div>
+                            <div class="acc-err" id="tls-err" hidden><span class="lamp err"></span><span></span></div>
+                            <div id="tls-steps" hidden></div>
+                            <div class="adv-only" id="tls-details" hidden>
+                                <div class="tls-details-head"><span class="label">Certificate details</span><span class="chip-tag">Adv</span></div>
+                                <input type="hidden" id="tls-source-v" data-label="https.certificate" value="local CA">
+                                <div class="tls-line"><span class="small" style="font-weight:500;width:150px">Certificate</span>
+                                    <div class="seg sm" id="tls-source" role="group" aria-label="Certificate"><button type="button" data-v="local CA">Local CA (automatic)</button><button type="button" data-v="own files">My own files</button></div></div>
+                                <div id="tls-self">
+                                    <div class="field"><label for="tls-extra">Extra hostnames</label>
+                                        <div class="input mono"><input id="tls-extra" data-label="https.extra_hostnames" placeholder="10.0.0.5, nas.lan"></div>
+                                        <div class="hint">Names or IPs added to the certificate, comma-separated. Docker: the host's IP or name, which the container cannot see.</div></div>
+                                </div>
+                                <div id="tls-file" hidden>
+                                    <div class="grid2">
+                                        <div class="field"><label for="tls-cert">Certificate file</label><div class="input mono"><input id="tls-cert" data-label="https.cert_file" placeholder="/etc/letsencrypt/live/host/fullchain.pem"></div></div>
+                                        <div class="field"><label for="tls-key">Key file</label><div class="input mono"><input id="tls-key" data-label="https.key_file" placeholder="/etc/letsencrypt/live/host/privkey.pem"></div></div>
+                                    </div>
+                                    <div class="hint">Paths on the host. Renewed files are picked up within a minute, no restart. If they cannot be read, Tiramisu falls back to the local CA and logs [TLS] ERROR.</div>
+                                </div>
+                                <div class="warn-note" id="tls-apply-hint" hidden>Apply & restart in the bar at the bottom to use these settings, or Discard to go back.</div>
+                                <dl class="tls-kv" id="tls-kv"></dl>
+                            </div>
+                        </div>
+                    </div>
                     <div class="card" id="acc-off-card" hidden>
-                        <div class="card-head"><span class="num">07.4</span><span class="label ink">Turn off sign-in</span></div>
+                        <div class="card-head"><span class="num">07.5</span><span class="label ink">Turn off sign-in</span></div>
                         <div class="card-body">
                             <div class="acc-status">
                                 <div class="hint" style="flex:1">Removes the requirement for this port. The user and the tokens are kept, so turning it back on restores them. Asks for the password.</div>
@@ -911,7 +967,6 @@
                         </div>
                     </div>
 
-                    <div class="acc-note"><span class="lamp off"></span><span class="small faint">Port :8090 (GoStorm API) answers on this machine only (127.0.0.1); gostorm_listen_ip in config.json opens it to the network.</span></div>
                 </section>
             </div>
 
@@ -939,18 +994,39 @@
             try {
                 await fetch('/api/restart', { method: 'POST' });
             } catch (_) { /* expected: connection drops on restart */ }
-            // Poll until back up
+            // HTTPS switched on or off: the page changes scheme once the new process answers. The old
+            // process keeps answering through its shutdown, so it has to go down first.
+            const move = window.tlsSchemeAfterRestart ? window.tlsSchemeAfterRestart() : '';
+            const go = scheme => { clearInterval(poll); location.href = scheme + '//' + location.host + '/control#access'; };
+            const t0 = Date.now();
+            let wentDown = false, downAt = 0;
             const poll = setInterval(async () => {
+                if (move === 'http:') {
+                    // From https:// the new plain-only process cannot be reached: every fetch fails.
+                    // Give it time to start, then go.
+                    if ((wentDown && Date.now() - downAt > 10000) || Date.now() - t0 > 60000) return go('http:');
+                }
                 try {
                     const r = await fetch('/api/config', { signal: AbortSignal.timeout(2000) });
+                    if (move === 'https:') {
+                        if (!wentDown && Date.now() - t0 < 60000) return;
+                        // The new process answers in clear (403 with sign-in on): only move if it runs TLS.
+                        const t = await fetch('/api/auth/tls', { cache: 'no-store', signal: AbortSignal.timeout(2000) }).catch(() => null);
+                        const ok = t && (t.status === 403 || (t.ok && (await t.json().catch(() => ({}))).running));
+                        if (ok) return go('https:');
+                        if (t) { clearInterval(poll); location.reload(); }
+                        return;
+                    }
+                    if (move === 'http:') return;
                     if (r.ok) {
                         clearInterval(poll);
                         btn.disabled = false;
                         btn.innerHTML = '<span class="ico">↻</span><span class="hide-sm">Restart</span>';
                         restartPending = false;
                         renderChangeBar();
+                        if (window.tlsLoad) window.tlsLoad();
                     }
-                } catch (_) { }
+                } catch (_) { if (!wentDown) downAt = Date.now(); wentDown = true; }
             }, 1500);
         }
 
@@ -2096,8 +2172,9 @@
             release: { scope: 'restart', label: 'Release selection' },
             core: { scope: 'live', label: 'Engine' },
             sched: { scope: 'restart', label: 'Scheduler' },
+            https: { scope: 'restart', label: 'HTTPS' },
         };
-        const SECTION_OF = { tiramisu: null, release: 'sec-release', core: 'sec-engine', sched: 'sec-scheduler' };
+        const SECTION_OF = { tiramisu: null, release: 'sec-release', core: 'sec-engine', sched: 'sec-scheduler', https: 'sec-access' };
         const snapshots = {};
         let restartPending = false;
         let applying = false;
@@ -2105,6 +2182,7 @@
         let savedAt = '';
 
         function groupControls(group) {
+            if (group === 'https') return ['tls-enabled', 'tls-source-v', 'tls-extra', 'tls-cert', 'tls-key'].map(id => document.getElementById(id));
             if (group === 'tiramisu') {
                 // The Tiramisu form, minus the release-selection controls that share it.
                 return [...document.getElementById('tiramisu-form').elements]
@@ -2244,6 +2322,11 @@
                         snapshot('release');
                     } else errors.push(r.message);
                 }
+                // After the engine save (which writes the whole config), before the schedule.
+                if (dirty.includes('https')) {
+                    const r = await window.tlsSaveSettings();
+                    if (r.ok) { restartPending = true; await window.tlsLoad(); } else errors.push(r.message);
+                }
                 if (dirty.includes('sched')) {
                     const r = await saveScheduler();
                     if (r.ok) { restartPending = true; snapshot('sched'); loadScheduler(); } else errors.push(r.message);
@@ -2267,6 +2350,7 @@
             if (dirty.includes('tiramisu') || dirty.includes('release')) await loadEngine();
             if (dirty.includes('core')) await loadCore();
             if (dirty.includes('sched')) { snapshots.sched = null; await loadScheduler(); }
+            if (dirty.includes('https')) await window.tlsLoad();
             refreshDirty();
         }
 
@@ -2695,10 +2779,220 @@
             }
             window.accLogoutOthers = async function () { await api('POST', 'logout-others').catch(() => { }); loadSessions(); };
 
+            // ---------- HTTPS (/api/auth/tls) ----------
+            // The settings go through the changebar (group "https", restart); the card only
+            // tells what to do next. Steps 2-3 cannot be seen from the server: what this
+            // browser did is remembered locally, per CA fingerprint.
+            let tls = null, tlsCfg = {};
+            const caKey = k => 'tiramisu.https.' + k + '.' + ((tls && tls.certificate && tls.certificate.fingerprint_sha256) || '');
+            const remember = (k, v) => { try { v ? localStorage.setItem(caKey(k), '1') : localStorage.removeItem(caKey(k)); } catch (_) { } };
+            const remembered = k => { try { return localStorage.getItem(caKey(k)) === '1'; } catch (_) { return false; } };
+            function tlsError(msg) { const e = $('tls-err'); e.hidden = !msg; e.lastElementChild.textContent = msg || ''; }
+            const TRUST = {
+                macOS: '# Open tiramisu-ca.crt → Keychain Access → double-click it\n# → Trust → When using this certificate: Always Trust. Or:\nsudo security add-trusted-cert -d -r trustRoot \\\n  -k /Library/Keychains/System.keychain ~/Downloads/tiramisu-ca.crt',
+                iOS: 'Send tiramisu-ca.crt to the device (AirDrop or Files) and open it\n→ Settings › Profile Downloaded → Install\n→ Settings › General › About › Certificate Trust Settings → enable "Tiramisu local CA"',
+                'Claude Code': 'export NODE_EXTRA_CA_CERTS=~/tiramisu-ca.crt\n# MCP: https://' + location.hostname + ':' + (location.port || '9080') + '/mcp',
+                Python: 'export REQUESTS_CA_BUNDLE=~/tiramisu-ca.crt\n# or: requests.get(url, verify="/path/to/tiramisu-ca.crt")',
+                curl: 'curl --cacert ~/tiramisu-ca.crt https://' + location.hostname + ':' + (location.port || '9080') + '/metrics',
+            };
+            function stepNode(n, state, title, hint) {
+                const r = el('div', 'tls-step ' + state);
+                r.appendChild(el('span', 'tls-num ' + state, state === 'done' ? '✓' : String(n)));
+                const b = el('div', 'b');
+                b.appendChild(el('div', 't', title));
+                if (hint) b.appendChild(el('div', 'hint', hint));
+                r.appendChild(b);
+                $('tls-steps').appendChild(r);
+                return b;
+            }
+            function addrRow(b) {
+                const url = 'https://' + location.host;
+                const r = el('div', 'tls-addr');
+                r.appendChild(el('code', null, url));
+                const c = el('button', 'btn ghost sm', 'Copy'); c.type = 'button';
+                c.onclick = () => accCopy(url, c);
+                r.appendChild(c);
+                b.appendChild(r);
+            }
+            // The source selector lives in Advanced: the way back must not depend on it.
+            function localCAButton(b) {
+                const back = el('button', 'btn sm', 'Use the local CA instead'); back.type = 'button';
+                back.onclick = () => { setSource('local CA'); refreshDirty(); renderSteps(); };
+                b.appendChild(el('div', 'tls-line')); b.lastChild.appendChild(back);
+            }
+            function renderSteps() {
+                const box = $('tls-steps');
+                box.replaceChildren();
+                const on = $('tls-enabled').checked;
+                box.hidden = !on && !(tls && tls.running);
+                if (!tls) return;
+                const unsaved = typeof isDirty === 'function' && isDirty('https');
+                // Saved but not in use yet: the running server still has the settings it started with.
+                const pending = !unsaved && tls.restart_reason === 'the https settings changed';
+                if (!on) {
+                    if (tls.running) box.appendChild(el('div', 'warn-note', unsaved
+                        ? 'HTTPS turns off after Apply & restart in the bar below; Discard keeps it on. Clients set to https:// will have to go back to http://.'
+                        : 'Saved: HTTPS turns off when Tiramisu restarts (Restart in the top bar). To keep it, turn the switch back on and apply.'));
+                    return;
+                }
+                // The steps follow the settings in the card, not the certificate the server happens to run.
+                const running = tls.running && !pending, c = tls.certificate, own = $('tls-source-v').value === 'own files';
+                $('tls-apply-hint').hidden = !unsaved;
+                // Unsaved HTTPS settings: nothing below applies until they do.
+                if (unsaved) {
+                    stepNode(1, 'now', 'Turn on HTTPS', running
+                        ? 'You changed the HTTPS settings: Apply & restart in the bar below to use them.'
+                        : 'Apply & restart in the bar below.');
+                    ['Download the CA certificate', 'Trust it on each device', 'Switch your clients to https://']
+                        .slice(own ? 2 : 0).forEach((t, i) => stepNode(own ? 2 : i + 2, 'later', t));
+                    if (own) localCAButton($('tls-steps').lastChild.querySelector('.b'));
+                    return;
+                }
+                stepNode(1, running ? 'done' : 'now', 'Turn on HTTPS',
+                    running ? 'HTTPS runs on this port. To turn it off, use the switch above.'
+                        : tls.start_error ? 'HTTPS could not start: see the error above.'
+                            : 'Saved, not in use yet: Restart in the top bar to apply. To undo, change the settings back and apply.');
+                if (own && running && c && c.source === 'self-signed') {
+                    // The files did not load and the server fell back to the local CA.
+                    $('tls-steps').replaceChildren();
+                    stepNode(1, 'now', 'Turn on HTTPS', 'Your certificate files could not be read ([TLS] ERROR in the log): the local CA is in use. Fix the paths in Advanced, or use the local CA.');
+                    localCAButton($('tls-steps').lastChild.querySelector('.b'));
+                    return;
+                }
+                if (own) {
+                    const b = stepNode(2, running ? 'now' : 'later', 'Switch your clients to https://',
+                        'Your certificate is issued by a public CA: devices trust it already.');
+                    if (running) addrRow(b);
+                    localCAButton(b);
+                    return;
+                }
+                const got = running && remembered('downloaded'), trusted = got && remembered('trusted');
+                const b2 = stepNode(2, !running ? 'later' : got ? 'done' : 'now', 'Download the CA certificate',
+                    running ? 'One certificate for all your devices, valid until ' + day(Date.parse(c.ca_not_after) / 1000) + '.' : 'After the restart.');
+                if (running) {
+                    const r = el('div', 'tls-line');
+                    const a = el('a', 'btn sm ' + (got ? '' : 'primary'), '↓ Download tiramisu-ca.crt');
+                    a.href = '/api/auth/tls/cert'; a.download = 'tiramisu-ca.crt';
+                    a.onclick = () => { remember('downloaded', true); setTimeout(renderSteps, 0); };
+                    r.append(a, el('span', 'mono small tls-fp', 'SHA-256  ' + c.fingerprint_sha256));
+                    if (got) {
+                        const undo = el('button', 'btn sm', 'Not downloaded yet'); undo.type = 'button';
+                        undo.onclick = () => { remember('downloaded', false); remember('trusted', false); renderSteps(); };
+                        r.appendChild(undo);
+                    }
+                    b2.appendChild(r);
+                }
+                const b3 = stepNode(3, !got ? 'later' : trusted ? 'done' : 'now', 'Trust it on each device',
+                    got ? 'Once per device: the server certificate it signs renews on its own. Check that the SHA-256 ends in ' + c.fingerprint_sha256.slice(-8) + '.' : null);
+                if (got && !trusted) {
+                    const seg = el('div', 'seg sm'); seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', 'Client');
+                    const pre = el('pre', 'acc-snippet', TRUST.macOS);
+                    Object.keys(TRUST).forEach((k, i) => {
+                        const bt = el('button', i === 0 ? 'active' : '', k); bt.type = 'button'; bt.setAttribute('aria-pressed', String(i === 0));
+                        bt.onclick = () => { seg.querySelectorAll('button').forEach(x => { x.classList.toggle('active', x === bt); x.setAttribute('aria-pressed', String(x === bt)); }); pre.textContent = TRUST[k]; };
+                        seg.appendChild(bt);
+                    });
+                    const done = el('button', 'btn sm', 'Done, my devices trust it'); done.type = 'button';
+                    done.onclick = () => { remember('trusted', true); renderSteps(); };
+                    b3.append(seg, pre, el('div', 'tls-line'));
+                    b3.lastChild.appendChild(done);
+                } else if (trusted) {
+                    const again = el('button', 'btn sm', 'Not yet: show the instructions'); again.type = 'button';
+                    again.onclick = () => { remember('trusted', false); renderSteps(); };
+                    b3.appendChild(el('div', 'tls-line')); b3.lastChild.appendChild(again);
+                }
+                const b4 = stepNode(4, trusted ? 'now' : 'later', 'Switch your clients to https://',
+                    trusted ? 'Menu bar app, Hermes, Claude Code and scripts: change http:// to https://.' : null);
+                if (trusted) addrRow(b4);
+                const uses = (running && tls.cleartext_uses) || [];
+                for (const u of uses) {
+                    const r = el('div', 'tls-use');
+                    r.append(lamp('err'), el('span', 'title', u.name), el('span', 'mono', u.prefix + '…'),
+                        el('span', 'small', 'still on http:// · from ' + u.ip + ' · ' + ago(u.last) + ' · ' + u.count + '×'),
+                        el('span', 'chip-tag', tls.access_on_at_start ? 'refused · 403' : 'served'));
+                    b4.appendChild(r);
+                }
+                if (uses.length) b4.appendChild(el('div', 'small faint', 'The token already travelled in clear: switch the client and consider revoking it.'));
+            }
+            function setSource(v) {
+                $('tls-source-v').value = v;
+                for (const b of $('tls-source').children) { b.classList.toggle('active', b.dataset.v === v); b.setAttribute('aria-pressed', String(b.dataset.v === v)); }
+                $('tls-self').hidden = v !== 'local CA';
+                $('tls-file').hidden = v !== 'own files';
+            }
+            $('tls-source').addEventListener('click', e => {
+                const v = e.target.dataset && e.target.dataset.v;
+                if (!v) return;
+                setSource(v);
+                refreshDirty();
+                renderSteps();
+            });
+            $('tls-enabled').addEventListener('change', () => { $('tls-details').hidden = !$('tls-enabled').checked; renderSteps(); });
+            ['tls-extra', 'tls-cert', 'tls-key'].forEach(id => $(id).addEventListener('input', () => renderSteps()));
+            // "a,b" and "a, b" are the same list: normalise so the changebar only sees real changes.
+            $('tls-extra').addEventListener('change', () => {
+                $('tls-extra').value = $('tls-extra').value.split(',').map(x => x.trim()).filter(Boolean).join(', ');
+                refreshDirty(); renderSteps();
+            });
+            async function loadTLS() {
+                try {
+                    tls = await api('GET', 'tls');
+                    // Read here: originalEngine may still be loading.
+                    const r = await fetch('/api/config', { cache: 'no-store' });
+                    tlsCfg = r.ok ? ((await r.json()).https || {}) : {};
+                } catch (e) { tlsError('HTTPS settings unavailable: ' + e.message); return; }
+                $('tls-enabled').disabled = false;
+                $('tls-enabled').checked = !!tlsCfg.enabled;
+                $('tls-details').hidden = !tlsCfg.enabled;
+                setSource(tlsCfg.cert_file || tlsCfg.key_file ? 'own files' : 'local CA');
+                $('tls-extra').value = (tlsCfg.extra_hostnames || []).join(', ');
+                $('tls-cert').value = tlsCfg.cert_file || '';
+                $('tls-key').value = tlsCfg.key_file || '';
+                const w = $('tls-warn');
+                w.hidden = !(tls.restart_reason || '').startsWith('sign-in');
+                w.textContent = st && st.enabled
+                    ? 'Sign-in is on, but until Tiramisu restarts passwords and tokens can still travel over plain HTTP from the LAN. Restart from the top bar.'
+                    : 'Sign-in is off: after a restart the API answers plain HTTP from the LAN again. Restart from the top bar.';
+                tlsError(tls.start_error ? 'HTTPS could not start: ' + tls.start_error : '');
+                const c = tls.certificate, kv = $('tls-kv');
+                kv.replaceChildren();
+                if (c) {
+                    const rows = c.source === 'self-signed'
+                        ? [['Server certificate', 'until ' + day(Date.parse(c.not_after) / 1000) + ' · renewed on its own'], ['Names', (c.san || []).join(' · ')], ['Folder', c.path.replace(/[^/]*$/, '')]]
+                        : [['In use now', (c.san || []).join(' · ') + ' · until ' + day(Date.parse(c.not_after) / 1000)], ['SHA-256', c.fingerprint_sha256]];
+                    for (const [k, v] of rows) kv.append(el('dt', null, k), el('dd', null, v));
+                }
+                snapshot('https');
+                renderSteps();
+            }
+            // Called by applyChanges: posts only the https block (POST /api/config merges).
+            window.tlsSaveSettings = async function () {
+                const own = $('tls-source-v').value === 'own files';
+                const https = { enabled: $('tls-enabled').checked,
+                    cert_file: own ? $('tls-cert').value.trim() : '', key_file: own ? $('tls-key').value.trim() : '',
+                    extra_hostnames: $('tls-extra').value.split(',').map(x => x.trim()).filter(Boolean) };
+                if (own && (!https.cert_file || !https.key_file)) return { ok: false, message: 'HTTPS: set both the certificate and the key file' };
+                const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ https }) });
+                if (!r.ok) return { ok: false, message: 'HTTPS: ' + ((await r.text()).trim() || 'HTTP ' + r.status) };
+                // saveEngine posts originalEngine whole: keep it current.
+                if (typeof originalEngine === 'object' && originalEngine) originalEngine.https = https;
+                tlsCfg = https;
+                return { ok: true };
+            };
+            window.tlsLoad = loadTLS;
+            // 'https:' / 'http:' when a restart switches this port's scheme, '' otherwise. Only when
+            // Tiramisu itself serves TLS: behind an HTTPS proxy the page is https:// either way.
+            window.tlsSchemeAfterRestart = () => {
+                const runs = !!(tls && tls.running);
+                if (tlsCfg.enabled && !runs && location.protocol === 'http:') return 'https:';
+                if (!tlsCfg.enabled && runs && location.protocol === 'https:') return 'http:';
+                return '';
+            };
+
             // ---------- state ----------
             async function load() {
                 try { st = await TiramisuAuth.status(); } catch (_) { st = null; }
-                if (!st) { $('acc-title').textContent = 'Unavailable'; return; }
+                if (!st) { $('acc-title').textContent = 'Unavailable'; loadTLS(); return; }
                 const on = st.enabled, btn = $('acc-main-btn');
                 $('acc-mcp-url').textContent = accMcpURL();
                 $('acc-lamp').className = 'lamp ' + (on ? '' : 'off');
@@ -2727,6 +3021,7 @@
                 }
                 if (st.available) loadTokens();
                 if (on) loadSessions();
+                loadTLS();
             }
             load();
         })();

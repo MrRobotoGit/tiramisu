@@ -61,6 +61,8 @@ Mount a host directory there and everything survives `docker rm`. Without that v
 
 Do not mount a named or anonymous Docker volume expecting the warning to catch a mistake: an anonymous volume looks mounted, but a fresh `docker run` attaches a new empty one. Use a host path.
 
+**HTTPS in Docker.** If you turn on HTTPS (**Control Panel → Access → HTTPS**), add the host's IP or name to **Extra hostnames**: the container's own address is not what your devices use, and it changes on every re-creation. The local CA and the certificate live in `/state/STATE/tls/`, so they survive updates and devices do not have to trust a new CA. The port mapping stays `-p 9080:9080`.
+
 **Updating the container.** Unmount the virtual directory between removing the old container and starting the new one: Docker refuses to bind-mount over the FUSE mount the previous container left behind.
 
 ```bash

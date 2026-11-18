@@ -165,6 +165,34 @@ commands on the host, or set `"gostorm_listen_ip": "all"` in `config.json`.
 
 </details>
 
+<details>
+<summary><b>HTTPS: the browser says the connection is not private, or a client gets <code>403 use https</code></b></summary>
+
+With HTTPS on (**Control Panel → Access → HTTPS**), each device has to trust
+Tiramisu's local CA once:
+
+- **Browser warning** ("not private", `NET::ERR_CERT_AUTHORITY_INVALID`): the device
+  does not trust the CA yet. Accept the warning once, download `tiramisu-ca.crt`
+  from the card, check its SHA-256 against the card, and trust it (macOS: Keychain
+  Access → *Always Trust*; iOS: install the profile, then enable it in
+  *Settings → General → About → Certificate Trust Settings*).
+- **Still "not secure" with the CA trusted**: the address you use is not in the
+  certificate (a Tailscale IP or `*.ts.net` name, another hostname). Add it to
+  **Extra hostnames** in the card (Advanced), then Apply & restart: the CA stays the
+  same, nothing to reinstall.
+- **`403 {"error":"use https"}`** on an API call: the client still uses `http://`
+  from another machine while sign-in is on. Switch it to `https://`.
+- **`CERTIFICATE_VERIFY_FAILED`** in a Python client although the CA is in the
+  system store: `httpx` and `requests` use `certifi`. Set `SSL_CERT_FILE` and
+  `REQUESTS_CA_BUNDLE` to the CA file or to the system bundle
+  (`/etc/ssl/certs/ca-certificates.crt` on Debian/Ubuntu). Node clients need
+  `NODE_EXTRA_CA_CERTS`.
+- **The card says the certificate files could not be read**: the paths in
+  `https.cert_file` / `https.key_file` are wrong or not readable by the service
+  user; Tiramisu is serving the local CA meanwhile (`[TLS] ERROR` in the log).
+
+</details>
+
 ## Key File Locations
 
 Paths below use the defaults set by `install.sh`. All are configurable during installation.

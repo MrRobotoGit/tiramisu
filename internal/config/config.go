@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -228,6 +229,30 @@ type LanguageConfig struct {
 	ExcludedFlags  []string `json:"excluded_flags"`
 }
 
+// HTTPSConfig: TLS on :9080, read at start-up only. Empty files = local CA + certificate in STATE/tls.
+type HTTPSConfig struct {
+	Enabled        bool     `json:"enabled"`
+	CertFile       string   `json:"cert_file"`
+	KeyFile        string   `json:"key_file"`
+	ExtraHostnames []string `json:"extra_hostnames"`
+}
+
+func (h HTTPSConfig) Equal(o HTTPSConfig) bool {
+	return h.Enabled == o.Enabled && h.CertFile == o.CertFile && h.KeyFile == o.KeyFile &&
+		slices.Equal(h.ExtraHostnames, o.ExtraHostnames)
+}
+
+// SignInOnlyChange names the first setting that only a signed-in browser may change, or "".
+func SignInOnlyChange(old, next Config) string {
+	if !slices.Equal(old.AuthTrustedProxies, next.AuthTrustedProxies) {
+		return "auth_trusted_proxies"
+	}
+	if !old.HTTPS.Equal(next.HTTPS) {
+		return "https"
+	}
+	return ""
+}
+
 // Config holds all configurable parameters for the FUSE proxy
 type Config struct {
 	// --- Internal / Derived Fields ---
@@ -368,7 +393,9 @@ type Config struct {
 	EnableStateDB bool `json:"enable_state_db"` // default: true
 	// AuthTrustedProxies: reverse proxies whose X-Forwarded-For the :9080 login rate limit trusts.
 	AuthTrustedProxies []string `json:"auth_trusted_proxies,omitempty"`
-	StateDBPath        string   `json:"state_db_path"` // default: <STATE>/tiramisu.db
+	// HTTPS: TLS on :9080 (spec 2026-11-18-https-design.md).
+	HTTPS       HTTPSConfig `json:"https"`
+	StateDBPath string      `json:"state_db_path"` // default: <STATE>/tiramisu.db
 }
 
 // Save persists the current configuration to config.json

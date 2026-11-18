@@ -33,7 +33,10 @@ nano ~/Tiramisu/config.json
 | `fuse_max_inflight_mb` | `0` | Cap on the RAM go-fuse checks out for in-flight requests; `0` leaves go-fuse's own default |
 | `gostorm_url` | `http://127.0.0.1:8090` | GoStorm internal API URL |
 | `gostorm_listen_ip` | *(empty)* | Where the GoStorm API (`:8090`) listens: empty = `127.0.0.1` only; `"all"` = every interface (the behaviour before v1.11.15), or a specific IP. Stays on every interface if `gostorm_url` is not a loopback address |
-| `auth_trusted_proxies` | *(empty)* | Reverse proxies (IPs or CIDRs) whose `X-Forwarded-For` the sign-in rate limit trusts |
+| `auth_trusted_proxies` | *(empty)* | Reverse proxies (IPs or CIDRs) whose `X-Forwarded-For` the sign-in rate limit trusts; with HTTPS on, plain HTTP from them is also served. List proxy IPs, not whole subnets |
+| `https.enabled` | `false` | Serve `:9080` over HTTPS too ([details](api.md#https)). Read at start-up; set it from **Control Panel → Access → HTTPS** |
+| `https.cert_file` / `https.key_file` | *(empty)* | Your own certificate and key; empty = the local CA in `STATE/tls/`. Renewed files are reloaded within a minute |
+| `https.extra_hostnames` | `[]` | Names or IPs added to the local certificate, e.g. the Docker host's IP |
 | `proxy_listen_port` | `8080` | Legacy field kept for config compatibility: no listener uses it today |
 | `metrics_port` | `9080` | Metrics, Control Panel, Webhook port |
 | `media_server_type` | `plex` | `plex` or `jellyfin`; selects how the post-sync library refresh is issued and which API the music sync reads |
