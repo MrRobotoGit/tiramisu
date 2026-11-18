@@ -120,7 +120,7 @@ To ensure the system remains functional even when public aggregators like Torren
 
 The sync engine implements a **Strict Fallback** logic: it first queries your Prowlarr indexers using IMDB IDs for maximum precision. If no results are found locally, it automatically falls back to Torrentio.
 
-**Configuration** is done via `config.json` (or the Control Panel → **Prowlarr Indexer** section):
+**Configuration** is done in the Control Panel → **Prowlarr Indexer** section (the `prowlarr` block of the configuration):
 
 ```json
 "prowlarr": {

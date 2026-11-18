@@ -82,11 +82,10 @@ jobs:
         run: |
           set -eu
           mkdir -p "$GITHUB_WORKSPACE/ci-state"
-          # A real config is required: the entrypoint exits 1 without one. It is
-          # kept writable because LoadConfig persists a generated telemetry_id
-          # on first boot when the file does not carry one yet, and a read-only
-          # mount would turn that into a spurious ERROR in the logs.
-          cp config.json.example "$GITHUB_WORKSPACE/ci-config.json"
+          # The configuration lives in the state DB. A config.json in /state is
+          # imported on the first start and renamed; no /config.json mount is
+          # needed. Both are asserted below.
+          cp config.json.example "$GITHUB_WORKSPACE/ci-state/config.json"
           # /state is bind-mounted on purpose: the entrypoint warns when it is
           # not, and that warning is one of the things asserted below.
           docker run -d --name tiramisu-smoke \
@@ -94,7 +93,6 @@ jobs:
             --cap-add SYS_ADMIN \
             --security-opt apparmor=unconfined \
             -v "$GITHUB_WORKSPACE/ci-state:/state" \
-            -v "$GITHUB_WORKSPACE/ci-config.json:/config.json" \
             -p 9080:9080 -p 8090:8090 \
             tiramisu:smoke
 
@@ -257,6 +255,29 @@ jobs:
             137) echo "::error::killed with SIGKILL: the shutdown did not complete"; exit 1 ;;
             *)   echo "::error::unclean shutdown, exit $code"; exit 1 ;;
           esac
+
+      # The configuration moved from config.json into tiramisu.db: the first start
+      # imports the file and renames it, a second start imports nothing.
+      - name: Check the configuration was imported once
+        run: |
+          set -eu
+          db="$GITHUB_WORKSPACE/ci-state/STATE/tiramisu.db"
+          [ ! -e "$GITHUB_WORKSPACE/ci-state/config.json" ] || { echo "::error::config.json was not renamed"; exit 1; }
+          ls "$GITHUB_WORKSPACE"/ci-state/config.json.imported-* >/dev/null || { echo "::error::no config.json.imported-*"; exit 1; }
+          q() { sudo sqlite3 -cmd '.timeout 5000' "$db" "$1"; }
+          [ "$(q "SELECT COUNT(*) FROM config_versions WHERE source='import';")" = 1 ] || { echo "::error::expected one imported version"; exit 1; }
+          before=$(q "SELECT COUNT(*) FROM config_versions;")
+          docker start tiramisu-smoke >/dev/null
+          for i in $(seq 1 60); do
+            curl -fsS --max-time 2 http://127.0.0.1:9080/metrics >/dev/null 2>&1 && break
+            sleep 1
+          done
+          src=$(curl -fsS --max-time 10 http://127.0.0.1:9080/metrics | jq -r '.config_source')
+          echo "config_source: $src"
+          case "$src" in *tiramisu.db#*) ;; *) echo "::error::config_source is '$src'"; exit 1 ;; esac
+          after=$(q "SELECT COUNT(*) FROM config_versions;")
+          [ "$before" = "$after" ] || { echo "::error::the second start added versions ($before -> $after)"; exit 1; }
+          docker stop -t 30 tiramisu-smoke >/dev/null
 
       - name: Container logs
         if: always()

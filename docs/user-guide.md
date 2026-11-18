@@ -232,8 +232,8 @@ Regenerate after significant code changes. On Pi 4 Cortex-A72, `sha1.blockGeneri
 ## Control Panel
 
 The Control Panel is where you tune the engine, point it at your paths and
-credentials, run a sync by hand and restart the service, all without opening
-`config.json` or an SSH session. It is a web UI **embedded in the Tiramisu
+credentials, run a sync by hand and restart the service, all without editing a
+file or opening an SSH session. It is a web UI **embedded in the Tiramisu
 binary**: no additional server, no React build step, no external dependencies.
 Served at `:9080/control`.
 
@@ -245,9 +245,9 @@ With [HTTPS](api.md#https) on, the same address moves to `https://<your-pi-ip>:9
 
 ### Layout
 
-Seven sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
-**Sources & Media**, **Engine**, **Release Selection**, **Scheduler** and **Access**. Each section says when
-its settings take effect: on restart (Tiramisu settings, written to `config.json`) or live
+Eight sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
+**Sources & Media**, **Engine**, **Release Selection**, **Scheduler**, **Access** and **History**. Each section says when
+its settings take effect: on restart (Tiramisu settings, saved in the state database) or live
 (GoStorm engine settings, pushed through its API). Find any setting with <kbd>⌘K</kbd>.
 
 - **Simple / Advanced**: Simple shows the settings you change most often; Advanced shows everything, with expert cards marked as such.
@@ -260,8 +260,9 @@ its settings take effect: on restart (Tiramisu settings, written to `config.json
 | **Sources & Media** | Prowlarr URL and API key, Torrentio URL; TMDB API key; media server type (Plex or Jellyfin), URL, token, Movies / TV Series / Music library IDs |
 | **Engine** *(live)* | Cache Size, Readahead Cache; Warmup Cache, path and SSD quota; Connections Limit, DL/UP Rate, Disconnect Timeout; Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt; Smart Responsive Mode, Adaptive Shield, Debug Log |
 | **Release Selection** | Preferred and excluded language flags, preferred terms; quality scoring preset and bonuses for Movies and TV Series, with a preview of what wins right now |
-| **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule from `config.json`) |
+| **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule, `scheduler.music_sync`) |
 | **Access** *(live)* | Optional sign-in for `:9080` (one user, password), API tokens for agents and scripts, browser sessions, and HTTPS *(restart)*: a guided card to turn it on, download and trust the CA, and move clients to `https://`. See [Sign-in and API tokens](api.md#sign-in-and-api-tokens) and [HTTPS](api.md#https) |
+| **History** *(restart)* | The last 50 saved versions of the configuration, who saved each one and what it changed (keys and tokens only as changed); filter by restart or secrets, and restore any version through the change bar: the newer ones stay in the list |
 
 Keys and tokens (media server token, TMDB and Prowlarr API keys) are write-only: the
 Control Panel shows whether one is set, never its value. Leave the field empty to keep it.

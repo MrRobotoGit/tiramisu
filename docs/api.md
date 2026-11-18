@@ -206,8 +206,8 @@ host, start it again. It clears the user, the sessions and the tokens and turns
 sign-in off. With Docker, start the container once with `TIRAMISU_RESET_AUTH=1`
 and remove the variable afterwards: while it is set, sign-in cannot be turned on.
 
-The user, sessions and tokens live in `STATE/tiramisu.db`, never in
-`config.json`. If sign-in is on and that database cannot be read, `:9080` answers
+The user, sessions and tokens live in `STATE/tiramisu.db`, apart from the
+configuration and never in its history. If sign-in is on and that database cannot be read, `:9080` answers
 `503` (webhooks excepted) instead of opening up.
 
 ---
@@ -293,6 +293,31 @@ rest of `/api/auth/*` (tokens are refused).
 
 ---
 
+## Configuration history
+
+Every save of the configuration is a version in `STATE/tiramisu.db`; the last 50
+are kept. `GET /api/config/history` lists them newest first, each with its source
+(`ui`, `api`, `internal`, `import`, `cli`, `rollback`, `default`), the user or token
+name that saved it, the keys it changed against the version before, and whether
+those changes need a restart. Keys and tokens show as changed, never their values.
+
+```bash
+curl -s http://192.168.1.2:9080/api/config/history?limit=5 | jq '.[] | {id, source, actor, changes}'
+curl -s -X POST -H 'Content-Type: application/json' -d '{"id": 41}' \
+  http://192.168.1.2:9080/api/config/rollback
+```
+
+`GET /api/config/history/41/restore` answers what a rollback to 41 would change,
+without saving: the Control Panel shows it before you apply. A rollback saves
+version 41 again as the newest: nothing is deleted, so it can be
+rolled back too. It brings back the keys and tokens that version had, keeps the
+install's telemetry id, and answers with the new version, what changed and whether
+`POST /api/restart` is needed. With sign-in on, the history and the rollback answer
+only a signed-in Control Panel session: a token gets `403`, because a rollback can
+turn HTTPS off or change the trusted proxies.
+
+---
+
 ## MCP Server
 
 Tiramisu serves its library tools over MCP at `http://<host>:9080/mcp`, or
@@ -319,7 +344,7 @@ removes entries:
 
 Searches and adds run as jobs: indexer searches can take minutes. The agent
 always asks before adding or removing. It changes the scoring profile only for
-one search and only when you ask, and never writes it to `config.json`.
+one search and only when you ask, and never saves it in the configuration.
 
 ```
 add the latest Dummy Bunny movie in 4K
@@ -347,8 +372,9 @@ without opening the web UI.
 
 The GoStorm API listens on `127.0.0.1` only: run these commands on the Tiramisu
 host (or inside the container). Only the engine itself calls it. To reach it from
-the network, as before v1.11.15, set `"gostorm_listen_ip": "all"` in
-`config.json`; it has no authentication, so do that only on a trusted network.
+the network, as before v1.11.15, set `"gostorm_listen_ip": "all"` in the
+configuration (see [config.json: import only](configuration.md#configjson-import-only),
+or `POST /api/config`); it has no authentication, so do that only on a trusted network.
 
 ```bash
 # List all torrents (count)

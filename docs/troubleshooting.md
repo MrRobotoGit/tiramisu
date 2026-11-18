@@ -161,7 +161,8 @@ stays closed instead of opening up. Restore the database, or reset as above.
 With sign-in on, every call to `:9080` needs an API token
 (`-H "Authorization: Bearer tmr_..."`), created in **Control Panel → Access**.
 The GoStorm API on `:8090` listens on `127.0.0.1` only since v1.11.15: run its
-commands on the host, or set `"gostorm_listen_ip": "all"` in `config.json`.
+commands on the host, or set `"gostorm_listen_ip": "all"` in the configuration
+([how](configuration.md#configjson-import-only)).
 
 </details>
 
@@ -202,8 +203,9 @@ Paths below use the defaults set by `install.sh`. All are configurable during in
 | Path | Purpose |
 |------|---------|
 | `~/Tiramisu/tiramisu` | Production binary |
-| `~/Tiramisu/config.json` | Live configuration (edit → `sudo systemctl restart tiramisu`) |
-| `~/Tiramisu/STATE/tiramisu.db` | SQLite state database: inode map, sync caches, episode registry, scheduler state |
+| `~/Tiramisu/STATE/tiramisu.db` | SQLite state database: the configuration and its history, inode map, sync caches, episode registry, scheduler state, sign-in |
+| `~/Tiramisu/STATE/config.last.json` | Copy of the configuration, rewritten at every save: the way back if the database cannot be opened |
+| `~/Tiramisu/config.json.imported-*` | A `config.json` already imported, kept as it was |
 | `~/Tiramisu/logs/` | All service logs (`tiramisu.log`, `movies-sync.log`, `tv-sync.log`, `watchlist-sync.log`) |
 | `/mnt/tiramisu-mkv-virtual/` | FUSE mount point (served to Plex/Jellyfin -> Samba) |
 | `/etc/systemd/system/tiramisu.service` | systemd service definition |

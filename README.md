@@ -163,7 +163,7 @@ chmod +x install.sh
 The interactive installer handles everything end-to-end:
 1. Installs system dependencies (`fuse3`, `libfuse3-dev`, `gcc`, `samba`, `git`)
 2. Prompts for all required paths, Plex credentials, TMDB key, and NAT-PMP settings
-3. Generates `config.json` from `config.json.example`
+3. Generates `config.json` from `config.json.example` (fresh installs only: Tiramisu imports it into `STATE/tiramisu.db` on the first start)
 4. Creates `Tiramisu/STATE/`, `logs/`, and FUSE mount point directories
 5. **Compiles the Tiramisu binary** (downloads Go if needed, detects architecture automatically)
 6. Writes and enables the systemd service for `tiramisu`
@@ -205,7 +205,6 @@ docker run -d \
   --device /dev/fuse \
   --cap-add SYS_ADMIN \
   --cap-add NET_ADMIN \
-  -v /path/to/config.json:/config.json \
   -v /path/to/state:/state \
   -v /mnt/tiramisu-mkv-real:/mnt/tiramisu-mkv-real \
   -v /mnt/tiramisu-mkv-virtual:/mnt/tiramisu-mkv-virtual:rshared \
@@ -258,7 +257,7 @@ Sign-in is meant for your home network, with Tiramisu's own HTTPS or a reverse p
 | [Installation](docs/installation.md) | Docker in detail, Plex/Jellyfin and Samba setup, building from source |
 | [User Guide](docs/user-guide.md) | First-run steps, webhooks, the Control Panel and the Dashboard |
 | [Sync Engine](docs/sync-engine.md) | Movies, TV, Watchlist and Music sync, the dead-release reaper, Prowlarr |
-| [Configuration](docs/configuration.md) | Every `config.json` field, quality scoring, languages, environment variables |
+| [Configuration](docs/configuration.md) | Where the configuration lives, every field, history and import, quality scoring, languages, environment variables |
 | [API and MCP Server](docs/api.md) | Sign-in and API tokens, HTTPS, Library API, MCP server for AI agents, HTTP endpoint reference |
 | [Architecture](docs/architecture.md) | How the FUSE layer, caches and engine work; performance figures |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes, file locations |

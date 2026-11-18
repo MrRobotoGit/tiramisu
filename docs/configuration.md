@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Every `config.json` field, quality scoring, languages and environment variables.
+Where the configuration lives, every field, quality scoring, languages and environment variables.
 
 [← Back to the README](../README.md) · [Documentation index](README.md)
 
@@ -8,16 +8,54 @@ Every `config.json` field, quality scoring, languages and environment variables.
 
 ## Overview
 
-`config.json` is resolved relative to the binary's path (`os.Executable()`), so
-no path argument is needed, and it is not tracked by git because it holds
-credentials. In practice you rarely edit it by hand: the Control Panel writes
-the same file, with FUSE and path settings applied at the next restart and
-engine settings applied live.
+The configuration lives in the state database, `STATE/tiramisu.db`, next to the
+inode map and the sync caches: one volume holds everything, in Docker too. Every
+save is a new version; the last 50 are kept, with who made each change, and any
+of them can be restored (Control Panel → **History**, or the
+[history API](api.md#configuration-history)). Keys and tokens are stored there as
+well; the database is created owner-only (`0600`).
+
+You rarely edit a file. The Control Panel saves the configuration, with FUSE and
+path settings applied at the next restart and engine settings applied live; the
+fields below are the keys of that document, as `GET /api/config` returns it and
+`POST /api/config` takes it.
+
+### config.json: import only
+
+A `config.json` is read only to import a configuration:
+
+- **First start.** On an install that has never started this version, the
+  `config.json` next to the binary (or at `MKV_PROXY_CONFIG_PATH`, or at
+  `<path>/config.json`) is imported and renamed `config.json.imported-<date>`.
+  Upgrading needs nothing else. A `config.json` that is not valid JSON stops the
+  first start with the reason; a field of the wrong type keeps its default and is
+  named in the log. Nothing is lost: the renamed file stays where it was.
+- **Drop-in.** Later, a `config.json` put back in one of those places is imported
+  on the next start, as a new version, and renamed again. A file that cannot be
+  renamed (a Docker single-file mount) is imported once and then ignored until it
+  changes.
+- **Without one**, a fresh install starts from the defaults
+  (`config.json.example` shows them).
+
+To change a key the Control Panel does not show, export, edit and import it with
+the service stopped, or send it to `POST /api/config`:
 
 ```bash
-cp config.json.example ~/Tiramisu/config.json
-nano ~/Tiramisu/config.json
+sudo systemctl stop tiramisu
+./tiramisu --export-config config.json   # the saved configuration, 0600
+nano config.json
+./tiramisu --import-config config.json   # a new version, used from the next start
+sudo systemctl start tiramisu
 ```
+
+Run both as the service user. `--import-config` refuses a file that is not valid
+JSON or has a field of the wrong type. Each save also writes a copy,
+`STATE/config.last.json`: if the database cannot be opened, Tiramisu refuses to
+start (rather than run on default paths and ports) and says how to recover from
+that copy.
+
+`enable_state_db` is gone: the state database is always on. `state_db_path` is
+read only at import; a database moved elsewhere is set with `TIRAMISU_STATE_DB`.
 
 ### Full Field Reference
 
@@ -50,7 +88,7 @@ nano ~/Tiramisu/config.json
 | `plex.library_id` | `0` | Plex movies library section ID (0 = skip the refresh) |
 | `plex.tv_library_id` | `0` | Plex TV series library section ID (0 = skip the refresh) |
 | `plex.music_library_id` | `0` | Plex music library section Tiramisu files into: rescanned after an audio add or removal, and the only library the music sync follows new albums from (0 = both off). Jellyfin setups leave it at 0 |
-| `scheduler.music_sync` | Sunday 15:00 | Weekly music sync slot (`config.json` only: the Control Panel Scheduler has no music row; the Dashboard can still run it) |
+| `scheduler.music_sync` | Sunday 15:00 | Weekly music sync slot (not in the Control Panel Scheduler, which has no music row: change it as in [config.json: import only](#configjson-import-only); the Dashboard can still run it) |
 | `music_discovery.new_releases.enabled` | `true` | Follow the new albums of the artists in Tiramisu's music library |
 | `music_discovery.new_releases.window_days` | `30` | How recent an album's first edition must be to count as new |
 | `music_discovery.new_artists.enabled` | `true` | Import recent albums of new artists whose nearest artists you own |
@@ -79,8 +117,9 @@ Every candidate release, film or episode, is scored before it is chosen:
 resolution, HDR and Dolby Vision, the audio track, remux, your preferred
 language, the seeder count and the size gates all add up to a single number, and
 the highest one wins. Those weights used to be fixed in the code; they now live
-in an optional `quality_scoring` block in `config.json`, editable live from the
-**Release Selection** card in the Control Panel.
+in an optional `quality_scoring` block of the configuration, editable from the
+**Release Selection** card in the Control Panel (the sync engines read it at the
+next restart).
 
 Omitting the block keeps the shipped defaults, so an existing install changes
 nothing until you add it deliberately. `movies` and `tv` are independent: you
@@ -161,7 +200,14 @@ block is optional, and omitting it keeps these defaults.
 ### Runtime Environment Variables
 
 `TIRAMISU_RESET_AUTH=1` clears sign-in at start-up (Docker equivalent of
-`tiramisu --reset-auth`); remove it afterwards. See
+`tiramisu --reset-auth`); remove it afterwards.
+
+`TIRAMISU_STATE_DB` points at a state database outside `STATE/` (where
+`state_db_path` used to). `MKV_PROXY_CONFIG_PATH` only says where a `config.json`
+to import may be. Environment overrides (`MKV_PROXY_CONCURRENCY`,
+`MKV_PROXY_GOSTORM_URL`, `MKV_PROXY_LOG_LEVEL`, `TIRAMISU_PLEX_URL`,
+`TIRAMISU_PLEX_TOKEN`, …) apply on top of the saved configuration and are never
+saved into it. See
 [Sign-in and API tokens](api.md#sign-in-and-api-tokens).
 
 ```ini
