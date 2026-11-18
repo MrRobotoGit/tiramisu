@@ -68,6 +68,8 @@ type Service struct {
 	smbOff     time.Time // smbstatus failed (no sudo rule, no Samba): retry after this
 	smbCache   []Client
 	smbAt      time.Time
+	smbPIDs    map[string]string // smbd pid → client address, from the last smbstatus -p
+	smbServer  map[string]bool   // the media server host's addresses
 	dns        map[string]dnsEntry
 }
 
@@ -356,6 +358,10 @@ func (s *Service) querySmb(cfg Config, serverAddrs map[string]bool) ([]Client, e
 	for _, sess := range procs.Sessions {
 		ipByPID[sess.ServerID.PID] = sess.RemoteMachine
 	}
+	// Kept for the library scan: it names an smbd reader after the host it serves.
+	s.mu.Lock()
+	s.smbPIDs, s.smbServer = ipByPID, serverAddrs
+	s.mu.Unlock()
 	var out []Client
 	for _, f := range locks.OpenFiles {
 		hash := cfg.Resolve(path.Base(f.Filename))

@@ -1263,6 +1263,7 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	}
 
 	hashStr, urlFileIdx := vfs.ExtractHashAndIndex(n.vMeta.URL)
+	clients.NoteFUSEOpen(ctx, hashStr, n.vMeta.Path)
 
 	// hasFullWarmup: Open returns instantly only if both head and tail warmup files are ready.
 	// headReady: Allows async Wake and direct ID injection for instant start.
@@ -5797,6 +5798,7 @@ func main() {
 		}
 	})
 	http.HandleFunc("/api/clients", clientSvc.Handler)
+	http.HandleFunc("/api/scan", clientSvc.ScanHandler)
 	monCollector.SetAuthToken(authSvc.InternalToken())
 	safeGo(func() {
 		monCollector.Run(backgroundStopChan)

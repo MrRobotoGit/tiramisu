@@ -10,7 +10,7 @@
   const DRAIN_MS = 10000;         // how long the tint takes to leave after a restore
   const MAX_PEERS = 48, MAX_PENDING = 8;
 
-  let host = null, data = null, transport = null, clients = null, engine = null, lastSig = '';
+  let host = null, data = null, transport = null, clients = null, engine = null, scan = null, lastSig = '';
   let ui = null, focusKey = null, recent = [], curKey = null;
   let wasStrict = false, strictEndedAt = 0;
   // Per torrent: last peer count, plus when each index appeared or vanished, so a redraw
@@ -168,7 +168,9 @@
     return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (data.health || {}).v304_banned_peers,
       (data.health || {}).cache_hit_rate_pct, Math.round((data.health || {}).fuse_active_pct || 0),
       Math.round((data.health || {}).fuse_stale_pct || 0), transport && transport.utp, clients && JSON.stringify([...clients].map(([k, c]) => [k, c.label, c.state, c.state === 'paused' ? c.pos : 0])), reducedMotion(),
-      focusKey, recent.length && recent[0].started_at].join('#');
+      focusKey, recent.length && recent[0].started_at,
+      scan && scan.active ? [scan.label, scan.files_per_min, scan.files_read,
+        Object.entries(scan.torrents || {}).map(([h, a]) => h.slice(0, 8) + Math.floor(a / 10)).sort().join(',')].join(':') : ''].join('#');
   }
 
   // On phones the vertical graph is sized so the whole panel (graph, shield strip, legend) fits the
@@ -466,6 +468,8 @@
       byDevice.set(name, cur);
     });
     const devs = [...byDevice.values()];
+    // A library scan is a client of its own: the media server reading many files, nobody watching.
+    if (scan && scan.active) devs.push({ name: scan.label, scan: true, speed: 0, known: true, hashes: [], paused: false, pos: 0 });
     const cliPipes = [];
     devs.forEach((dv, i) => {
       curKey = 'dev:' + dv.name;
@@ -473,6 +477,30 @@
       const span = vertical ? [0.08, 0.84] : [0.15, 0.48];
       const cp = P(F.client, devs.length === 1 ? 0.45 : span[0] + i * (span[1] / Math.max(1, devs.length - 1)));
       const d = curve(fuseP, cp);
+      if (dv.scan) {
+        // Short scattered reads, not a stream: a dotted line, no flow.
+        el('path', { d, class: 'sw-scan-edge' }, edgeLayer);
+        const hit = el('g', { class: 'sw-hitbox' }, nodeLayer);
+        el('circle', { cx: cp[0], cy: cp[1], r: 6, class: 'sw-client scan' }, hit);
+        const open = torrents.filter(t => scan.torrents && scan.torrents[t.hash] !== undefined && !(clients && clients.get(t.hash))).length;
+        const rate = `${scan.files_per_min} file${scan.files_per_min === 1 ? '' : 's'}/min`;
+        if (vertical) {
+          const an = devs.length > 1 && i === devs.length - 1 ? 'end' : 'middle';
+          txt(hit, cp[0], cp[1] + 20, dv.name, 'sw-name', an);
+          txt(hit, cp[0], cp[1] + 32, rate, 'sw-sub', an);
+        } else {
+          txt(hit, cp[0] + 6, cp[1] + 22, dv.name, 'sw-name', 'end');
+          txt(hit, cp[0] + 6, cp[1] + 34, `${rate} · ${open} open`, 'sw-sub', 'end');
+        }
+        const mins = Math.max(1, Math.round((scan.since_s || 0) / 60));
+        hoverable(hit, () => details({ title: dv.name, sub: (scan.reader ? scan.reader + ' · ' : '') + 'no playback' }, [
+          ['Files read', `${scan.files_read} in ${mins} min`],
+          ['Rate', rate],
+          ['Open now', `${open} torrent${open === 1 ? '' : 's'}`],
+        ], { rect: hit.getBoundingClientRect(), node: hit }));
+        curKey = null;
+        return;
+      }
       el('path', { d, class: dv.paused ? 'sw-pipe paused' : 'sw-pipe', 'stroke-width': dv.paused ? 2 : width(dv.speed) }, edgeLayer);
       if (!dv.paused) cliPipes.push({ d, w: width(dv.speed), speed: dv.speed, key: curKey });
       const hit = el('g', { class: 'sw-hitbox' }, nodeLayer);
@@ -586,12 +614,17 @@
       const upPeers = (t.peer_rates || []).filter(x => (x.up_kbps || 0) >= 0.5).length;
       const upLine = (t.up_mbs || 0) * 8 >= 0.05 ? `↑ ${mbps(t.up_mbs)} · ${upPeers} peer${upPeers === 1 ? '' : 's'}` : '';
       // Third line, only when something is left out: the graph never passes a sample for the whole.
-      const trunc = [hiddenPeers ? `${p.shown} of ${t.peers} peers drawn` : '', hiddenPend ? `${p.pendShown} of ${t.half_open} connecting` : '']
+      // Woken by a library scan, not by a player: a dashed ring and a "scan" note.
+      const scanAgo = scan && scan.active && !(clients && clients.get(t.hash)) && scan.torrents ? scan.torrents[t.hash] : undefined;
+      if (scanAgo !== undefined) el('circle', { cx: p.tp[0], cy: p.tp[1], r: rad + 6, class: 'sw-scan-ring' }, nodeLayer);
+      const trunc = [scanAgo !== undefined ? `scan · ${scanAgo < 5 ? 'now' : scanAgo + ' s ago'}` : '',
+        hiddenPeers ? `${p.shown} of ${t.peers} peers drawn` : '', hiddenPend ? `${p.pendShown} of ${t.half_open} connecting` : '']
         .filter(Boolean).join(' · ');
       if (vertical) {
         txt(nodeLayer, p.tp[0], p.tp[1] + rad + 14, name, 'sw-name', 'middle');
         txt(nodeLayer, p.tp[0], p.tp[1] + rad + 26, (p.live ? '↓ ' + mbps(t.speed_mbs) : 'idle') + (hiddenPeers ? ` · ${p.shown}/${t.peers}` : ''), 'sw-sub', 'middle');
         if (upLine) txt(nodeLayer, p.tp[0], p.tp[1] + rad + 38, '↑ ' + mbps(t.up_mbs), 'sw-sub up', 'middle');
+        else if (scanAgo !== undefined) txt(nodeLayer, p.tp[0], p.tp[1] + rad + 38, 'scan', 'sw-sub dim', 'middle');
       } else {
         const below = i > 0 && i === pipes.length - 1;
         const y = below ? p.tp[1] + rad + 14 : p.tp[1] - rad - 18;
@@ -724,6 +757,10 @@
             return [c.hash, { label: `${c.device} · ${c.source === 'smb' ? 'SMB' : app}`, state: c.state || '', pos: c.position_s || 0 }];
           }));
       }
+    } catch (_) { }
+    try {
+      const rs = await fetch('/api/scan');
+      scan = rs.ok ? await rs.json() : null;   // a failed answer must not keep an old scan on screen
     } catch (_) { }
     try {
       const rr = await fetch('/api/recent-streams');
