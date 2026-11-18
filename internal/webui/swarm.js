@@ -162,8 +162,8 @@
 
   function signature() {
     const t = (data.torrents || []).filter(x => x.status !== 'idle')
-      .map(x => [x.hash.slice(0, 8), x.speed_mbs.toFixed(1), x.peers, x.seeders, x.half_open, x.is_priority,
-        (x.peer_rates || []).map(p => p.id + Math.round(Math.log2(1 + p.kbps))).sort().join(',')].join(':')).join('|');
+      .map(x => [x.hash.slice(0, 8), x.speed_mbs.toFixed(1), (x.up_mbs || 0).toFixed(2), x.peers, x.seeders, x.half_open, x.is_priority,
+        (x.peer_rates || []).map(p => p.id + Math.round(Math.log2(1 + p.kbps)) + '/' + Math.round(Math.log2(1 + (p.up_kbps || 0)))).sort().join(',')].join(':')).join('|');
     const sh = shieldState(data.shield, Date.now());
     return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (data.health || {}).v304_banned_peers,
       (data.health || {}).cache_hit_rate_pct, Math.round((data.health || {}).fuse_active_pct || 0),
@@ -273,7 +273,7 @@
       // Peers. With per-peer rates from the engine each node is a real peer (stable id, real
       // seeder flag, its own rate); without them (older engine) nodes are numbered slots.
       const rates = Array.isArray(t.peer_rates) ? t.peer_rates.slice(0, MAX_PEERS) : null;
-      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps, utp: !!p.utp, cc: p.cc || '', asn: p.asn || 0, org: p.org || '' }))
+      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps, utp: !!p.utp, up: p.up_kbps || 0, cc: p.cc || '', asn: p.asn || 0, org: p.org || '' }))
         : Array.from({ length: n }, (_, k) => ({ key: String(k), seed: k < seeds, kbps: null, utp: null }));
       // Track arrivals and departures between polls, by key.
       let L = life.get(t.hash);
@@ -307,6 +307,23 @@
           fl.style.animationDuration = `${dur.toFixed(2)}s, ${BORN_MS / 1000}s`;
           fl.style.animationDelay = `${-((now / 1000 + rng(t.hash + ':f' + p.key)() * dur) % dur).toFixed(2)}s`;
         }
+        // Upload: blue segments running back along the same line, from the torrent to the peer.
+        if (p.up >= 0.5) {
+          const ue = el('path', { d: curve(pp, tp), class: 'sw-up-edge' }, edgeLayer);
+          const uf = el('path', { d: curve(pp, tp), class: 'sw-up-flow', pathLength: 100 }, edgeLayer);
+          const ud = flowDur(p.up);
+          const run = `${-((now / 1000 + rng(t.hash + ':up' + p.key)() * ud) % ud).toFixed(2)}s`;
+          uf.style.animationDuration = `${ud.toFixed(2)}s`;
+          uf.style.animationDelay = run;
+          // A newborn peer's upload fades in with it, like its download line.
+          const b = L.born[p.key];
+          if (b !== undefined && now - b < BORN_MS) {
+            ue.classList.add('sw-born'); ue.style.animationDelay = delay(now - b, BORN_MS);
+            uf.classList.add('sw-born');
+            uf.style.animationDuration = `${ud.toFixed(2)}s, ${BORN_MS / 1000}s`;
+            uf.style.animationDelay = `${run}, ${delay(now - b, BORN_MS)}`;
+          }
+        }
         // A 6px node is too small to hover and is redrawn every few seconds, which resets a native
         // tooltip: a larger invisible target opens the details card, re-anchored across redraws.
         if (p.kbps != null) {
@@ -316,6 +333,7 @@
             sub: p.org ? p.org + (p.asn ? ` · AS${p.asn}` : '') : '',
           }, [
             ['Download', mbps(p.kbps / 1024)],
+            ['Upload', p.up > 0 ? mbps(p.up / 1024) : '—'],
             ['Role', p.seed ? 'seeder' : 'leecher'],
             ['Transport', p.utp ? 'uTP' : 'TCP'],
           ], { rect: hit.getBoundingClientRect(), node: hit }));
@@ -563,20 +581,28 @@
       el('circle', { cx: p.tp[0], cy: p.tp[1], r: rad, class: p.live ? 'sw-torrent' : 'sw-torrent idle' }, nodeLayer).style.pointerEvents = 'none';
       const name = short(t.clean_title || t.title || t.hash.slice(0, 8), vertical ? (torrents.length > 3 ? 9 : 12) : 24);
       const hiddenPeers = Math.max(0, (t.peers || 0) - p.shown), hiddenPend = Math.max(0, (t.half_open || 0) - p.pendShown);
-      const sub = (p.live ? `${mbps(t.speed_mbs)} · ${t.peers} peers` : `idle · ${t.peers} peers`);
+      const sub = (p.live ? `↓ ${mbps(t.speed_mbs)} · ${t.peers} peers` : `idle · ${t.peers} peers`);
+      // Upload line, only while this torrent sends: rate and how many peers receive it.
+      const upPeers = (t.peer_rates || []).filter(x => (x.up_kbps || 0) >= 0.5).length;
+      const upLine = (t.up_mbs || 0) * 8 >= 0.05 ? `↑ ${mbps(t.up_mbs)} · ${upPeers} peer${upPeers === 1 ? '' : 's'}` : '';
       // Third line, only when something is left out: the graph never passes a sample for the whole.
       const trunc = [hiddenPeers ? `${p.shown} of ${t.peers} peers drawn` : '', hiddenPend ? `${p.pendShown} of ${t.half_open} connecting` : '']
         .filter(Boolean).join(' · ');
       if (vertical) {
         txt(nodeLayer, p.tp[0], p.tp[1] + rad + 14, name, 'sw-name', 'middle');
-        txt(nodeLayer, p.tp[0], p.tp[1] + rad + 26, (p.live ? mbps(t.speed_mbs) : 'idle') + (hiddenPeers ? ` · ${p.shown}/${t.peers}` : ''), 'sw-sub', 'middle');
+        txt(nodeLayer, p.tp[0], p.tp[1] + rad + 26, (p.live ? '↓ ' + mbps(t.speed_mbs) : 'idle') + (hiddenPeers ? ` · ${p.shown}/${t.peers}` : ''), 'sw-sub', 'middle');
+        if (upLine) txt(nodeLayer, p.tp[0], p.tp[1] + rad + 38, '↑ ' + mbps(t.up_mbs), 'sw-sub up', 'middle');
       } else {
         const below = i > 0 && i === pipes.length - 1;
         const y = below ? p.tp[1] + rad + 14 : p.tp[1] - rad - 18;
-        const yy = below || !trunc ? y : y - 12;
+        const extra = (trunc ? 1 : 0) + (upLine ? 1 : 0);
+        const yy = below ? y : y - 12 * extra;
         txt(nodeLayer, p.tp[0] + rad + 8, yy, name, 'sw-name');
         txt(nodeLayer, p.tp[0] + rad + 8, yy + 12, sub, 'sw-sub');
-        if (trunc) txt(nodeLayer, p.tp[0] + rad + 8, yy + 24, trunc, 'sw-sub dim');
+        if (upLine) txt(nodeLayer, p.tp[0] + rad + 8, yy + 24, upLine, 'sw-sub up');
+        // The lowest label has room for three lines only: the truncation note then goes on the upload line.
+        if (trunc && upLine && below) nodeLayer.lastChild.textContent = upLine + ' · ' + trunc;
+        else if (trunc) txt(nodeLayer, p.tp[0] + rad + 8, yy + (upLine ? 36 : 24), trunc, 'sw-sub dim');
       }
       curKey = null;
     });

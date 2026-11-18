@@ -198,21 +198,21 @@ var Groups = []Group{
 			Method: "GET", Path: "/api/health", Summary: "Engine, FUSE, VPN, media servers and system load",
 			Desc: "A snapshot refreshed every 5 s, always 200: a down service shows ok false. Right after start every field is " +
 				"empty until the first refresh. media_servers is null when none is configured; cache_hit_rate_pct is null " +
-				"unless something is streaming. download_mbps is megabits per second.",
+				"unless something is streaming. download_mbps and upload_mbps are megabits per second.",
 			Example: "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/health",
 			Response: "{\n  \"timestamp\": \"2026-11-17T20:01:05.12+01:00\",\n  \"uptime\": \"3h12m5s\",\n  \"cpu_pct\": 14.2,\n  \"ram_pct\": 48.1,\n" +
 				"  \"gostorm\": {\"ok\": true, \"latency_ms\": 2},\n  \"fuse\": {\"ok\": true, \"latency_ms\": 0},\n  \"vpn\": {\"ok\": true, \"latency_ms\": 0},\n" +
 				"  \"natpmp\": {\"ok\": true, \"latency_ms\": 0},\n  \"media_servers\": [{\"product\": \"Plex\", \"ok\": true, \"latency_ms\": 12}],\n" +
-				"  \"total_torrents\": 3,\n  \"active_count\": 1,\n  \"download_mbps\": 38.4,\n  \"cache_hit_rate_pct\": null,\n  …\n}",
+				"  \"total_torrents\": 3,\n  \"active_count\": 1,\n  \"download_mbps\": 38.4,\n  \"upload_mbps\": 1.2,\n  \"cache_hit_rate_pct\": null,\n  …\n}",
 			OK: 200,
 		},
 		{
 			Method: "GET", Path: "/api/torrents", Summary: "Torrents in memory with speed and peers",
 			Desc: "Refreshed every 5 s. status is idle, downloading (above 0.01 MiB/s) or streaming (active but not " +
-				"downloading); speed_mbs is MiB/s. title is the engine's name; clean_title is filled only while a media " +
+				"downloading); speed_mbs and up_mbs are MiB/s; each entry of peer_rates carries kbps (download) and up_kbps (upload) in KiB/s. title is the engine's name; clean_title is filled only while a media " +
 				"server plays it. An unreachable engine answers [].",
 			Example: "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/torrents",
-			Response: "[\n  {\n    \"hash\": \"e7f8…\",\n    \"title\": \"Dummy.Bunny.2024.2160p.DV.mkv\",\n    \"clean_title\": \"\",\n    \"speed_mbs\": 4.8,\n    \"peers\": 31,\n    \"seeders\": 22,\n" +
+			Response: "[\n  {\n    \"hash\": \"e7f8…\",\n    \"title\": \"Dummy.Bunny.2024.2160p.DV.mkv\",\n    \"clean_title\": \"\",\n    \"speed_mbs\": 4.8,\n    \"up_mbs\": 0.15,\n    \"peers\": 31,\n    \"seeders\": 22,\n" +
 				"    \"size\": 61203886080,\n    \"bytes_read\": 1073741824,\n    \"is_priority\": true,\n    \"status\": \"downloading\",\n    \"is_4k\": true,\n    \"is_dv\": true\n  }\n]",
 			OK: 200,
 		},

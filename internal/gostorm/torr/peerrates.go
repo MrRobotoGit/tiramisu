@@ -22,6 +22,7 @@ type peerRates struct {
 	mu   sync.Mutex
 	at   time.Time
 	prev map[string]int64
+	sent map[string]int64 // bytes uploaded per peer at the last sample
 	last []state.PeerRate
 }
 
@@ -43,29 +44,35 @@ func (p *peerRates) sample(snaps []torrent.PeerSnapshot, now time.Time) []state.
 	}
 	dt := now.Sub(p.at).Seconds()
 	next := make(map[string]int64, len(snaps))
+	nextSent := make(map[string]int64, len(snaps))
 	out := make([]state.PeerRate, 0, len(snaps))
 	for _, s := range snaps {
 		next[s.Addr] = s.UsefulBytes
-		kbps := 0.0
+		nextSent[s.Addr] = s.SentBytes
+		kbps, up := 0.0, 0.0
 		if prev, ok := p.prev[s.Addr]; ok && dt > 0 && s.UsefulBytes >= prev {
 			kbps = float64(s.UsefulBytes-prev) / 1024 / dt
 		}
-		pr := state.PeerRate{ID: peerID(s.Addr), KBps: float64(int64(kbps*10)) / 10, Seed: s.Seed, UTP: s.UTP}
+		if prev, ok := p.sent[s.Addr]; ok && dt > 0 && s.SentBytes >= prev {
+			up = float64(s.SentBytes-prev) / 1024 / dt
+		}
+		pr := state.PeerRate{ID: peerID(s.Addr), KBps: float64(int64(kbps*10)) / 10, UpKBps: float64(int64(up*10)) / 10, Seed: s.Seed, UTP: s.UTP}
 		if PeerInfo != nil {
 			pr.CC, pr.ASN, pr.Org = PeerInfo(s.Addr)
 		}
 		out = append(out, pr)
 	}
+	// Busiest first, both ways: a peer we only upload to must not fall off the capped list.
 	// Ties broken by id: conns come from a map, and a random order would read as churn.
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].KBps != out[j].KBps {
-			return out[i].KBps > out[j].KBps
+		if a, b := out[i].KBps+out[i].UpKBps, out[j].KBps+out[j].UpKBps; a != b {
+			return a > b
 		}
 		return out[i].ID < out[j].ID
 	})
 	if len(out) > peerRateMax {
 		out = out[:peerRateMax]
 	}
-	p.prev, p.at, p.last = next, now, out
+	p.prev, p.sent, p.at, p.last = next, nextSent, now, out
 	return append([]state.PeerRate(nil), out...)
 }

@@ -80,11 +80,12 @@ type TorrentFileStat struct {
 
 // PeerRate is one connected peer: an anonymous stable id, its rate and whether it is a seeder.
 type PeerRate struct {
-	ID   string  `json:"id"`
-	KBps float64 `json:"kbps"`
-	Seed bool    `json:"seed"`
-	UTP  bool    `json:"utp,omitempty"`
-	CC   string  `json:"cc,omitempty"` // peer country (ISO code) when peer_geoip_enabled
-	ASN  uint    `json:"asn,omitempty"`
-	Org  string  `json:"org,omitempty"` // network owner, e.g. "Hetzner Online GmbH"
+	ID     string  `json:"id"`
+	KBps   float64 `json:"kbps"`
+	UpKBps float64 `json:"up_kbps,omitempty"` // what we upload to this peer
+	Seed   bool    `json:"seed"`
+	UTP    bool    `json:"utp,omitempty"`
+	CC     string  `json:"cc,omitempty"` // peer country (ISO code) when peer_geoip_enabled
+	ASN    uint    `json:"asn,omitempty"`
+	Org    string  `json:"org,omitempty"` // network owner, e.g. "Hetzner Online GmbH"
 }

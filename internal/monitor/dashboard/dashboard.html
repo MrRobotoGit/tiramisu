@@ -693,7 +693,8 @@ document.addEventListener('keydown', e => {
 let lastHealth = null;
 function updateSpeedMeta() {
   const net = !$('view-network').hidden, h = lastHealth;
-  $('speed-meta').textContent = net && h ? `${h.download_mbps.toFixed(1)} Mbps · ${h.total_peers} peers · ${h.total_seeders} seeders` : 'last 5 min';
+  const up = h && h.upload_mbps > 0.05 ? ` · ↑ ${h.upload_mbps.toFixed(1)} Mbps` : '';
+  $('speed-meta').textContent = net && h ? `↓ ${h.download_mbps.toFixed(1)}${up ? '' : ' Mbps'}${up} · ${h.total_peers} peers · ${h.total_seeders} seeders` : 'last 5 min';
 }
 
 function setMeter(id, pct) { $(id).style.width = Math.max(0, Math.min(100, pct || 0)) + '%'; }

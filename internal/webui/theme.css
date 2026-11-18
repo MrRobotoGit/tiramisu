@@ -535,6 +535,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-name { font-size: 11px; font-weight: 500; fill: var(--ink); }
 .sw-sub { font: 400 10px var(--mono); fill: var(--ink2); }
 .sw-sub.accent { fill: var(--accent); }
+.sw-sub.up { fill: var(--sig-blue); }
 .sw-empty { font-size: 12px; fill: var(--ink3); }
 /* Labels sit on pipes and peers: an opaque halo in the panel colour keeps them readable. */
 .sw-name, .sw-sub, .sw-head { paint-order: stroke fill; stroke: var(--panel); stroke-width: 5px; stroke-linejoin: round; }
@@ -621,6 +622,11 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 /* Peer → torrent data: short dark oblong segments. */
 .sw-peer-flow { fill: none; stroke: var(--ink); stroke-width: 1.8; stroke-linecap: round; stroke-dasharray: 2.2 30; opacity: .75; animation: sw-peer-move 2.6s linear infinite; }
 @keyframes sw-peer-move { from { stroke-dashoffset: 32.2; } to { stroke-dashoffset: 0; } }
+/* Torrent → peer: what we upload, in blue, moving the other way on the same line. */
+.sw-up-edge { fill: none; stroke: var(--sig-blue); stroke-width: .8; opacity: .35; }
+.sw-up-flow { fill: none; stroke: var(--sig-blue); stroke-width: 2.2; stroke-linecap: round; stroke-dasharray: 3 30; animation: sw-up-move 2.6s linear infinite; }
+@keyframes sw-up-move { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 33; } }
+.sw-up-flow.sw-born { animation: sw-up-move 2.6s linear infinite, sw-born .9s ease-out both; }
 /* Arrival: fade in. Departure: two expanding pulses, then the node and its line fade out. */
 .sw-born { animation: sw-born .9s ease-out both; }
 .sw-peer-flow.sw-born { animation: sw-peer-move 2.6s linear infinite, sw-born .9s ease-out both; }
@@ -634,8 +640,8 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 @keyframes sw-wave { from { stroke-dashoffset: 34; } to { stroke-dashoffset: -100; } }
 @keyframes sw-drain { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
 @media (prefers-reduced-motion: reduce) {
-  .sw-pulse, .sw-peer-flow { animation: none; opacity: 0; }
-  .sw-born, .sw-dying, .sw-death-ring, .sw-birth-ring, .sw-torrent-pulse, .sw-peer-flow.sw-born { animation: none; }
+  .sw-pulse, .sw-peer-flow, .sw-up-flow { animation: none; opacity: 0; }
+  .sw-born, .sw-dying, .sw-death-ring, .sw-birth-ring, .sw-torrent-pulse, .sw-peer-flow.sw-born, .sw-up-flow.sw-born { animation: none; }
   .sw-torrent-pulse, .sw-birth-ring { opacity: 0; }
   .sw-dying { opacity: 0; }
   .sw-front, .sw-drain { animation: none; stroke-dasharray: none; }

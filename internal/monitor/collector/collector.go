@@ -66,6 +66,7 @@ type HealthStatus struct {
 	TotalPeers    int     `json:"total_peers"`
 	TotalSeeders  int     `json:"total_seeders"`
 	DownloadMbps  float64 `json:"download_mbps"`
+	UploadMbps    float64 `json:"upload_mbps"`
 
 	FUSEActivePct float64 `json:"fuse_active_pct"`
 	FUSEStalePct  float64 `json:"fuse_stale_pct"`
@@ -118,6 +119,7 @@ type TorrentInfo struct {
 	Year       string  `json:"year,omitempty"`
 	Poster     string  `json:"poster,omitempty"`
 	SpeedMBs   float64 `json:"speed_mbs"`
+	UpMBs      float64 `json:"up_mbs,omitempty"` // what this torrent uploads
 	Peers      int     `json:"peers"`
 	Seeders    int     `json:"seeders"`
 	Size       int64   `json:"size"`
@@ -354,11 +356,12 @@ func (c *Collector) collect() {
 	torrents := c.fetchTorrents()
 	c.enrichTorrents(torrents)
 	var totalPeers, totalSeeders, activeCount int
-	var totalSpeedMB float64
+	var totalSpeedMB, totalUpMB float64
 	for _, t := range torrents {
 		totalPeers += t.Peers
 		totalSeeders += t.Seeders
 		totalSpeedMB += t.SpeedMBs
+		totalUpMB += t.UpMBs
 		if t.Status != "idle" {
 			activeCount++
 		}
@@ -374,6 +377,7 @@ func (c *Collector) collect() {
 	s.TotalPeers = totalPeers
 	s.TotalSeeders = totalSeeders
 	s.DownloadMbps = totalSpeedMB * 8
+	s.UploadMbps = totalUpMB * 8
 
 	point := SpeedPoint{Time: time.Now().UnixMilli(), Speed: s.DownloadMbps}
 	shieldEvts := c.parseShieldEvents()
@@ -444,6 +448,7 @@ func (c *Collector) fetchTorrents() []TorrentInfo {
 			Hash:       r.Hash,
 			Title:      r.Title,
 			SpeedMBs:   speedMB,
+			UpMBs:      sentMBs(r.PeerRates),
 			Peers:      r.ActivePeers,
 			Seeders:    r.ConnectedSeeders,
 			Size:       r.TorrentSize,
@@ -1080,11 +1085,23 @@ func hostOf(rawURL string) string {
 
 // PeerRate is one connected peer as GoStorm reports it: anonymous id, KB/s, seeder.
 type PeerRate struct {
-	ID   string  `json:"id"`
-	KBps float64 `json:"kbps"`
-	Seed bool    `json:"seed"`
-	UTP  bool    `json:"utp,omitempty"`
-	CC   string  `json:"cc,omitempty"`
-	ASN  uint    `json:"asn,omitempty"`
-	Org  string  `json:"org,omitempty"` // network owner, e.g. "Hetzner Online GmbH"
+	ID     string  `json:"id"`
+	KBps   float64 `json:"kbps"`
+	UpKBps float64 `json:"up_kbps,omitempty"` // what we upload to this peer
+	Seed   bool    `json:"seed"`
+	UTP    bool    `json:"utp,omitempty"`
+	CC     string  `json:"cc,omitempty"`
+	ASN    uint    `json:"asn,omitempty"`
+	Org    string  `json:"org,omitempty"` // network owner, e.g. "Hetzner Online GmbH"
+}
+
+// sentMBs is the piece data sent to the listed peers, in MiB/s. GoStorm's upload_speed counts
+// every byte on the wire, requests and HAVEs included, which would show upload while we only
+// download.
+func sentMBs(peers []PeerRate) float64 {
+	var kb float64
+	for _, p := range peers {
+		kb += p.UpKBps
+	}
+	return kb / 1024
 }

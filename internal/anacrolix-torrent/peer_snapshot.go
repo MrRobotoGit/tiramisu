@@ -5,6 +5,7 @@ package torrent
 type PeerSnapshot struct {
 	Addr        string
 	UsefulBytes int64
+	SentBytes   int64 // piece data we uploaded to this peer
 	Seed        bool
 	UTP         bool
 }
@@ -20,7 +21,7 @@ func (t *Torrent) PeerSnapshots() []PeerSnapshot {
 		if c.RemoteAddr != nil {
 			addr = c.RemoteAddr.String()
 		}
-		out = append(out, PeerSnapshot{Addr: addr, UsefulBytes: c._stats.BytesReadUsefulData.Int64(), Seed: all && known, UTP: c.utp()})
+		out = append(out, PeerSnapshot{Addr: addr, UsefulBytes: c._stats.BytesReadUsefulData.Int64(), SentBytes: c._stats.BytesWrittenData.Int64(), Seed: all && known, UTP: c.utp()})
 	}
 	return out
 }
