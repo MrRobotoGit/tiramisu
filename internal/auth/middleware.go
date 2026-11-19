@@ -182,6 +182,8 @@ func scopeRefusal(scope, path string) string {
 		return "tokens and sign-in are managed from the Control Panel, signed in: no token opens /api/auth"
 	case strings.HasPrefix(path, "/api/config/history") || path == "/api/config/rollback":
 		return "the configuration history and rollback are for the Control Panel, signed in: a rollback can turn HTTPS off or change the trusted proxies"
+	case strings.HasPrefix(path, "/api/gostorm/history") || path == "/api/gostorm/rollback":
+		return "the Engine settings history and rollback are for the Control Panel, signed in"
 	case scope == ScopeMCP && path != "/mcp":
 		return "this is an MCP token: it opens /mcp only. Create an API token in Access for the HTTP API"
 	case scope == ScopeAPI && path == "/mcp":

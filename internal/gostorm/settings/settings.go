@@ -83,6 +83,7 @@ func InitSets(readOnly, searchWA bool) {
 
 	// Load settings
 	loadBTSets()
+	RecordBaseline() // the history needs a first version to compare manual saves against
 
 	// Update preferences if they changed
 	if BTsets != nil && BTsets.StoreSettingsInJson != settingsStoragePref {

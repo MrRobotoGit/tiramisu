@@ -99,6 +99,7 @@ type Entry struct {
 	Restart   bool     `json:"restart"`
 	Current   bool     `json:"current"`
 	Baseline  bool     `json:"baseline,omitempty"` // oldest kept after pruning: what it changed is gone
+	Kind      string   `json:"kind,omitempty"`     // "engine" for GoStorm settings; empty for the configuration
 }
 
 // History lists the newest limit versions; the oldest kept one is compared to the defaults.

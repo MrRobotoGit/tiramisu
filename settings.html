@@ -1012,7 +1012,7 @@
                             <h1 class="h1">History</h1><span class="spacer"></span>
                             <span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span>
                         </div>
-                        <p>Every saved change to the configuration, newest first. Restore an older version: it goes through the bar below like any other change. The last 50 versions are kept.</p>
+                        <p>Every saved change to the configuration and to the Engine settings, newest first. Restore an older version: it goes through the bar below like any other change. The last 50 versions of each are kept.</p>
                     </div>
 
                     <div class="card">
@@ -1021,6 +1021,7 @@
                                 <button type="button" data-f="all" class="active" aria-pressed="true">All</button>
                                 <button type="button" data-f="restart" aria-pressed="false">Restart</button>
                                 <button type="button" data-f="secret" aria-pressed="false">Secrets</button>
+                                <button type="button" data-f="engine" aria-pressed="false">Engine</button>
                             </div>
                         </div>
                         <div class="card-body flush">
@@ -2413,6 +2414,12 @@
         let histPreview = null;   // what restoring it changes, computed by the server
         let histFocus = '';       // control to focus after a re-render
         let histFilter = 'all';
+        let histEngineMissing = false; // the last Engine history fetch failed
+        // Configuration and Engine versions have their own ids: a row is known by kind and id.
+        const histKey = e => (e.kind || 'config') + ':' + e.id;
+        const histIsEngine = k => typeof k === 'string' && k.startsWith('engine:');
+        // Engine versions read E3, configuration versions #3: the two series number apart.
+        const histLabel = e => (e.kind === 'engine' ? 'E' : '#') + e.id;
 
         function histFmt(v) {
             if (v === undefined || v === '' || v === 'null' || v === '""' || v === '[]') return '∅';
@@ -2440,7 +2447,9 @@
 
         function histSummary(e) {
             if (e.baseline) return 'Oldest version kept';
-            if (e.note) return e.note.replace(/^rollback to #/, 'Restored version #');
+            if (e.note === 'baseline') return 'Engine settings when the history started';
+            if (e.note === 'defaults') return 'Default Engine settings';
+            if (e.note) return e.note.replace(/^rollback to #/, 'Restored version ' + (e.kind === 'engine' ? 'E' : '#'));
             if (e.source === 'import') return e.changes.length ? `Imported, ${e.changes.length} setting${e.changes.length > 1 ? 's' : ''} changed` : 'Imported, nothing changed';
             if (!e.changes.length) return e.source === 'default' ? 'Default settings' : 'No changes';
             return e.changes[0].key + (e.changes.length > 1 ? ` and ${e.changes.length - 1} more` : '');
@@ -2453,7 +2462,8 @@
             const items = ch.map(c => ({ group: 'restore', el: null,
                 text: c.secret ? `${c.key} changed` : `${c.key} ${fmt(c.from)} → ${fmt(c.to)}` }));
             // Restoring a version identical to the one in use still has to be applyable.
-            return items.length ? items : [{ group: 'restore', el: null, text: `Restore #${histRestore} (same as the saved configuration)` }];
+            const id = (histIsEngine(histRestore) ? 'E' : '#') + histRestore.split(':')[1];
+            return items.length ? items : [{ group: 'restore', el: null, text: `Restore ${id} (same as the ${histIsEngine(histRestore) ? 'Engine settings in use' : 'saved configuration'})` }];
         }
 
         function histEl(tag, cls, text) {
@@ -2484,37 +2494,41 @@
             list.replaceChildren();
             const shown = histEntries.filter(e => histFilter === 'all'
                 || (histFilter === 'restart' && e.restart)
-                || (histFilter === 'secret' && e.changes.some(c => c.secret)));
+                || (histFilter === 'secret' && e.changes.some(c => c.secret))
+                || (histFilter === 'engine' && e.kind === 'engine'));
             if (!shown.length) {
                 list.appendChild(histEl('div', 'hist-empty small faint', histEntries.length ? 'No version matches this filter.' : 'No saved versions yet.'));
                 return;
             }
             shown.forEach(e => {
-                const restoring = histRestore === e.id, open = histOpen === e.id && !restoring;
+                const key = histKey(e), engine = e.kind === 'engine';
+                const restoring = histRestore === key, open = histOpen === key && !restoring;
                 const row = histEl('div', 'hist-row' + (open ? ' open' : '') + (restoring ? ' restoring' : ''));
                 const head = histEl('div', 'hist-head');
-                head.appendChild(histEl('span', 'id mono', '#' + e.id));
+                head.appendChild(histEl('span', 'id mono', histLabel(e)));
                 head.appendChild(histEl('span', 'when small', histWhen(e.created_at)));
                 const who = histEl('span', 'who');
                 who.appendChild(histEl('b', '', HIST_SOURCE[e.source] || e.source));
                 if (e.actor) who.appendChild(histEl('span', 'small', '· ' + e.actor));
+                if (engine) who.appendChild(histEl('span', 'chip-tag soft', 'engine'));
                 head.appendChild(who);
                 head.appendChild(histEl('span', 'sum small', histSummary(e)));
-                if (e.current) head.appendChild(restartPending ? histEl('span', 'chip-tag soft', 'saved, restart pending') : histEl('span', 'chip-tag sig-green', 'in use'));
+                if (e.current && engine) head.appendChild(histEl('span', 'chip-tag sig-green', 'in use'));
+                else if (e.current) head.appendChild(restartPending ? histEl('span', 'chip-tag soft', 'saved, restart pending') : histEl('span', 'chip-tag sig-green', 'in use'));
                 else if (restoring) head.appendChild(histEl('span', 'chip-tag accent', 'will be restored'));
                 else if (e.restart && e.changes.length) head.appendChild(histEl('span', 'chip-tag soft', 'restart'));
                 if (!e.current && !restoring) {
                     const b = histEl('button', 'btn ghost sm', open ? 'Hide' : 'Show changes');
                     b.type = 'button';
                     b.setAttribute('aria-expanded', open);
-                    b.dataset.hf = e.id + ':toggle';
-                    b.onclick = () => { histOpen = open ? null : e.id; histFocus = e.id + ':toggle'; histRender(); };
+                    b.dataset.hf = key + ':toggle';
+                    b.onclick = () => { histOpen = open ? null : key; histFocus = key + ':toggle'; histRender(); };
                     head.appendChild(b);
                 }
                 row.appendChild(head);
                 if (restoring) {
                     const d = histEl('div', 'hist-detail');
-                    d.appendChild(histEl('span', 'label', `Restoring #${e.id} brings back`));
+                    d.appendChild(histEl('span', 'label', `Restoring ${histLabel(e)} brings back`));
                     const ch = histPreview ? histPreview.changes : [];
                     if (ch.length) ch.forEach(c => d.appendChild(histChange(c)));
                     else d.appendChild(histEl('span', 'small faint', 'The same settings as the version in use.'));
@@ -2522,25 +2536,27 @@
                     const a = histEl('div', 'hist-actions');
                     const b = histEl('button', 'btn sm', 'Cancel restore');
                     b.type = 'button';
-                    b.dataset.hf = e.id + ':cancel';
-                    b.onclick = () => { histCancelRestore(); histFocus = e.id + ':toggle'; histRender(); refreshDirty(); };
+                    b.dataset.hf = key + ':cancel';
+                    b.onclick = () => { histCancelRestore(); histFocus = key + ':toggle'; histRender(); refreshDirty(); };
                     a.appendChild(b);
-                    const newer = histEntries.filter(x => x.id > e.id).map(x => '#' + x.id);
-                    a.appendChild(histEl('span', 'small faint', `Apply & restart in the bar below to restore. ${newer.length > 3 ? 'The newer versions' : newer.length > 1 ? newer.slice(0, -1).join(', ') + ' and ' + newer.at(-1) : newer[0]} stay${newer.length === 1 ? 's' : ''} in the list.`));
+                    const newer = histEntries.filter(x => (x.kind || 'config') === (e.kind || 'config') && x.id > e.id).map(histLabel);
+                    if (engine) d.appendChild(histEl('div', 'warn-note', 'Applying restarts the BitTorrent client, as any Engine save does: playback in progress stops.'));
+                    const keep = !newer.length ? '' : ` ${newer.length > 3 ? 'The newer versions' : newer.length > 1 ? newer.slice(0, -1).join(', ') + ' and ' + newer.at(-1) : newer[0]} stay${newer.length === 1 ? 's' : ''} in the list.`;
+                    a.appendChild(histEl('span', 'small faint', `${engine ? 'Apply' : 'Apply & restart'} in the bar below to restore.${keep}`));
                     d.appendChild(a);
                     row.appendChild(d);
                 } else if (open) {
                     const d = histEl('div', 'hist-detail');
-                    d.appendChild(histEl('span', 'label', `What #${e.id} changed`));
+                    d.appendChild(histEl('span', 'label', `What ${histLabel(e)} changed`));
                     if (e.changes.length) e.changes.forEach(c => d.appendChild(histChange(c)));
                     else d.appendChild(histEl('span', 'small faint', e.baseline ? 'The versions before it are no longer kept, so what it changed is not known.' : 'Nothing changed against the version before.'));
                     const a = histEl('div', 'hist-actions');
                     const b = histEl('button', 'btn sm', 'Restore this version');
                     b.type = 'button';
-                    b.dataset.hf = e.id + ':restore';
-                    b.onclick = () => histStartRestore(e.id);
+                    b.dataset.hf = key + ':restore';
+                    b.onclick = () => histStartRestore(key);
                     a.appendChild(b);
-                    a.appendChild(histEl('span', 'small faint', `Brings back the settings as they were right after #${e.id}; newer versions stay in the list.`));
+                    a.appendChild(histEl('span', 'small faint', `Brings back the ${engine ? 'Engine ' : ''}settings as they were right after ${histLabel(e)}; newer versions stay in the list.`));
                     d.appendChild(a);
                     row.appendChild(d);
                 }
@@ -2553,7 +2569,8 @@
             }
         }
 
-        async function histStartRestore(id) {
+        async function histStartRestore(key) {
+            const id = key.split(':')[1], base = histIsEngine(key) ? '/api/gostorm/history' : '/api/config/history';
             const others = Object.keys(GROUPS).filter(g => g !== 'restore' && isDirty(g));
             if (others.length) {
                 lastError = HIST_OTHERS;
@@ -2564,7 +2581,7 @@
             await histLoad(); // the preview is computed against what is saved now
             let p;
             try {
-                const r = await fetch(`/api/config/history/${id}/restore`, { cache: 'no-store' });
+                const r = await fetch(`${base}/${id}/restore`, { cache: 'no-store' });
                 if (!r.ok) throw new Error((await r.text()).trim() || r.status);
                 p = await r.json();
             } catch (err) {
@@ -2572,11 +2589,11 @@
                 renderChangeBar();
                 return;
             }
-            histRestore = id;
+            histRestore = key;
             histPreview = p;
             GROUPS.restore.scope = p.restart ? 'restart' : 'live';
             histOpen = null;
-            histFocus = id + ':cancel';
+            histFocus = key + ':cancel';
             histRender();
             refreshDirty();
         }
@@ -2589,9 +2606,10 @@
         }
 
         async function histApplyRestore() {
+            const engine = histIsEngine(histRestore), id = Number(histRestore.split(':')[1]);
             let r;
             try {
-                r = await fetch('/api/config/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: histRestore }) });
+                r = await fetch(engine ? '/api/gostorm/rollback' : '/api/config/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
             } catch (_) { return { ok: false, message: 'Restore: connection error' }; }
             if (!r.ok) {
                 const msg = 'Restore: ' + ((await r.text()).trim() || r.status);
@@ -2601,6 +2619,7 @@
             const res = await r.json().catch(() => ({}));
             histRestore = null;
             histPreview = null;
+            if (engine) { await loadCore(); await histLoad(); return { ok: true, restart: false }; }
             // The engine already uses the restored configuration: show it, so the next save builds on it
             // and the restart knows whether the scheme changes.
             await loadEngine();
@@ -2615,13 +2634,19 @@
             try {
                 const r = await fetch('/api/config/history?limit=50', { cache: 'no-store' });
                 if (!r.ok) throw new Error(r.status);
-                histEntries = await r.json();
+                const cfg = await r.json();
+                // The Engine history is optional: an older engine without it still shows the configuration.
+                const eng = await fetch('/api/gostorm/history?limit=50', { cache: 'no-store' })
+                    .then(x => x.ok ? x.json() : null).catch(() => null);
+                histEngineMissing = eng === null;
+                histEntries = cfg.concat(eng || []).sort((a, b) => b.created_at - a.created_at || b.id - a.id);
             } catch (_) {
                 histEntries = [];
                 document.getElementById('hist-list').replaceChildren(histEl('div', 'hist-empty small faint', 'The history could not be loaded.'));
                 return;
             }
-            if (histRestore && !histEntries.some(e => e.id === histRestore)) { histRestore = null; histPreview = null; }
+            // A failed Engine fetch says nothing about a pending Engine restore: keep it.
+            if (histRestore && !(histEngineMissing && histIsEngine(histRestore)) && !histEntries.some(e => histKey(e) === histRestore)) { histRestore = null; histPreview = null; }
             histRender();
             refreshDirty();
         }

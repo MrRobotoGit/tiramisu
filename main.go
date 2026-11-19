@@ -5026,6 +5026,7 @@ func main() {
 	}
 
 	settings.SetStateDB(boot.DB)
+	settings.SetPortManagedExternally(gc().NatPMP.Enabled)
 	if err := settings.ImportLegacyDB(); err != nil {
 		config.Fatal(err)
 	}
@@ -5441,6 +5442,10 @@ func main() {
 		Mu: &configMu, Actor: authSvc.Actor, Apply: applyConfig, Logf: logger.Printf,
 		// Also closes them to the internal token, which the middleware lets through.
 		Allowed: func(r *http.Request) bool { return !authSvc.Enabled() || auth.SessionFrom(r) != "" }})
+	configBoot.RegisterEngineHistory(http.DefaultServeMux, config.EngineHistoryDeps{
+		Actor: authSvc.Actor, Logf: logger.Printf,
+		Allowed: func(r *http.Request) bool { return !authSvc.Enabled() || auth.SessionFrom(r) != "" },
+		Ignored: settings.HistoryIgnoredKeys, Current: settings.CurrentJSON, Restore: torr.RestoreSettings})
 
 	http.HandleFunc("/api/prowlarr/search", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -5502,6 +5507,9 @@ func main() {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		source, actor := authSvc.Actor(r)
+		req.Header.Set(settings.HeaderSource, source) // for the Engine settings history
+		req.Header.Set(settings.HeaderActor, actor)
 		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 		if err != nil {
 			http.Error(w, "gostorm unreachable: "+err.Error(), http.StatusBadGateway)

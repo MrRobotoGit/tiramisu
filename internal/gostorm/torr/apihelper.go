@@ -3,6 +3,8 @@ package torr
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -434,7 +436,22 @@ func DropTorrent(hashHex string) {
 	bts.RemoveTorrent(hash)
 }
 
+// Origin says who saved the settings, for the Engine history.
+type Origin struct{ Source, Actor, Note string }
+
+// SetSettings applies settings without recording them: automatic changes (NAT-PMP).
 func SetSettings(set *sets.BTSets) {
+	applySettings(func() { sets.SetBTSets(set) }, nil)
+}
+
+// SaveSettings is a manual save: keys NAT-PMP or the install own keep their value, and the
+// result is recorded under the same lock, so a concurrent save cannot take its row.
+func SaveSettings(set *sets.BTSets, o Origin) {
+	applySettings(func() { sets.KeepIgnored(set); sets.SetBTSets(set) }, &o)
+}
+
+// applySettings writes the settings, records them when o is set, then reconnects the client.
+func applySettings(write func(), o *Origin) {
 	if sets.ReadOnly {
 		log.TLogln("API SetSettings: Read-only DB mode!")
 		return
@@ -443,7 +460,12 @@ func SetSettings(set *sets.BTSets) {
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 
-	sets.SetBTSets(set)
+	write()
+	if o != nil {
+		if _, _, err := sets.RecordVersion(o.Source, o.Actor, o.Note); err != nil {
+			log.TLogln("Settings history:", err)
+		}
+	}
 	log.TLogln("drop all torrents")
 	dropAllTorrent()
 	time.Sleep(time.Millisecond * 200)
@@ -486,35 +508,28 @@ func reconnect(connect func() error, attempts int, wait time.Duration) error {
 	return err
 }
 
-func SetDefSettings() {
+// RestoreSettings puts a saved Engine settings version in use, like a manual save (the
+// client reconnects), and records it as a new version.
+func RestoreSettings(doc []byte, actor, note string) error {
 	if sets.ReadOnly {
-		log.TLogln("API SetDefSettings: Read-only DB mode!")
-		return
+		return errors.New("read-only mode: settings cannot be changed")
 	}
-	// V227: Serialize — prevent concurrent settings changes
-	settingsMu.Lock()
-	defer settingsMu.Unlock()
-
-	sets.SetDefaultConfig()
-	log.TLogln("drop all torrents")
-	dropAllTorrent()
-	time.Sleep(time.Millisecond * 200)
-	log.TLogln("disconect")
-
-	btsMu.Lock()
-	bts.Disconnect()
-	btsMu.Unlock()
-
-	log.TLogln("connect")
-
-	// Connect() calls InitApiHelper() which acquires btsMu.Lock() internally.
-	// Do NOT wrap in btsMu.Lock here — RWMutex is not reentrant → deadlock.
-	if err := reconnect(bts.Connect, 30, time.Second); err != nil {
-		log.TLogln("connect failed:", err)
+	set := new(sets.BTSets)
+	if err := json.Unmarshal(doc, set); err != nil {
+		return err
 	}
+	SaveSettings(set, Origin{Source: "rollback", Actor: actor, Note: note})
+	return nil
+}
 
-	time.Sleep(time.Millisecond * 200)
-	log.TLogln("end set default settings")
+// SetDefSettings resets the settings to the defaults without recording them.
+func SetDefSettings() {
+	applySettings(sets.SetDefaultConfig, nil)
+}
+
+// SaveDefSettings is a manual reset to the defaults, recorded in the Engine history.
+func SaveDefSettings(o Origin) {
+	applySettings(sets.SetDefaultConfig, &o)
 }
 
 func dropAllTorrent() {

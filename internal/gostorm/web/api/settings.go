@@ -41,13 +41,19 @@ func settings(c *gin.Context) {
 		c.JSON(200, sets.BTsets)
 		return
 	} else if req.Action == "set" {
-		torr.SetSettings(req.Sets)
+		torr.SaveSettings(req.Sets, origin(c, ""))
 		c.Status(200)
 		return
 	} else if req.Action == "def" {
-		torr.SetDefSettings()
+		torr.SaveDefSettings(origin(c, "defaults"))
 		c.Status(200)
 		return
 	}
 	c.AbortWithError(http.StatusBadRequest, errors.New("action is empty"))
+}
+
+// origin is who saved, from the :9080 proxy headers, for the Engine history.
+func origin(c *gin.Context, note string) torr.Origin {
+	source, actor := sets.ActorFrom(c.GetHeader(sets.HeaderSource), c.GetHeader(sets.HeaderActor))
+	return torr.Origin{Source: source, Actor: actor, Note: note}
 }

@@ -239,7 +239,7 @@ var Groups = []Group{
 			OK: 200,
 		},
 	}},
-	{ID: "config", Name: "Configuration", Desc: "The configuration, stored in tiramisu.db as versions. Secrets are write-only. Error bodies are plain text.", Endpoints: []Endpoint{
+	{ID: "config", Name: "Configuration", Desc: "The configuration and the GoStorm Engine settings, stored in tiramisu.db as versions. Secrets are write-only. Error bodies are plain text.", Endpoints: []Endpoint{
 		{
 			Method: "GET", Path: "/api/config", Summary: "Current configuration, secrets left empty",
 			Desc: "The values in effect, environment overrides included. The secrets (Plex token, TMDB and Prowlarr keys) come " +
@@ -308,6 +308,42 @@ var Groups = []Group{
 			Response: "{\"id\": 43, \"changed\": true, \"changes\": [{\"key\": \"metrics_port\", \"from\": \"9191\", \"to\": \"9080\"}], \"restart\": true}",
 			OK:       200,
 			Errors:   []Status{{400, "the body is not {\"id\": N}"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version"}, {500, "the configuration could not be saved"}},
+		},
+		{
+			Method: "GET", Path: "/api/gostorm/history", Summary: "Engine settings versions, newest first",
+			Desc: "The last 50 manual saves of the GoStorm Engine settings (Control Panel, POST /api/gostorm/settings set or def, " +
+				"a restore), each with source and actor and the keys it changed against the version before; kind is \"engine\". " +
+				"Automatic changes are not versions: the NAT-PMP peer port, defaults written at start-up. StoreSettingsInJson, and " +
+				"PeersListenPort while NAT-PMP is on, are never compared. The first entry is the settings when the history started " +
+				"(note \"baseline\"). current says the settings in use match the newest version. Same access rule as the configuration history.",
+			ParamsIn: "query",
+			Params:   []Param{{Name: "limit", Type: "int", Desc: "how many versions, 1-50 (default 50)"}},
+			Example:  "curl {{ORIGIN}}/api/gostorm/history?limit=5",
+			Response: "[\n  {\"id\": 3, \"created_at\": 1795560000, \"source\": \"ui\", \"actor\": \"admin\", \"note\": \"\",\n" +
+				"   \"changes\": [{\"key\": \"ConnectionsLimit\", \"from\": \"26\", \"to\": \"25\"}],\n" +
+				"   \"restart\": false, \"current\": true, \"kind\": \"engine\"}\n]",
+			OK:     200,
+			Errors: []Status{{403, "sign-in on and no Control Panel session"}},
+		},
+		{
+			Method: "GET", Path: "/api/gostorm/history/{id}/restore", Summary: "What restoring Engine settings would change",
+			Desc:     "The changes POST /api/gostorm/rollback would make for id, against the settings in use, without applying anything.",
+			Example:  "curl {{ORIGIN}}/api/gostorm/history/2/restore",
+			Response: "{\"id\": 2, \"changed\": true, \"changes\": [{\"key\": \"ConnectionsLimit\", \"from\": \"25\", \"to\": \"26\"}], \"restart\": false}",
+			OK:       200,
+			Errors:   []Status{{400, "id is not a number"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version"}},
+		},
+		{
+			Method: "POST", Path: "/api/gostorm/rollback", Summary: "Restore saved Engine settings",
+			Desc: "Puts version id in use like an Engine save: GoStorm reconnects its BitTorrent client, so playback in progress " +
+				"stops. It is recorded as a new version (source rollback, note \"rollback to #id\") unless it equals the settings " +
+				"in use. StoreSettingsInJson, and the peer port while NAT-PMP is on, keep their current value. No restart is needed.",
+			ParamsIn: "body",
+			Params:   []Param{{Name: "id", Type: "int", Required: true, Desc: "the version to restore"}},
+			Example:  "curl -X POST -H 'Content-Type: application/json' -d '{\"id\":2}' {{ORIGIN}}/api/gostorm/rollback",
+			Response: "{\"changed\": true, \"changes\": [{\"key\": \"ConnectionsLimit\", \"from\": \"25\", \"to\": \"26\"}], \"restart\": false}",
+			OK:       200,
+			Errors:   []Status{{400, "the body is not {\"id\": N}"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version"}, {500, "the settings could not be applied or recorded"}},
 		},
 		{
 			Method: "POST", Path: "/api/restart", Summary: "Restart the engine",
