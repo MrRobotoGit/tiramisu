@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,6 +49,15 @@ type InodeMap struct {
 	stopOnce sync.Once
 	saveMu   sync.Mutex // Serialize SaveToDisk
 	db       *metadb.DB // V1.7.1: Optional SQLite backend
+
+	// loadFailed: the DB could not be read, so the map in memory is not the saved one and
+	// must not be written over it.
+	loadFailed atomic.Bool
+
+	// GC guard: the last large removal refused, and on how many runs in a row it was seen.
+	pruneMu   sync.Mutex
+	pruneSeen [2]int
+	pruneRuns int
 
 	// Statistics
 	hits   int64
@@ -163,8 +173,10 @@ func (im *InodeMap) LoadFromDisk() error {
 func (im *InodeMap) loadFromDB() error {
 	entries, err := im.db.LoadAll()
 	if err != nil {
-		return fmt.Errorf("inodemap: load from DB: %w", err)
+		im.loadFailed.Store(true)
+		return fmt.Errorf("inodemap: load from DB: %w (saving is off until a restart, so the saved map stays as it is)", err)
 	}
+	im.loadFailed.Store(false)
 
 	var totalFiles, totalDirs int
 	for _, e := range entries {
@@ -321,6 +333,9 @@ func (im *InodeMap) SaveToDisk() error {
 // shard lock (SQL under RLock stalls AddFile), and taking a second shard RLock
 // inside the first deadlocks when a path and its key land on the same shard.
 func (im *InodeMap) saveToDB() error {
+	if im.loadFailed.Load() {
+		return errors.New("inodemap: not saved, the map was not loaded from the DB and would overwrite it")
+	}
 	nameMap := make(map[string]string) // fullPath -> "infohash:fileIdx"
 	fileMap := make(map[string]uint64) // "infohash:fileIdx" -> inode
 	dirMap := make(map[string]uint64)  // relPath -> inode
@@ -634,16 +649,26 @@ func (im *InodeMap) Stats() (files, dirs, hits, misses int64) {
 
 func (im *InodeMap) PruneMissing(foundFiles map[string]bool) int {
 	var toRemove []string
+	known := 0
 
 	// Pass 1: Identify under read locks
 	for _, s := range im.shards {
 		s.mu.RLock()
 		for fullPath := range s.nameMap {
+			known++
 			if !foundFiles[fullPath] {
 				toRemove = append(toRemove, fullPath)
 			}
 		}
 		s.mu.RUnlock()
+	}
+
+	// A source that shows none of the known files is a mount that is missing or not ready:
+	// pruning would give every file a new inode once the map is saved. Never trusted. Less
+	// than half is trusted only once the same view repeats on consecutive runs (a real
+	// deletion), so the GC cannot stay off for good.
+	if !im.pruneAllowed(known, len(toRemove)) {
+		return 0
 	}
 
 	// Pass 2: Remove from in-memory maps
@@ -666,6 +691,34 @@ func (im *InodeMap) PruneMissing(foundFiles map[string]bool) int {
 		im.logger.Printf("InodeMap GC: Pruned %d ghost entries from memory", len(toRemove))
 	}
 	return len(toRemove)
+}
+
+// pruneTrustRuns is how many consecutive runs must see the same large removal before it is trusted.
+const pruneTrustRuns = 3
+
+func (im *InodeMap) pruneAllowed(known, removing int) bool {
+	im.pruneMu.Lock()
+	defer im.pruneMu.Unlock()
+	if removing == 0 || removing*2 <= known {
+		im.pruneSeen, im.pruneRuns = [2]int{}, 0
+		return true
+	}
+	view := [2]int{known, removing}
+	if known-removing > 0 && view == im.pruneSeen {
+		im.pruneRuns++
+	} else {
+		if view != im.pruneSeen {
+			im.logger.Printf("InodeMap GC: WARN skipped, %d of %d known files missing from the source (not mounted or not ready?)",
+				removing, known)
+		}
+		im.pruneSeen, im.pruneRuns = view, 1
+	}
+	if known-removing > 0 && im.pruneRuns >= pruneTrustRuns {
+		im.logger.Printf("InodeMap GC: the same %d of %d files missing on %d runs in a row, pruning them", removing, known, im.pruneRuns)
+		im.pruneSeen, im.pruneRuns = [2]int{}, 0
+		return true
+	}
+	return false
 }
 
 // --- Helper functions for extracting hash and index from URLs ---
