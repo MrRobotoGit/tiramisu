@@ -475,16 +475,12 @@ func (r *NativeReader) startStream(off int64) error {
 	req, _ := http.NewRequestWithContext(ctx, "GET", "/stream", nil)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-", off))
 
-	resp := &PipeResponseWriter{
-		writer: pw,
-		header: make(http.Header),
-	}
-
+	fileID, hash := r.fileID, r.hash
 	go func() {
-		defer pw.Close()
-		if err := t.Stream(r.fileID, req, resp); err != nil {
+		err := streamToPipe(func(q *http.Request, w http.ResponseWriter) error { return t.Stream(fileID, q, w) }, req, pw)
+		if err != nil && err != io.EOF {
 			log.Printf("[NativeReader] Stream error at off=%dMB fileID=%d hash=%s: %v",
-				off/(1024*1024), r.fileID, r.hash[:8], err)
+				off/(1024*1024), fileID, hash[:8], err)
 		}
 	}()
 
@@ -549,11 +545,7 @@ func streamRange(ctx context.Context, hash string, fileID int, offset, length in
 	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", "/stream", nil)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, offset+length-1))
-	resp := &PipeResponseWriter{writer: pw, header: make(http.Header)}
-	go func() {
-		defer pw.Close()
-		t.Stream(fileID, req, resp)
-	}()
+	go streamToPipe(func(q *http.Request, w http.ResponseWriter) error { return t.Stream(fileID, q, w) }, req, pw)
 	return nil
 }
 
@@ -692,18 +684,10 @@ func (c *NativeClient) FetchBlock(hash string, fileID int, offset int64, p []byt
 	endRange := offset + int64(len(p)) - 1
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, endRange))
 
-	resp := &PipeResponseWriter{
-		writer: pw,
-		header: make(http.Header),
-	}
-
 	if StreamSource != nil {
 		sourceStream(ctx, hash, fileID, offset, int64(len(p)), pw)
 	} else {
-		go func() {
-			defer pw.Close()
-			t.Stream(fileID, req, resp)
-		}()
+		go streamToPipe(func(q *http.Request, w http.ResponseWriter) error { return t.Stream(fileID, q, w) }, req, pw)
 	}
 
 	// V283-Fix: Ensure io.ReadFull is unblocked if context expires (8s timeout).
@@ -751,15 +735,56 @@ func (c *NativeClient) RemoveTorrent(hash string) error {
 	return nil
 }
 
-// PipeResponseWriter bridges GoStorm's HTTP responses to our Go pipe.
+// PipeResponseWriter bridges GoStorm's HTTP responses to our Go pipe. Only a 2xx body is
+// file data: an error body (404 before metadata, 403, 416) must never reach the reader.
 type PipeResponseWriter struct {
 	writer *io.PipeWriter
 	header http.Header
+	status int
 }
 
-func (w *PipeResponseWriter) Header() http.Header         { return w.header }
-func (w *PipeResponseWriter) Write(p []byte) (int, error) { return w.writer.Write(p) }
-func (w *PipeResponseWriter) WriteHeader(statusCode int)  {}
+func (w *PipeResponseWriter) Header() http.Header { return w.header }
+
+func (w *PipeResponseWriter) WriteHeader(statusCode int) {
+	if w.status == 0 {
+		w.status = statusCode
+	}
+}
+
+func (w *PipeResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if err := w.statusErr(); err != nil {
+		return 0, err
+	}
+	return w.writer.Write(p)
+}
+
+// statusErr maps the response status to what the pipe reader sees: 416 is a read past the end.
+func (w *PipeResponseWriter) statusErr() error {
+	switch {
+	case w.status == http.StatusRequestedRangeNotSatisfiable:
+		return io.EOF
+	case w.status >= 300:
+		return fmt.Errorf("stream answered HTTP %d", w.status)
+	}
+	return nil
+}
+
+// streamToPipe runs stream and closes pw with its outcome, so a failed stream reads as an
+// error instead of a clean end of file.
+func streamToPipe(stream func(*http.Request, http.ResponseWriter) error, req *http.Request, pw *io.PipeWriter) error {
+	resp := &PipeResponseWriter{writer: pw, header: make(http.Header)}
+	err := stream(req, resp)
+	if err == nil {
+		err = resp.statusErr()
+	} else if serr := resp.statusErr(); serr != nil && serr != io.EOF {
+		err = fmt.Errorf("%w (%v)", err, serr)
+	}
+	pw.CloseWithError(err)
+	return err
+}
 
 // convertStatusToStats maps internal TorrentStatus to our local TorrentStats struct
 func convertStatusToStats(st *state.TorrentStatus) *TorrentStats {
