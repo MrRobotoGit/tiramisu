@@ -561,7 +561,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-gauge-free { stroke: var(--well); }
 .sw-dot.act { fill: var(--ink); }
 .sw-dot.stale { fill: var(--ink3); }
-.sw-host { position: relative; }
+.sw-host { position: relative; isolation: isolate; }
 .sw-old { position: absolute; left: 0; top: 0; width: 100%; pointer-events: none; transition: opacity .6s ease; }
 .sw-new { animation: sw-fade-in .6s ease; }
 @keyframes sw-fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -589,6 +589,12 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-focusbar button { border: 0; background: transparent; color: var(--ink2); font-size: 14px; cursor: pointer; }
 .sw-idle { position: absolute; left: 0; top: 34px; width: min(42%, 420px); display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; background: var(--panel); border: 1px solid var(--hair); border-radius: 6px; }
 .sw-idle.v { position: static; width: auto; border: 0; padding: 0; }
+.sw-orbit { position: absolute; left: 0; top: 0; width: 100%; pointer-events: none; }
+/* The idle track passes under the pipe and the boxes: the host is its own stacking context. */
+.sw-orbit.back { z-index: -1; }
+.sw-orbit svg { display: block; overflow: visible; }
+.sw-orbit .sw-orbit-track { fill: none; stroke: var(--hair2); stroke-width: 1; stroke-dasharray: 2 5; }
+.sw-orbit text { font-family: var(--sans); }
 .sw-idle hr { border: 0; border-top: 1px solid var(--hair); margin: 2px 0; width: 100%; }
 .swarm .sw-dim { opacity: .15 !important; }
 .sw-focus { fill: none; stroke: var(--ink); stroke-width: 2; }

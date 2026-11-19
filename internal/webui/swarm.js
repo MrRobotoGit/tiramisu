@@ -185,6 +185,7 @@
   }
 
   function draw(force) {
+    if (host && host.hidden) orbit.wasHidden = true;   // what changed meanwhile is old news: no flight
     if (!host || host.hidden || !data) return;
     curKey = null;
     setTimeout(closeOrphan, 0);
@@ -196,7 +197,7 @@
     const H = vertical ? fitHeight() : 470;
     // Cross-fade: the previous drawing fades out on top while the new one fades in, instead of a cut.
     // Only data updates fade; forced redraws (resize, theme, motion setting) and height changes cut.
-    const prevSvg = [...host.children].find(n => !n.classList.contains('sw-old'));
+    const prevSvg = [...host.children].find(n => n.tagName.toLowerCase() === 'svg' && !n.classList.contains('sw-old'));
     const fade = !force && !reducedMotion() && prevSvg && prevSvg.getAttribute('height') == H;
     [...host.children].filter(n => n.tagName.toLowerCase() === 'svg').forEach(n => {
       if (!fade || n.classList.contains('sw-old')) { n.remove(); return; }
@@ -211,7 +212,6 @@
     if (!ui) { ui = document.createElement('div'); host.appendChild(ui); }
     ui.className = vertical ? 'sw-ui v' : 'sw-ui';
     ui.innerHTML = '';
-    if (!torrents.length && vertical) { drawIdlePhone(); return; }
     const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, width: '100%', height: H, class: fade ? 'swarm sw-new' : 'swarm', role: 'img', 'aria-label': 'Swarm network' }, host);
     host.insertBefore(svg, ui);
     if (focusKey && !torrents.some(t => t.hash === focusKey) && !String(focusKey).startsWith('dev:')) focusKey = null;
@@ -257,6 +257,7 @@
     const maxSpeed = Math.max(1, ...torrents.map(t => t.speed_mbs));
     const width = s => s > 0.01 ? Math.max(1.5, s / maxSpeed * 9) : 1;
     const pipes = [];
+    const spots = [];   // where the peers are drawn: the orbit flies to them, and back from them
 
     torrents.forEach((t, i) => {
       curKey = t.hash;
@@ -296,6 +297,7 @@
       const flowDur = kbps => Math.max(0.5, Math.min(6, 30 / Math.sqrt(kbps)));
       list.forEach(p => {
         const pp = spot(p.key, ':');
+        if (spots.length < ORBIT_MAX) spots.push(pp);
         const edge = el('path', { d: curve(pp, tp), class: 'sw-edge' }, edgeLayer);
         // uTP vs TCP is known only in aggregate: the share is applied per peer, by its key.
         const node = isUtp(p.key, p.utp) ? el('rect', { x: pp[0] - 3, y: pp[1] - 3, width: 6, height: 6, class: p.seed ? 'sw-peer seed' : 'sw-peer' }, peerLayer)
@@ -688,7 +690,16 @@
     }
     svg.addEventListener('click', () => { if (focusKey) toggleFocus(focusKey); });
 
-    if (!torrents.length) drawIdleCard();
+    if (!torrents.length) drawIdleCard(vertical);
+    // The idle ring around the cache → FUSE pipe, and the movement between it and the graph.
+    // A stadium track around the pipe: half-length `a` along it, half-width `b` across.
+    const geo = vertical
+      ? { cx: cacheP[0], cy: (cacheP[1] + fuseP[1]) / 2, b: Math.min(62, W * 0.2), vertical, W, H }
+      : { cx: (cacheP[0] + fuseP[0]) / 2, cy: cacheP[1], a: Math.min((fuseP[0] - cacheP[0]) / 2 + 90, W * 0.2), b: Math.min(70, H * 0.16), vertical, W, H };
+    // Phone: the track and its label must fit the height left below the pipe, which shrinks with the screen.
+    if (vertical) geo.a = Math.max(geo.b + 20, Math.min((fuseP[1] - cacheP[1]) / 2 + 70, H - 34 - geo.cy));
+    geo.band = P((F.peers + F.peersEnd) / 2, 0.45);
+    orbitSync(torrents.length > 0, geo, spots);
   }
 
   function recentRows() {
@@ -704,33 +715,13 @@
     });
   }
   // Idle (desktop): the engine stays drawn; a card lists the last streams.
-  function drawIdleCard() {
-    const c = document.createElement('div'); c.className = 'sw-idle';
+  function drawIdleCard(vertical) {
+    const c = document.createElement('div'); c.className = vertical ? 'sw-idle v' : 'sw-idle';
     const rows = recentRows();
     c.innerHTML = `<div class="sw-d-title">No active stream</div><div class="small faint">The engine is idle. The graph fills when a player opens a file.</div>`
-      + (rows.length ? `<hr><div class="label">Recent</div>` + rows.map(([a, b]) => `<div class="sw-d-row"><span>${esc(a)}</span><span class="mono">${esc(b)}</span></div>`).join('') : '');
+      + (rows.length ? `<hr><div class="label">Recent</div>` + rows.map(([a, b]) => `<div class="sw-d-row${vertical ? ' col' : ''}"><span>${esc(a)}</span><span class="mono">${esc(b)}</span></div>`).join('') : '');
     ui.appendChild(c);
   }
-  // Idle (phone): one engine row and the last streams, instead of an empty tall graph.
-  function drawIdlePhone() {
-    const h = data.health || {};
-    const act = Math.max(0, Math.min(1, (h.fuse_active_pct || 0) / 100)), stale = Math.max(0, Math.min(1 - act, (h.fuse_stale_pct || 0) / 100));
-    const cols = 16, lit = Math.round(cols * (act + stale)), actC = Math.round(cols * act);
-    let dots = '';
-    for (let c = 0; c < cols; c++) for (const r of [-4.5, 0, 4.5]) {
-      const cls = c < actC ? 'sw-dot act' : c < lit ? 'sw-dot stale' : 'sw-dot off';
-      dots += `<circle cx="${70 + c * 9}" cy="${23 + r}" r="1.6" class="${cls}"/>`;
-    }
-    const rows = recentRows();
-    ui.innerHTML = `<div class="sw-idle v"><div class="sw-d-title">No active stream</div>`
-      + `<svg viewBox="0 0 300 64" width="100%" height="64" aria-hidden="true"><g class="sw-gauge"><path d="M40 23 L260 23" class="sw-gauge-rim" stroke-width="20"/><path d="M40 23 L260 23" class="sw-gauge-free" stroke-width="18"/>${dots}</g>`
-      + `<rect x="30" y="13" width="20" height="20" rx="4" class="sw-box"/><rect x="250" y="13" width="20" height="20" rx="4" class="sw-box"/>`
-      + `<text x="40" y="54" class="sw-name" text-anchor="middle">GoStorm</text><text x="260" y="54" class="sw-name" text-anchor="middle">raCache</text></svg>`
-      + (rows.length ? `<hr><div class="label">Recent</div>` + rows.map(([a, b]) => `<div class="sw-d-row col"><span>${esc(a)}</span><span class="mono">${esc(b)}</span></div>`).join('') : '')
-      + `</div>`;
-    [...host.children].filter(n => n.tagName.toLowerCase() === 'svg').forEach(n => n.remove());
-  }
-
   async function fetchMetrics() {
     try {
       const r = await fetch('/metrics');
@@ -740,8 +731,8 @@
         if (typeof m.shield_active === 'boolean') {
           engine = { active: m.shield_active, last: m.shield_last_corruption || 0, need: m.shield_need_s || 30 };
         }
-      }
-    } catch (_) { }
+      } else transport = null;   // a failed answer must not keep old connection counts on screen
+    } catch (_) { transport = null; }
   }
 
   async function fetchExtras() {
@@ -768,13 +759,205 @@
     } catch (_) { }
   }
 
+  // ---------- idle orbit ----------
+  // With no active torrent, the peer connections no torrent accounts for (/metrics peer_conns_*)
+  // run a stadium track around the cache → FUSE pipe. When a stream starts they leave in a queue
+  // for the spots the graph draws its peers at; when the last one ends they come back. The track
+  // sits under the graph, the dots above it, in layers of their own so the 5 s redraws do not
+  // restart them.
+  const ORBIT_MAX = 16, TURN_MS = 36000, TO_GRAPH_MS = 600, TO_RING_MS = 800, FRAME_MS = 33;
+  const orbit = { back: null, front: null, svgB: null, svgF: null, dots: [], geo: null, mode: 'off', t0: 0, epoch: performance.now(),
+    spots: [], raf: 0, active: null, label: null, last: 0, onScreen: true, wasHidden: false, count: null };
+  const ease = k => k < 0 ? 0 : k > 1 ? 1 : k * k * (3 - 2 * k);
+  // Point at fraction u along the track, clockwise, as [x, y]; the track runs along the pipe.
+  function trackAt(u) {
+    const g = orbit.geo, a = g.a, b = g.b, run = 2 * (a - b), arc = Math.PI * b, total = 2 * run + 2 * arc;
+    let d = (((u % 1) + 1) % 1) * total, s, t;          // s along the pipe, t across it
+    if (d < run) { s = -(a - b) + d; t = -b; }
+    else if ((d -= run) < arc) { const k = -Math.PI / 2 + d / b; s = (a - b) + b * Math.cos(k); t = b * Math.sin(k); }
+    else if ((d -= arc) < run) { s = (a - b) - d; t = b; }
+    else { d -= run; const k = Math.PI / 2 + d / b; s = -(a - b) + b * Math.cos(k); t = b * Math.sin(k); }
+    return g.vertical ? [g.cx - t, g.cy + s] : [g.cx + s, g.cy + t];
+  }
+  function trackPath() {
+    let p = '';
+    for (let i = 0; i <= 96; i++) { const [x, y] = trackAt(i / 96); p += (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1); }
+    return p + 'Z';
+  }
+  const lap = (d, now) => d.a + (reducedMotion() ? 0 : (now - orbit.epoch) / TURN_MS);
+  // New dots take the middle of the widest gap, so the others never jump.
+  function freeAngle() {
+    const as = orbit.dots.map(d => ((d.a % 1) + 1) % 1).sort((x, y) => x - y);
+    if (!as.length) return 0.02;
+    let best = 0, at = as[0] + 0.5;
+    as.forEach((v, i) => { const nx = i + 1 < as.length ? as[i + 1] : as[0] + 1; if (nx - v > best) { best = nx - v; at = v + (nx - v) / 2; } });
+    return at % 1;
+  }
+  // Only connections no torrent accounts for are drawn: a torrent with active peers is already in
+  // the graph (the collector counts it as active), so at rest these are the remaining sockets.
+  function orbitDots(n) {
+    const want = n ? Math.min(ORBIT_MAX, n) : 0;
+    const utp = transport && (transport.tcp + transport.utp) ? transport.utp / (transport.tcp + transport.utp) : 0;
+    while (orbit.dots.length > want) orbit.dots.pop().node.remove();
+    for (let i = orbit.dots.length; i < want; i++) {
+      const r = rng('orbit' + i);
+      const d = { a: freeAngle(), size: 3.2, born: reducedMotion() ? 0 : performance.now() };
+      d.utp = r() < utp;
+      d.node = d.utp ? el('rect', { class: 'sw-peer' }) : el('circle', { class: 'sw-peer' });
+      dotLayer().appendChild(d.node);
+      // A peer that connects mid-flight appears on the track, not in the Peers column.
+      const [tx, ty] = trackAt(lap(d, performance.now()));
+      d.from = [tx, ty, 0];
+      orbit.dots.push(d);
+    }
+    orbit.label.textContent = n ? `${n} peer connection${n === 1 ? '' : 's'} · no torrent active` : '';
+    placeLabel();
+  }
+  // Phone: the track is centred on the pipe and crosses the GoStorm / raCache labels, so the dots
+  // run under the graph, where the labels' panel halo masks them. Desktop: above the graph.
+  const dotLayer = () => orbit.geo && orbit.geo.vertical ? orbit.svgB : orbit.svgF;
+  // Centred under the track, but never past the svg's edges (narrow phones).
+  function placeLabel() {
+    const g = orbit.geo;
+    let w = 0;
+    try { w = orbit.label.getComputedTextLength(); } catch (_) { }
+    orbit.label.setAttribute('x', Math.max(4 + w / 2, Math.min(g.W - 4 - w / 2, g.cx)).toFixed(1));
+    orbit.label.setAttribute('y', Math.min(g.H - 6, g.cy + (g.vertical ? g.a : g.b) + 22).toFixed(1));
+  }
+  // No connections, or metrics unreachable: no track at all.
+  const showTrack = n => { orbit.back.hidden = orbit.front.hidden = !n; return !!n; };
+  function place(d, x, y, op) {
+    if (d.utp) {
+      const sz = d.size * 1.8;
+      d.node.setAttribute('x', (x - sz / 2).toFixed(1)); d.node.setAttribute('y', (y - sz / 2).toFixed(1));
+      if (!d.sized) { d.node.setAttribute('width', sz.toFixed(1)); d.node.setAttribute('height', sz.toFixed(1)); }
+    } else {
+      d.node.setAttribute('cx', x.toFixed(1)); d.node.setAttribute('cy', y.toFixed(1));
+      if (!d.sized) d.node.setAttribute('r', d.size.toFixed(2));
+    }
+    d.sized = true;
+    d.node.style.opacity = op.toFixed(2);
+    d.x = x; d.y = y; d.op = op;
+  }
+  function orbitFrame(now) {
+    orbit.raf = 0;
+    if (!orbit.front || orbit.mode === 'off') return;
+    if (host.hidden) { orbit.wasHidden = true; return; }       // Timeline view: resumes on the next draw
+    const moving = orbit.mode === 'to-graph' || orbit.mode === 'to-ring';
+    // Idle and off screen (scrolled away): nothing to draw. Idle: ~30 fps is plenty for 36 s a turn.
+    if (!moving && !orbit.onScreen) return;                     // the IntersectionObserver restarts it
+    if (!moving && now - orbit.last < FRAME_MS) { orbit.raf = requestAnimationFrame(orbitFrame); return; }
+    orbit.last = now;
+    const k = moving ? (now - orbit.t0) / (orbit.mode === 'to-graph' ? TO_GRAPH_MS : TO_RING_MS) : 1;
+    orbit.dots.forEach((d, i) => {
+      const [tx, ty] = trackAt(lap(d, now));
+      const spot = orbit.spots.length ? orbit.spots[i % orbit.spots.length] : orbit.geo.band;
+      const from = d.from || [spot[0], spot[1], 0.8];
+      // Staggered: the dots leave (and come back) one after another, like a queue through the pipe.
+      const lag = d.lag || 0;
+      const e = ease((k - lag) / 0.6);
+      let x = tx, y = ty, op = 0.8;
+      if (orbit.mode === 'to-graph') {
+        x = from[0] + (spot[0] - from[0]) * e; y = from[1] + (spot[1] - from[1]) * e;
+        op = from[2] + (0.8 - from[2]) * e;
+        if (k > 0.8) op *= Math.max(0, 1 - (k - 0.8) / 0.2);
+      } else if (orbit.mode === 'to-ring') {
+        x = from[0] + (tx - from[0]) * e; y = from[1] + (ty - from[1]) * e; op = from[2] + (0.8 - from[2]) * e;
+      }
+      const fade = d.born ? Math.min(1, (now - d.born) / 900) : 1;   // a peer that connects fades in
+      place(d, x, y, op * fade);
+    });
+    const ke = ease(k);
+    orbit.track.style.opacity = orbit.mode === 'idle' ? 1 : orbit.mode === 'to-ring' ? ke : 1 - ke;
+    orbit.label.style.opacity = orbit.mode === 'idle' ? 1 : orbit.mode === 'to-ring' ? ke : 0;
+    if (moving && k >= 1) {
+      orbit.dots.forEach(d => { d.from = null; });
+      if (orbit.mode === 'to-graph') { orbit.mode = 'off'; orbit.back.hidden = orbit.front.hidden = true; return; }
+      orbit.mode = 'idle';
+    }
+    if (orbit.mode === 'idle' && reducedMotion()) return;     // drawn still
+    orbit.raf = requestAnimationFrame(orbitFrame);
+  }
+  function orbitStart() { if (!orbit.raf && orbit.mode !== 'off') orbit.raf = requestAnimationFrame(orbitFrame); }
+  function orbitBox(cls) {
+    const b = document.createElement('div');
+    b.className = 'sw-orbit ' + cls;
+    const svg = el('svg', { 'aria-hidden': 'true' }, b);
+    return [b, svg];
+  }
+  function orbitSync(active, geo, spots) {
+    if (!orbit.front) {
+      [orbit.back, orbit.svgB] = orbitBox('back');
+      [orbit.front, orbit.svgF] = orbitBox('front');
+      orbit.label = el('text', { class: 'sw-sub', 'text-anchor': 'middle' }, orbit.svgF);
+      orbit.track = el('path', { class: 'sw-orbit-track' }, orbit.svgB);   // under the pipe and the boxes
+      host.insertBefore(orbit.back, host.firstChild);   // painted under the graph (z-index -1)
+      host.appendChild(orbit.front);
+      if ('IntersectionObserver' in window) {
+        new IntersectionObserver(es => { orbit.onScreen = es.some(x => x.isIntersecting); if (orbit.onScreen) orbitStart(); }).observe(host);
+      }
+    }
+    const wasActive = orbit.active;
+    orbit.active = active;
+    orbit.geo = geo;
+    [orbit.svgB, orbit.svgF].forEach(svg => {
+      svg.setAttribute('viewBox', `0 0 ${geo.W} ${geo.H}`);
+      svg.setAttribute('width', '100%');
+      svg.setAttribute('height', geo.H);
+    });
+    orbit.track.setAttribute('d', trackPath());
+    placeLabel();
+    const layer = dotLayer();
+    orbit.dots.forEach(d => { if (d.node.parentNode !== layer) layer.appendChild(d.node); });   // a resize can switch layouts
+    if (active && orbit.mode !== 'to-graph') orbit.spots = spots;   // fixed while the dots fly to them
+    // First draw, back from the Timeline view, or reduced motion: no flight.
+    const instant = reducedMotion() || wasActive === null || orbit.wasHidden;
+    orbit.wasHidden = false;
+    // A flight starts from where each dot is now (a reversal mid-way does not jump).
+    const fromHere = () => orbit.dots.forEach(d => { d.from = d.x != null ? [d.x, d.y, d.op] : null; });
+    // A queue: the dots nearest the Peers side (left; top on the phone) move first.
+    const queue = () => {
+      const key = d => d.x == null ? 0 : geo.vertical ? d.y : d.x;
+      const order = [...orbit.dots].sort((p, q) => key(p) - key(q));
+      order.forEach((d, r) => { d.lag = order.length > 1 ? r / (order.length - 1) * 0.4 : 0; });
+    };
+    if (active) {
+      if (wasActive === false && !instant && orbit.mode !== 'off') { fromHere(); queue(); orbit.mode = 'to-graph'; orbit.t0 = performance.now(); }
+      else if (orbit.mode !== 'to-graph') { orbit.mode = 'off'; orbit.back.hidden = orbit.front.hidden = true; }
+    } else {
+      orbit.count = transport ? transport.tcp + transport.utp : null;
+      orbitDots(orbit.count);
+      if (!showTrack(orbit.count)) { orbit.mode = 'off'; return; }
+      if (wasActive === true && !instant) {
+        // Coming back from the graph the dots are the peers already on screen: no fade-in.
+        orbit.dots.forEach(d => { d.born = 0; d.from = orbit.mode === 'to-graph' && d.x != null ? [d.x, d.y, d.op] : null; });
+        queue();
+        orbit.mode = 'to-ring'; orbit.t0 = performance.now();
+      } else if (orbit.mode !== 'to-ring') orbit.mode = 'idle';
+    }
+    orbitStart();
+  }
+  // The peer count changes with the metrics poll; the graph signature leaves it out (a change would
+  // cross-fade the whole graph), so the ring follows it here.
+  function orbitRecount() {
+    if (orbit.active !== false || !orbit.front) return;
+    const n = transport ? transport.tcp + transport.utp : null;
+    if (n === orbit.count) return;
+    orbit.count = n;
+    orbitDots(n);
+    if (!showTrack(n)) { orbit.mode = 'off'; return; }
+    if (orbit.mode === 'off') orbit.mode = 'idle';
+    orbitStart();
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) orbitStart(); });
+
   window.Swarm = {
     mount(node) {
       host = node;
       host.classList.add('sw-host');
       fetchMetrics().then(() => draw());
       fetchExtras().then(() => draw());
-      setInterval(() => { if (!host.hidden) fetchMetrics().then(() => draw()); }, 5000);
+      setInterval(() => { if (!host.hidden) fetchMetrics().then(() => { draw(); orbitRecount(); }); }, 5000);
       setInterval(() => { if (!host.hidden) fetchExtras().then(() => draw()); }, 15000);
     },
     update(d) { data = d; draw(); },
