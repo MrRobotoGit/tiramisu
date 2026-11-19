@@ -17,6 +17,10 @@ on:
         description: "Publish the image after the smoke test"
         type: boolean
         default: false
+      export_arm64:
+        description: "Attach the arm64 image as an artifact, to try it on a Pi before a release"
+        type: boolean
+        default: false
 
 # Grant permissions to GitHub Token for package management
 permissions:
@@ -353,6 +357,28 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ github.workflow }}
           provenance: true
           sbom: true
+
+      # Same build args as above, so the arm64 layers come from the cache.
+      - name: Export the arm64 image
+        if: github.event_name == 'workflow_dispatch' && inputs.export_arm64
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          platforms: linux/arm64
+          outputs: type=docker,dest=${{ runner.temp }}/tiramisu-arm64.tar
+          tags: tiramisu:arm64-test
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ github.workflow }}
+
+      - name: Upload the arm64 image
+        if: github.event_name == 'workflow_dispatch' && inputs.export_arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiramisu-arm64-image
+          path: ${{ runner.temp }}/tiramisu-arm64.tar
+          retention-days: 3
 
       - name: Update Docker Hub description
         if: github.event_name != 'workflow_dispatch' || inputs.push
