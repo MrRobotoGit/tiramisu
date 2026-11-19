@@ -7,7 +7,8 @@ name: Docker Publish
 
 on:
   push:
-    tags: [ 'v*.*.*' ]
+    # Pre-release tags (v1.2.3-rc1) publish no image.
+    tags: [ 'v*.*.*', '!v*.*.*-*' ]
   workflow_dispatch:
     inputs:
       # Manual runs default to a dry-run: the smoke test is exercised and the
