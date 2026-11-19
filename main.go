@@ -2223,8 +2223,8 @@ func pieceMapFor(hash string) *piecemap.Map {
 	}
 	var file *torrent.File
 	files := tr.Torrent.Files()
-	if i := h.fileID - 1; i >= 0 && i < len(files) && files[i].Length() == h.size {
-		file = files[i]
+	if f := tr.FileByID(h.fileID); f != nil && f.Length() == h.size {
+		file = f
 	} else {
 		for _, f := range files {
 			if f.Length() == h.size {
@@ -2676,7 +2676,7 @@ func forceTorrentWarmupActive(hash string, fileID int) {
 		return
 	}
 	if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
-		tr.Torrent.SetWarmupActive(true, fileID)
+		tr.Torrent.SetWarmupActive(true, tr.EngineFileIndex(fileID))
 	}
 }
 
@@ -5049,7 +5049,7 @@ func main() {
 	// returns immediately (see OnWarmupStateChange doc comment in internal/warmup/warmup.go).
 	warmup.OnWarmupStateChange = func(hash string, fileID int, active bool) {
 		if tr := torr.PeekTorrent(hash); tr != nil && tr.Torrent != nil {
-			tr.Torrent.SetWarmupActive(active, fileID)
+			tr.Torrent.SetWarmupActive(active, tr.EngineFileIndex(fileID))
 		}
 	}
 	// Lets the warmup package pull the tail window itself (EnsureTail); it cannot import

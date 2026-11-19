@@ -324,6 +324,37 @@ func (t *Torrent) Files() []*torrent.File {
 	return nil
 }
 
+// sortedFiles returns a copy of files in GoStorm ID order (ID = position + 1). The engine's
+// slice must not be sorted in place: every piece's file list is a sub-slice of it.
+func sortedFiles(files []*torrent.File) []*torrent.File {
+	out := append([]*torrent.File(nil), files...)
+	sort.Slice(out, func(i, j int) bool {
+		return utils2.CompareStrings(out[i].Path(), out[j].Path())
+	})
+	return out
+}
+
+// FileByID returns the file with the given GoStorm ID (1-based, path order), or nil.
+func (t *Torrent) FileByID(id int) *torrent.File {
+	files := sortedFiles(t.Files())
+	if id < 1 || id > len(files) {
+		return nil
+	}
+	return files[id-1]
+}
+
+// EngineFileIndex converts a GoStorm file ID into the file's index in the engine's Files(),
+// which is offset order; -1 when the file is unknown.
+func (t *Torrent) EngineFileIndex(id int) int {
+	f := t.FileByID(id)
+	for i, ef := range t.Files() {
+		if f != nil && ef == f {
+			return i
+		}
+	}
+	return -1
+}
+
 func (t *Torrent) Hash() metainfo.Hash {
 	if t.Torrent != nil {
 		return t.Torrent.InfoHash()
@@ -460,11 +491,7 @@ func (t *Torrent) Status() *state.TorrentStatus {
 
 	if t.Torrent != nil && t.Torrent.Info() != nil {
 		if t.cachedFileStats == nil {
-			files := t.Files()
-			sort.Slice(files, func(i, j int) bool {
-				return utils2.CompareStrings(files[i].Path(), files[j].Path())
-			})
-			for i, f := range files {
+			for i, f := range sortedFiles(t.Files()) {
 				t.cachedFileStats = append(t.cachedFileStats, &state.TorrentFileStat{
 					Id:     i + 1, // in web id 0 is undefined
 					Path:   f.Path(),

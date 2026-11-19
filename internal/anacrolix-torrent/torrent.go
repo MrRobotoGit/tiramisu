@@ -1008,8 +1008,9 @@ func (t *Torrent) numPiecesCompleted() (num pieceIndex) {
 
 // SetWarmupActive is called by the GoStorm layer (which owns DiskWarmup state) to signal
 // whether this torrent currently has an in-flight warmup fetch, gating aggressive PEX churn.
-func (t *Torrent) SetWarmupActive(active bool, fileID int) {
-	t.warmupFileID.Store(int64(fileID))
+// fileIndex is the 0-based index into Files() (offset order), not GoStorm's sorted file ID.
+func (t *Torrent) SetWarmupActive(active bool, fileIndex int) {
+	t.warmupFileID.Store(int64(fileIndex))
 	t.warmupActive.Store(active)
 	// SetWarmupActive(true) is called repeatedly (once per WriteChunk) while warmup is in
 	// flight - only spawn one watchdog per cycle. CompareAndSwap ensures a second call while one
