@@ -166,6 +166,9 @@ jobs:
             echo "::error::GET /api/config does not redact secrets"; exit 1; }
           tok=$(curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"ci","scope":"api"}' "$base/api/auth/tokens" | jq -r .token)
           case "$tok" in tmr_*) ;; *) echo "::error::no token created"; exit 1 ;; esac
+          # Sign-in stays on for the rest of the job: later steps call the API with it.
+          echo "::add-mask::$tok"
+          echo "CI_API_TOKEN=$tok" >> "$GITHUB_ENV"
           mcptok=$(curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"ci-mcp"}' "$base/api/auth/tokens" | jq -r .token)
           case "$mcptok" in tmr_*) ;; *) echo "::error::no MCP token created"; exit 1 ;; esac
           curl -fsS -X POST -H 'Content-Type: application/json' \
@@ -292,10 +295,10 @@ jobs:
           before=$(q "SELECT COUNT(*) FROM config_versions;")
           docker start tiramisu-smoke >/dev/null
           for _ in $(seq 1 60); do
-            curl -fsS --max-time 2 http://127.0.0.1:9080/metrics >/dev/null 2>&1 && break
+            curl -fsS --max-time 2 -H "Authorization: Bearer $CI_API_TOKEN" http://127.0.0.1:9080/metrics >/dev/null 2>&1 && break
             sleep 1
           done
-          src=$(curl -fsS --max-time 10 http://127.0.0.1:9080/metrics | jq -r '.config_source')
+          src=$(curl -fsS --max-time 10 -H "Authorization: Bearer $CI_API_TOKEN" http://127.0.0.1:9080/metrics | jq -r '.config_source')
           echo "config_source: $src"
           case "$src" in *tiramisu.db#*) ;; *) echo "::error::config_source is '$src'"; exit 1 ;; esac
           after=$(q "SELECT COUNT(*) FROM config_versions;")
