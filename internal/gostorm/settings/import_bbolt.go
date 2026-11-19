@@ -148,6 +148,7 @@ func copyBBolt(db *metadb.DB, src, stamp string) (res importResult, err error) {
 		return importResult{}, fmt.Errorf("torrents: %w", err)
 	}
 
+	invalidateAllTorrents()
 	// The import leaves a WAL the size of the data; fold it back before the engine starts.
 	if err := db.Checkpoint(); err != nil {
 		log.TLogln("[GoStormDB] WARN checkpoint after import:", err)

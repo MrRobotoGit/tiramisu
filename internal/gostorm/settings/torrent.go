@@ -75,6 +75,14 @@ func AddTorrent(torr *TorrentDB) {
 	invalidateTorrent(row.Hash)
 }
 
+// invalidateAllTorrents drops every cached record and miss, after a bulk write (the import).
+func invalidateAllTorrents() {
+	torrentCacheMu.Lock()
+	torrentCache = newDataLRU(DataCacheLimit)
+	torrentCacheGen++
+	torrentCacheMu.Unlock()
+}
+
 // invalidateTorrent runs after a write: dropping the entry before it would let a concurrent
 // GetTorrent re-cache the row it read earlier. The generation stops that put.
 func invalidateTorrent(hash string) {

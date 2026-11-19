@@ -18,6 +18,7 @@ type Logger interface {
 // DB wraps a SQLite database connection for tiramisu state persistence.
 type DB struct {
 	db       *sql.DB
+	ro       *sql.DB // read-only pool for hot reads; nil falls back to db
 	path     string
 	logger   Logger
 	readOnly bool // from OpenReadOnly: SELECT only, no checkpoint on close
@@ -57,23 +58,70 @@ func New(dbPath string, logger Logger) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("metadb: schema: %w", err)
 	}
+	db.openReaders()
 
 	return db, nil
+}
+
+// readConns is the size of the read pool: WAL lets readers run beside the one writer.
+const readConns = 4
+
+// openReaders opens the read-only pool. Without it every read waits behind the writer, as
+// before, so a failure only logs.
+func (d *DB) openReaders() {
+	ro, err := sql.Open("sqlite", d.path+"?"+roPoolPragmas)
+	if err == nil {
+		err = ro.Ping()
+	}
+	if err != nil {
+		if ro != nil {
+			ro.Close()
+		}
+		if d.logger != nil {
+			d.logger.Printf("[StateDB] WARN read pool unavailable, reads share the writer: %v", err)
+		}
+		return
+	}
+	ro.SetMaxOpenConns(readConns)
+	ro.SetMaxIdleConns(readConns)
+	d.ro = ro
+}
+
+// reader is the pool for reads that must not wait behind a write transaction.
+func (d *DB) reader() *sql.DB {
+	if d.ro != nil {
+		return d.ro
+	}
+	return d.db
 }
 
 // Close performs a WAL checkpoint and closes the database connection. A handle from
 // OpenReadOnly only closes: the checkpoint belongs to the engine that owns the DB.
 func (d *DB) Close() error {
+	if d.ro != nil {
+		d.ro.Close() // a TRUNCATE checkpoint needs no open readers
+	}
 	if !d.readOnly {
 		_, _ = d.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	}
 	return d.db.Close()
 }
 
-// Checkpoint folds the WAL back into the DB and truncates it.
+// walSizeLimit is the WAL size kept after a checkpoint: readers on the pool can stop the
+// WAL from restarting, and without a limit the file stays at its peak until restart.
+const walSizeLimit = 64 << 20
+
+// Checkpoint folds the WAL back into the DB and truncates it. A reader still on the WAL
+// makes it busy: that is reported, since the result row, not the error, carries it.
 func (d *DB) Checkpoint() error {
-	_, err := d.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-	return err
+	var busy, logFrames, done int
+	if err := d.db.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &done); err != nil {
+		return err
+	}
+	if busy != 0 {
+		return fmt.Errorf("metadb: checkpoint incomplete, a reader holds the WAL (%d of %d frames)", done, logFrames)
+	}
+	return nil
 }
 
 // Path is the DB file.
@@ -133,8 +181,11 @@ func (d *DB) SQL() *sql.DB {
 // Pragmas go in the DSN so the driver applies them to every connection it opens: set with
 // Exec they held only on the first one, and a reopened connection silently lost them.
 const (
-	rwPragmas = "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	rwPragmas = "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)" +
+		"&_pragma=journal_size_limit(67108864)"
 	roPragmas = "_pragma=busy_timeout(5000)"
+	// The read pool: query_only makes any write on it fail, so the writer stays the only one.
+	roPoolPragmas = "_pragma=busy_timeout(5000)&_pragma=query_only(1)"
 )
 
 // applyPragmas opens the first connection, so a pragma that fails is reported by New.

@@ -73,7 +73,7 @@ func (d *DB) PutGoStormTorrent(t GoStormTorrent) error {
 func (d *DB) GetGoStormTorrent(hash string) (*GoStormTorrent, error) {
 	var t GoStormTorrent
 	var spec string
-	err := d.db.QueryRow(`SELECT `+torrentColumns+` FROM gostorm_torrents WHERE hash = ?`, hash).
+	err := d.reader().QueryRow(`SELECT `+torrentColumns+` FROM gostorm_torrents WHERE hash = ?`, hash).
 		Scan(&t.Hash, &t.Title, &t.Category, &t.Poster, &t.Data, &t.Timestamp, &t.Size, &spec, &t.InfoBytes)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -90,7 +90,7 @@ func (d *DB) GetGoStormTorrent(hash string) (*GoStormTorrent, error) {
 
 // ListGoStormTorrents returns every torrent, newest first, without the metainfo.
 func (d *DB) ListGoStormTorrents() ([]GoStormTorrent, error) {
-	rows, err := d.db.Query(`SELECT hash, title, category, poster, data, timestamp, size, spec
+	rows, err := d.reader().Query(`SELECT hash, title, category, poster, data, timestamp, size, spec
 		FROM gostorm_torrents ORDER BY timestamp DESC, hash`)
 	if err != nil {
 		return nil, err
