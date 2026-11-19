@@ -26,6 +26,7 @@ type torrReqJS struct {
 	Poster   string `json:"poster,omitempty"`
 	Data     string `json:"data,omitempty"`
 	SaveToDB bool   `json:"save_to_db,omitempty"`
+	Save     bool   `json:"save,omitempty"` // same flag as /torrent/upload; older clients sent it here
 }
 
 // torrents godoc
@@ -150,7 +151,7 @@ func addTorrent(req torrReqJS, c *gin.Context) {
 			}
 		}
 
-		if req.SaveToDB {
+		if req.SaveToDB || req.Save {
 			torr.SaveTorrentToDB(tor)
 		}
 	}()

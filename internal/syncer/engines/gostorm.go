@@ -69,10 +69,10 @@ func (c *GoStormClient) AddTorrentConfirmed(ctx context.Context, magnet, title s
 	hash := strings.ToLower(match[1])
 
 	body := map[string]interface{}{
-		"action": "add",
-		"link":   magnet,
-		"title":  title,
-		"save":   true,
+		"action":     "add",
+		"link":       magnet,
+		"title":      title,
+		"save_to_db": true,
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
