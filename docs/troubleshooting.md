@@ -156,6 +156,19 @@ stays closed instead of opening up. Restore the database, or reset as above.
 </details>
 
 <details>
+<summary><b>Tiramisu stops at start with "GoStorm: importing config.db"</b></summary>
+
+Up to v1.11.17 GoStorm kept the torrent list in `config.db` (BBolt). The first start
+of a newer version imports it into `STATE/tiramisu.db`, and stops if it cannot: starting
+anyway would mean an empty torrent list and default GoStorm settings. `config.db` is left
+untouched, so nothing is lost. The log line says why (an unreadable or truncated file, a
+full disk). Free space or restore a good copy of `config.db`, then start again; a later
+start retries and never overwrites rows already imported. To go back instead, start the
+previous version: it still reads `config.db`.
+
+</details>
+
+<details>
 <summary><b>Scripts or tools get 401, or cannot reach <code>:8090</code></b></summary>
 
 With sign-in on, every call to `:9080` needs an API token
@@ -203,7 +216,7 @@ Paths below use the defaults set by `install.sh`. All are configurable during in
 | Path | Purpose |
 |------|---------|
 | `~/Tiramisu/tiramisu` | Production binary |
-| `~/Tiramisu/STATE/tiramisu.db` | SQLite state database: the configuration and its history, inode map, sync caches, episode registry, scheduler state, sign-in |
+| `~/Tiramisu/STATE/tiramisu.db` | SQLite state database: the configuration and its history, GoStorm torrent list and settings, inode map, sync caches, episode registry, scheduler state, sign-in |
 | `~/Tiramisu/STATE/config.last.json` | Copy of the configuration, rewritten at every save: the way back if the database cannot be opened |
 | `~/Tiramisu/config.json.imported-*` | A `config.json` already imported, kept as it was |
 | `~/Tiramisu/logs/` | All service logs (`tiramisu.log`, `movies-sync.log`, `tv-sync.log`, `watchlist-sync.log`) |

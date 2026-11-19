@@ -231,8 +231,9 @@ subprocess to babysit.
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
 **Minimum seeders**: 15, for the main sync and the watchlist alike (the watchlist uses the movie profile)
 
-Everything the engine needs to remember, the episode registry, the negative
-caches and the scheduler state, is persisted in `STATE/tiramisu.db` (SQLite).
+Everything the engine needs to remember, the GoStorm torrent list, the episode
+registry, the negative caches and the scheduler state, is persisted in
+`STATE/tiramisu.db` (SQLite).
 The built-in scheduler replaces system cron, and it is configured from the
 Control Panel.
 
