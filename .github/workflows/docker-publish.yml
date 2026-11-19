@@ -86,6 +86,9 @@ jobs:
           # imported on the first start and renamed; no /config.json mount is
           # needed. Both are asserted below.
           cp config.json.example "$GITHUB_WORKSPACE/ci-state/config.json"
+          # An upgrade from v1.11.17 or earlier: GoStorm's BBolt store, 2 torrents and
+          # settings with ConnectionsLimit 31, imported into tiramisu.db on the first start.
+          cp .github/ci/config.db "$GITHUB_WORKSPACE/ci-state/config.db"
           # /state is bind-mounted on purpose: the entrypoint warns when it is
           # not, and that warning is one of the things asserted below.
           docker run -d --name tiramisu-smoke \
@@ -209,10 +212,30 @@ jobs:
           ver=$(sudo sqlite3 -cmd '.timeout 5000' "$db" 'SELECT COALESCE(MAX(version), 0) FROM schema_version;')
           echo "schema version: $ver"
           [ "$ver" -gt 0 ] || { echo "::error::the schema migration did not run"; exit 1; }
-          for t in tv_episodes metadata_failures episode_gaps inodes auth_user auth_sessions auth_tokens; do
+          for t in tv_episodes metadata_failures episode_gaps inodes auth_user auth_sessions auth_tokens \
+                   gostorm_torrents gostorm_kv gostorm_settings_versions; do
             sudo sqlite3 -cmd '.timeout 5000' "$db" "SELECT 1 FROM sqlite_master WHERE type='table' AND name='$t';" \
               | grep -q 1 || { echo "::error::table $t is missing"; exit 1; }
           done
+
+      - name: Check the BBolt config.db was imported
+        run: |
+          set -eu
+          st="$GITHUB_WORKSPACE/ci-state"
+          q() { sudo sqlite3 -cmd '.timeout 5000' "$st/STATE/tiramisu.db" "$1"; }
+          docker logs tiramisu-smoke 2>&1 | grep -q 'config.db imported: 2 torrents, 0 already present, 0 unreadable, 1 settings' || {
+            echo "::error::the config.db import did not run or did not import everything"
+            docker logs tiramisu-smoke 2>&1 | grep -i gostormdb || true
+            exit 1
+          }
+          [ ! -e "$st/config.db" ] || { echo "::error::config.db was not renamed after the import"; exit 1; }
+          ls "$st"/config.db.migrated-* >/dev/null || { echo "::error::no config.db.migrated-* file"; exit 1; }
+          n=$(q 'SELECT COUNT(*) FROM gostorm_torrents;')
+          [ "$n" = 2 ] || { echo "::error::$n torrents in gostorm_torrents, want 2"; exit 1; }
+          q "SELECT value FROM gostorm_kv WHERE xpath='Settings' AND name='BitTorr';" | grep -q '"ConnectionsLimit":31' || {
+            echo "::error::the imported GoStorm settings are not in use"; exit 1; }
+          v=$(q 'SELECT COUNT(*) FROM gostorm_settings_versions;')
+          [ "$v" -ge 1 ] || { echo "::error::no Engine settings baseline version"; exit 1; }
 
       # Nothing above proves the process is stable rather than merely reachable
       # once: a crash loop answers too, between restarts.
