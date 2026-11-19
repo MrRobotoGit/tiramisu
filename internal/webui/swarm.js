@@ -160,14 +160,21 @@
   const reducedMotion = () => motionQuery.matches;
   motionQuery.addEventListener('change', () => { if (host) draw(true); });
 
-  function signature() {
-    const t = (data.torrents || []).filter(x => x.status !== 'idle')
-      .map(x => [x.hash.slice(0, 8), x.speed_mbs.toFixed(1), (x.up_mbs || 0).toFixed(2), x.peers, x.seeders, x.half_open, x.is_priority,
-        (x.peer_rates || []).map(p => p.id + Math.round(Math.log2(1 + p.kbps)) + '/' + Math.round(Math.log2(1 + (p.up_kbps || 0)))).sort().join(',')].join(':')).join('|');
-    const sh = shieldState(data.shield, Date.now());
-    return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (data.health || {}).v304_banned_peers,
-      (data.health || {}).cache_hit_rate_pct, Math.round((data.health || {}).fuse_active_pct || 0),
-      Math.round((data.health || {}).fuse_stale_pct || 0), transport && transport.utp, clients && JSON.stringify([...clients].map(([k, c]) => [k, c.label, c.state, c.state === 'paused' ? c.pos : 0])), reducedMotion(),
+  // speeds=false keeps only what changes the drawing's shape (which elements exist, in which
+  // order): two polls that differ in speeds alone can be eased into each other.
+  function signature(d = data, speeds = true) {
+    const act = (d.torrents || []).filter(x => x.status !== 'idle');
+    const order = speeds ? '' : act.slice().sort((a, b) => b.speed_mbs - a.speed_mbs).slice(0, 4).map(x => x.hash.slice(0, 8)).join(',');
+    const t = act
+      .map(x => [x.hash.slice(0, 8), speeds ? x.speed_mbs.toFixed(1) : x.speed_mbs > 0.01, speeds ? (x.up_mbs || 0).toFixed(2) : (x.up_mbs || 0) * 8 >= 0.05,
+        x.peers, x.seeders, x.half_open, x.is_priority,
+        (speeds ? (x.peer_rates || []) : (x.peer_rates || []).slice(0, MAX_PEERS)).map(p => p.id + (speeds ? Math.round(Math.log2(1 + p.kbps)) + '/' + Math.round(Math.log2(1 + (p.up_kbps || 0)))
+          : (p.kbps >= 0.5 ? '+' : '-') + ((p.up_kbps || 0) >= 0.5 ? '+' : '-'))).sort().join(',')].join(':')).join('|') + '>' + order;
+    const sh = shieldState(d.shield, Date.now());
+    return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (d.health || {}).v304_banned_peers,
+      // Readings that move on every poll: a change shows in the next frame, it is not a change of shape.
+      speeds ? (d.health || {}).cache_hit_rate_pct : '', speeds ? Math.round((d.health || {}).fuse_active_pct || 0) : '',
+      speeds ? Math.round((d.health || {}).fuse_stale_pct || 0) : '', transport && transport.utp, clients && JSON.stringify([...clients].map(([k, c]) => [k, c.label, c.state, c.state === 'paused' ? c.pos : 0])), reducedMotion(),
       focusKey, recent.length && recent[0].started_at,
       scan && scan.active ? [scan.label, scan.files_per_min, scan.files_read,
         Object.entries(scan.torrents || {}).map(([h, a]) => h.slice(0, 8) + Math.floor(a / 10)).sort().join(',')].join(':') : ''].join('#');
@@ -184,7 +191,22 @@
     return Math.round(Math.max(400, Math.min(620, avail)));
   }
 
-  function draw(force) {
+  // Dash phase per flow, carried across rebuilds: a new speed continues the motion from where it
+  // is, where the clock's phase for the new duration would jump.
+  const phases = new Map();
+  function flowDelay(key, dur, now, seed) {
+    const prev = phases.get(key);
+    const pos = prev && now - prev.at < 60000 ? (prev.pos + (now - prev.at) / (prev.dur * 1000)) % 1
+      : ((now / 1000 + seed * dur) % dur) / dur;
+    phases.set(key, { pos, at: now, dur });
+    return `${-(pos * dur).toFixed(3)}s`;
+  }
+  function prunePhases(now) { phases.forEach((v, k) => { if (now - v.at > 60000) phases.delete(k); }); }
+
+  // What the labels say: the engine's numbers, also while a tween eases the drawing.
+  const realS = t => t.real ? t.real.s : t.speed_mbs, realU = t => t.real ? t.real.u : (t.up_mbs || 0);
+
+  function draw(force, tween) {
     if (host && host.hidden) orbit.wasHidden = true;   // what changed meanwhile is old news: no flight
     if (!host || host.hidden || !data) return;
     curKey = null;
@@ -198,7 +220,7 @@
     // Cross-fade: the previous drawing fades out on top while the new one fades in, instead of a cut.
     // Only data updates fade; forced redraws (resize, theme, motion setting) and height changes cut.
     const prevSvg = [...host.children].find(n => n.tagName.toLowerCase() === 'svg' && !n.classList.contains('sw-old'));
-    const fade = !force && !reducedMotion() && prevSvg && prevSvg.getAttribute('height') == H;
+    const fade = !force && !tween && !reducedMotion() && prevSvg && prevSvg.getAttribute('height') == H;
     [...host.children].filter(n => n.tagName.toLowerCase() === 'svg').forEach(n => {
       if (!fade || n.classList.contains('sw-old')) { n.remove(); return; }
       n.classList.remove('sw-new');
@@ -216,6 +238,7 @@
     host.insertBefore(svg, ui);
     if (focusKey && !torrents.some(t => t.hash === focusKey) && !String(focusKey).startsWith('dev:')) focusKey = null;
     const now = Date.now();
+    prunePhases(now);
     const sh = shieldState(data.shield, now);
     const h = data.health || {};
 
@@ -276,7 +299,8 @@
       // Peers. With per-peer rates from the engine each node is a real peer (stable id, real
       // seeder flag, its own rate); without them (older engine) nodes are numbered slots.
       const rates = Array.isArray(t.peer_rates) ? t.peer_rates.slice(0, MAX_PEERS) : null;
-      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps, utp: !!p.utp, up: p.up_kbps || 0, cc: p.cc || '', asn: p.asn || 0, org: p.org || '' }))
+      const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps, utp: !!p.utp, up: p.up_kbps || 0, cc: p.cc || '', asn: p.asn || 0, org: p.org || '',
+        lk: p.real_kbps ?? p.kbps, lu: p.real_up ?? (p.up_kbps || 0) }))
         : Array.from({ length: n }, (_, k) => ({ key: String(k), seed: k < seeds, kbps: null, utp: null }));
       // Track arrivals and departures between polls, by key.
       let L = life.get(t.hash);
@@ -309,14 +333,14 @@
           const dur = p.kbps == null ? 2.6 : flowDur(p.kbps);
           // Two animations may run on a newborn flow (dash + fade-in): keep the fade-in at 0.9 s.
           fl.style.animationDuration = `${dur.toFixed(2)}s, ${BORN_MS / 1000}s`;
-          fl.style.animationDelay = `${-((now / 1000 + rng(t.hash + ':f' + p.key)() * dur) % dur).toFixed(2)}s`;
+          fl.style.animationDelay = flowDelay(t.hash + ':f' + p.key, dur, now, rng(t.hash + ':f' + p.key)());
         }
         // Upload: blue segments running back along the same line, from the torrent to the peer.
         if (p.up >= 0.5) {
           const ue = el('path', { d: curve(pp, tp), class: 'sw-up-edge' }, edgeLayer);
           const uf = el('path', { d: curve(pp, tp), class: 'sw-up-flow', pathLength: 100 }, edgeLayer);
           const ud = flowDur(p.up);
-          const run = `${-((now / 1000 + rng(t.hash + ':up' + p.key)() * ud) % ud).toFixed(2)}s`;
+          const run = flowDelay(t.hash + ':up' + p.key, ud, now, rng(t.hash + ':up' + p.key)());
           uf.style.animationDuration = `${ud.toFixed(2)}s`;
           uf.style.animationDelay = run;
           // A newborn peer's upload fades in with it, like its download line.
@@ -336,8 +360,8 @@
             title: countryName(p.cc) || 'Peer',
             sub: p.org ? p.org + (p.asn ? ` · AS${p.asn}` : '') : '',
           }, [
-            ['Download', mbps(p.kbps / 1024)],
-            ['Upload', p.up > 0 ? mbps(p.up / 1024) : '—'],
+            ['Download', mbps(p.lk / 1024)],
+            ['Upload', p.lu > 0 ? mbps(p.lu / 1024) : '—'],
             ['Role', p.seed ? 'seeder' : 'leecher'],
             ['Transport', p.utp ? 'uTP' : 'TCP'],
           ], { rect: hit.getBoundingClientRect(), node: hit }));
@@ -529,8 +553,8 @@
       const p = el('path', { d, class: cls, 'stroke-width': w, pathLength: 100 }, flowLayer);
       if (dur) {
         p.style.animationDuration = dur + 's';
-        // Phase from the clock, so a rebuild continues the motion instead of restarting it.
-        p.style.animationDelay = `${-((now / 1000) % dur).toFixed(2)}s`;
+        // Phase carried across rebuilds, so the motion continues instead of restarting.
+        p.style.animationDelay = flowDelay(cls + ':' + curKey, dur, now, 0);
       }
       return p;
     };
@@ -585,7 +609,7 @@
         const r = g.querySelector('circle, rect').getBoundingClientRect();
         details(`${hidden.length} more active torrent${hidden.length > 1 ? 's' : ''}`,
           hidden.map(t => [short(t.clean_title || t.title || t.hash.slice(0, 8), 30),
-            t.speed_mbs > 0.01 ? `${mbps(t.speed_mbs)} · ${t.peers} peer${t.peers === 1 ? '' : 's'}` : 'warming up']),
+            t.speed_mbs > 0.01 ? `${mbps(realS(t))} · ${t.peers} peer${t.peers === 1 ? '' : 's'}` : 'warming up']),
           { rect: r, node: g });
       });
     }
@@ -611,10 +635,10 @@
       el('circle', { cx: p.tp[0], cy: p.tp[1], r: rad, class: p.live ? 'sw-torrent' : 'sw-torrent idle' }, nodeLayer).style.pointerEvents = 'none';
       const name = short(t.clean_title || t.title || t.hash.slice(0, 8), vertical ? (torrents.length > 3 ? 9 : 12) : 24);
       const hiddenPeers = Math.max(0, (t.peers || 0) - p.shown), hiddenPend = Math.max(0, (t.half_open || 0) - p.pendShown);
-      const sub = (p.live ? `↓ ${mbps(t.speed_mbs)} · ${t.peers} peers` : `idle · ${t.peers} peers`);
+      const sub = (p.live ? `↓ ${mbps(realS(t))} · ${t.peers} peers` : `idle · ${t.peers} peers`);
       // Upload line, only while this torrent sends: rate and how many peers receive it.
       const upPeers = (t.peer_rates || []).filter(x => (x.up_kbps || 0) >= 0.5).length;
-      const upLine = (t.up_mbs || 0) * 8 >= 0.05 ? `↑ ${mbps(t.up_mbs)} · ${upPeers} peer${upPeers === 1 ? '' : 's'}` : '';
+      const upLine = (t.up_mbs || 0) * 8 >= 0.05 ? `↑ ${mbps(realU(t))} · ${upPeers} peer${upPeers === 1 ? '' : 's'}` : '';
       // Third line, only when something is left out: the graph never passes a sample for the whole.
       // Woken by a library scan, not by a player: a dashed ring and a "scan" note.
       const scanAgo = scan && scan.active && !(clients && clients.get(t.hash)) && scan.torrents ? scan.torrents[t.hash] : undefined;
@@ -624,8 +648,8 @@
         .filter(Boolean).join(' · ');
       if (vertical) {
         txt(nodeLayer, p.tp[0], p.tp[1] + rad + 14, name, 'sw-name', 'middle');
-        txt(nodeLayer, p.tp[0], p.tp[1] + rad + 26, (p.live ? '↓ ' + mbps(t.speed_mbs) : 'idle') + (hiddenPeers ? ` · ${p.shown}/${t.peers}` : ''), 'sw-sub', 'middle');
-        if (upLine) txt(nodeLayer, p.tp[0], p.tp[1] + rad + 38, '↑ ' + mbps(t.up_mbs), 'sw-sub up', 'middle');
+        txt(nodeLayer, p.tp[0], p.tp[1] + rad + 26, (p.live ? '↓ ' + mbps(realS(t)) : 'idle') + (hiddenPeers ? ` · ${p.shown}/${t.peers}` : ''), 'sw-sub', 'middle');
+        if (upLine) txt(nodeLayer, p.tp[0], p.tp[1] + rad + 38, '↑ ' + mbps(realU(t)), 'sw-sub up', 'middle');
         else if (scanAgo !== undefined) txt(nodeLayer, p.tp[0], p.tp[1] + rad + 38, 'scan', 'sw-sub dim', 'middle');
       } else {
         const below = i > 0 && i === pipes.length - 1;
@@ -682,7 +706,7 @@
         const bar = document.createElement('div');
         bar.className = vertical ? 'sw-focusbar' : 'sw-chip';
         bar.innerHTML = vertical
-          ? `<span>${esc(label.join(' → '))}${t && t.speed_mbs > 0.01 ? ' · ' + mbps(t.speed_mbs) : ''}</span><button type="button" aria-label="Show all streams">✕</button>`
+          ? `<span>${esc(label.join(' → '))}${t && t.speed_mbs > 0.01 ? ' · ' + mbps(realS(t)) : ''}</span><button type="button" aria-label="Show all streams">✕</button>`
           : `<b>${esc(label[0] || '')}</b><span>${label[1] ? ' · ' + esc(label[1]) : ''}</span><button type="button" class="sw-showall">Show all ✕</button>`;
         bar.onclick = () => toggleFocus(focusKey);
         ui.appendChild(bar);
@@ -951,16 +975,54 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) orbitStart(); });
 
+  // Polls come every 5 s. When one changes speeds alone, the graph eases from what is on screen
+  // to it over TWEEN_MS, in cut redraws that keep every motion's phase; any change of shape
+  // cross-fades as before. The data stay the engine's: only the steps between are drawn.
+  const TWEEN_MS = 2000, TWEEN_STEP_MS = 250;
+  let onScreen = null, tweenTimer = null;
+  const lerp = (a, b, f) => (a == null || b == null) ? b : a + (b - a) * f;
+  function mixSpeeds(from, to, f) {
+    const byHash = new Map((from.torrents || []).map(t => [t.hash, t]));
+    return { ...to, torrents: (to.torrents || []).map(t => {
+      const o = byHash.get(t.hash);
+      if (!o) return t;
+      const ob = new Map((o.peer_rates || []).map(p => [p.id, p]));
+      // real: the engine's numbers, for the labels; only widths and durations are eased.
+      return { ...t, real: { s: t.speed_mbs, u: t.up_mbs || 0 }, speed_mbs: lerp(o.speed_mbs, t.speed_mbs, f), up_mbs: lerp(o.up_mbs || 0, t.up_mbs || 0, f),
+        peer_rates: t.peer_rates && t.peer_rates.map(p => {
+          const q = ob.get(p.id);
+          return q ? { ...p, real_kbps: p.kbps, real_up: p.up_kbps || 0, kbps: lerp(q.kbps, p.kbps, f), up_kbps: lerp(q.up_kbps || 0, p.up_kbps || 0, f) } : p;
+        }) };
+    }) };
+  }
+  function easeTo(d) {
+    clearInterval(tweenTimer); tweenTimer = null;
+    const from = onScreen;
+    if (!from || !host || host.hidden || reducedMotion() || signature(from, false) !== signature(d, false)) {
+      data = onScreen = d; draw(); return;
+    }
+    const t0 = Date.now();
+    const step = () => {
+      const f = Math.min(1, (Date.now() - t0) / TWEEN_MS);
+      data = onScreen = f < 1 ? mixSpeeds(from, d, 1 - (1 - f) * (1 - f)) : d;
+      draw(false, true);
+      if (f >= 1) { clearInterval(tweenTimer); tweenTimer = null; }
+    };
+    step();
+    tweenTimer = setInterval(step, TWEEN_STEP_MS);
+  }
+
   window.Swarm = {
     mount(node) {
       host = node;
       host.classList.add('sw-host');
       fetchMetrics().then(() => draw());
       fetchExtras().then(() => draw());
-      setInterval(() => { if (!host.hidden) fetchMetrics().then(() => { draw(); orbitRecount(); }); }, 5000);
-      setInterval(() => { if (!host.hidden) fetchExtras().then(() => draw()); }, 15000);
+      // Inside a tween these redraws cut like its frames: a cross-fade would be cut off halfway.
+      setInterval(() => { if (!host.hidden) fetchMetrics().then(() => { draw(false, !!tweenTimer); orbitRecount(); }); }, 5000);
+      setInterval(() => { if (!host.hidden) fetchExtras().then(() => draw(false, !!tweenTimer)); }, 15000);
     },
-    update(d) { data = d; draw(); },
+    update(d) { easeTo(d); },
     redraw: () => draw(true),
     details, closeDetails, closeOrphan, hoverable, mbps,
   };
