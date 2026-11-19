@@ -21,6 +21,7 @@ type WatchlistSyncer struct {
 type WatchlistSyncerConfig struct {
 	DB              *metadb.DB
 	AudioRegistry   library.AudioRegistry
+	Release         ReleaseFunc
 	GoStormURL      string
 	TMDBAPIKey      string
 	TorrentioURL    string
@@ -64,6 +65,7 @@ func NewWatchlistSyncer(cfg WatchlistSyncerConfig) *WatchlistSyncer {
 		Language:        cfg.Language,
 		DB:              cfg.DB,
 		AudioRegistry:   cfg.AudioRegistry,
+		Release:         cfg.Release,
 	}
 
 	return &WatchlistSyncer{

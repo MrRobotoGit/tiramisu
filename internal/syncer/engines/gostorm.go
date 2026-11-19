@@ -43,6 +43,9 @@ func NewGoStormClient(baseURL string) *GoStormClient {
 // library.GoStorm with no adapter.
 type TorrentStats = library.TorrentStats
 
+// TorrentRef is a torrent's hash and title, from the engine's light listing.
+type TorrentRef = library.TorrentRef
+
 type FileStat = library.FileStat
 
 // AddTorrent adds a magnet URL to GoStorm via POST /torrents {"action":"add"}
@@ -184,19 +187,37 @@ func (c *GoStormClient) RemoveTorrent(ctx context.Context, hash string) error {
 	return c.postTorrents(ctx, body)
 }
 
-// ListTorrents returns all active torrents.
-func (c *GoStormClient) ListTorrents(ctx context.Context) ([]TorrentStats, error) {
-	body := map[string]string{"action": "list"}
-	data, err := c.doTorrents(ctx, body, true)
+// ListTorrentRefs returns the hash and title of every torrent the engine holds, stored or
+// active. It is the light listing: the full one builds every torrent's status (seconds of
+// CPU and megabytes of JSON on a large library) for callers that need only the hashes.
+func (c *GoStormClient) ListTorrentRefs(ctx context.Context) ([]TorrentRef, error) {
+	data, err := c.doTorrents(ctx, map[string]string{"action": "hashes"}, true)
 	if err != nil {
 		return nil, err
 	}
-
-	var torrents []TorrentStats
-	if err := json.Unmarshal(data, &torrents); err != nil {
+	var refs []TorrentRef
+	if err := json.Unmarshal(data, &refs); err != nil {
 		return nil, err
 	}
-	return torrents, nil
+	return refs, nil
+}
+
+// ActiveHashes returns the torrents hydrated in memory: a sync re-using a stored torrent
+// has it here before its stub exists.
+func (c *GoStormClient) ActiveHashes(ctx context.Context) ([]string, error) {
+	data, err := c.doTorrents(ctx, map[string]string{"action": "active"}, true)
+	if err != nil {
+		return nil, err
+	}
+	var refs []TorrentRef
+	if err := json.Unmarshal(data, &refs); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, strings.ToLower(r.Hash))
+	}
+	return out, nil
 }
 
 func (c *GoStormClient) getTorrent(ctx context.Context, hash string) (*TorrentStats, error) {

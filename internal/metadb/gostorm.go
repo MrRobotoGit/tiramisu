@@ -110,9 +110,21 @@ func (d *DB) ListGoStormTorrents() ([]GoStormTorrent, error) {
 }
 
 // DeleteGoStormTorrent removes a torrent; absent is not an error.
+// DeleteGoStormTorrent removes a torrent and its metadata failure counter in one
+// transaction: a counter left behind would condemn the same release if it came back.
 func (d *DB) DeleteGoStormTorrent(hash string) error {
-	_, err := d.db.Exec(`DELETE FROM gostorm_torrents WHERE hash = ?`, hash)
-	return err
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM gostorm_torrents WHERE hash = ?`, hash); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM metadata_failures WHERE lower(hash) = lower(?)`, hash); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // GoStormKVGet returns nil when the key is absent.

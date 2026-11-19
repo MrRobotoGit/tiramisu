@@ -22,6 +22,10 @@
 .dash.net-view #p-torrents .card-body { flex-direction: row; align-items: center; gap: 40px; }
 .dash.net-view #p-torrents .card-body > hr { display: none; }
 .dash.net-view #p-torrents .card-body > * { flex: 1; }
+/* The library block keeps a row of its own under the counters and the buffer. */
+.dash.net-view #p-torrents .card-body { flex-wrap: wrap; row-gap: 20px; }
+.dash.net-view #p-torrents .card-body > #lib-hr { display: block; flex: 0 0 100%; }
+.dash.net-view #p-torrents .card-body > #lib { flex: 0 0 100%; }
 .dash .half-row { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 .dash .half-row > * { min-width: 0; }
 
@@ -117,6 +121,29 @@
 .job .t b { font-weight: 500; }
 .job .e { font-family: var(--mono); font-size: 11px; color: var(--accent-ink); overflow-wrap: anywhere; }
 
+/* Library consistency, in the Torrents card: lamp first, rows only for what is off. */
+.lib { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.lib-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lib-line .spacer { flex: 1; }
+.lib-line .st { font-weight: 500; font-size: 13px; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.lib-line .when { font-family: var(--mono); font-size: 11px; color: var(--ink3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-rows { display: flex; flex-direction: column; border-top: 1px solid var(--hair); }
+.lib-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: baseline; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--hair); font-size: 12px; }
+.lib-row .n { font-family: var(--mono); font-size: 12px; text-align: right; }
+.lib-row .n.zero { color: var(--ink3); }
+.lib-row .d { color: var(--ink2); min-width: 0; }
+.lib-row .d small { display: block; color: var(--ink3); font-family: var(--mono); font-size: 10px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-row.bad .n, .lib-row.bad .d { color: var(--accent-ink); }
+.lib-row button { padding: 0; }
+.lib-preview { display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--well); border-radius: 2px; }
+.lib-preview .h { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.lib-preview .h .spacer { flex: 1; }
+.lib-preview ul { margin: 0; padding: 0; list-style: none; font-family: var(--mono); font-size: 10.5px; color: var(--ink2); display: flex; flex-direction: column; gap: 3px; }
+.lib-preview li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-preview .acts { display: flex; gap: 8px; justify-content: flex-end; }
+.lib-preview .e { font-family: var(--mono); font-size: 11px; color: var(--accent-ink); overflow-wrap: anywhere; }
+.lib-preview .r { font-size: 12px; overflow-wrap: anywhere; }
+
 .terminal { height: 260px; }
 .foot { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink3); padding-top: 4px; }
 
@@ -159,7 +186,8 @@
   /* One size for every figure on the phone: the speed and the torrent counters read alike. */
   #p-speed .kpi, #p-torrents .kpi-s { font-size: 26px; letter-spacing: -.02em; font-weight: 300; }
   .chart { height: 120px; }
-  .dash.net-view #p-torrents .card-body { flex-direction: column; align-items: stretch; gap: 20px; }
+  .dash.net-view #p-torrents .card-body { flex-direction: column; align-items: stretch; gap: 20px; flex-wrap: nowrap; }
+  .dash.net-view #p-torrents .card-body > #lib, .dash.net-view #p-torrents .card-body > #lib-hr { flex: none; }
 }
 </style>
 </head>
@@ -215,7 +243,7 @@
       <span class="scope hide-sm" style="margin-left:16px"><span class="lamp run" id="live-lamp"></span><span class="small faint" id="live-txt">Live · refresh 5 s</span></span>
       <span class="spacer"></span>
       <form class="search hide-sm" action="/control" method="get" role="search">
-        <div class="input"><span class="faint" aria-hidden="true">⌕</span><input type="search" name="q" placeholder="Find a setting…" autocomplete="off" aria-label="Find a setting"><span class="kbd">⌘K</span></div>
+        <div class="input"><svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" style="flex:0 0 13px"><circle cx="5.5" cy="5.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/><path d="M9 9l3.2 3.2" stroke="currentColor" stroke-width="1.3" opacity=".6"/></svg><input type="search" name="q" placeholder="Find a setting…" autocomplete="off" aria-label="Find a setting"><span class="kbd">⌘K</span></div>
       </form>
       <a class="chip-tag fill mob-only" id="top-update" hidden href="https://github.com/MrRobotoGit/tiramisu/releases/latest" target="_blank" rel="noopener"></a>
       <span class="lamp run mob-only" id="live-lamp-m" aria-hidden="true"></span>
@@ -295,6 +323,13 @@
                 <span class="spacer"></span>
                 <span>Hit rate <span class="mono" style="color:var(--ink);font-weight:600" id="cacheHitRatePct">0%</span></span>
               </div>
+            </div>
+            <hr class="divider" id="lib-hr">
+            <div class="lib" id="lib">
+              <div class="lib-line"><span class="label">Library</span><span class="spacer"></span><span class="lamp off" id="lib-lamp"></span><span class="st" id="lib-state">Not checked yet</span></div>
+              <div class="lib-rows" id="lib-rows" hidden></div>
+              <div class="lib-preview" id="lib-preview" hidden></div>
+              <div class="lib-line"><span class="when" id="lib-when">Compares the engine with the library</span><span class="spacer"></span><button type="button" class="btn ghost sm" id="lib-check" style="padding:0">Check now</button></div>
             </div>
           </div>
         </div>
@@ -771,7 +806,7 @@ async function load() {
           <div class="c"><div class="t"><b>${esc(JOB_NAMES[name] || name)}</b><span class="small faint">${esc(status)} · next ${esc(next)}</span></div>${err}</div>
           ${running
             ? `<button type="button" class="btn sm danger" data-stop="${esc(name)}">■ Stop</button>`
-            : `<button type="button" class="btn sm" data-run="${esc(name)}">▶ Run</button>`}
+            : `<button type="button" class="btn sm" data-run="${esc(name)}">▶ Run now</button>`}
         </div>`;
       }).join('');
     }
@@ -861,6 +896,158 @@ async function killStream(hash) {
     else alert('Kill failed: ' + (d.message || 'unknown error'));
   } catch (e) { alert('Connection error'); }
 }
+
+// ---------- Library consistency ----------
+// The check runs on demand only; the page reads the server's last result on load.
+let libDiag = null, libBusy = '', libNote = '';
+const LIB_CHECKING = 'walking the stubs…';
+const ago = s => { const m = Math.round((Date.now() / 1000 - s) / 60); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
+
+// State as the design system: filled lamp = consistent, ring = never checked, halo = checking,
+// orange = an entry whose torrent is missing; other findings are attention, the yellow chip.
+function libStatus(cls, text, chip) {
+  const lamp = $('lib-lamp'), st = $('lib-state');
+  lamp.hidden = !!chip;
+  lamp.className = 'lamp ' + cls;
+  st.innerHTML = chip ? `<span class="chip-tag sig-yellow">${esc(text)}</span>` : esc(text);
+}
+
+function renderLib() {
+  const rows = $('lib-rows'), when = $('lib-when');
+  $('lib-check').disabled = !!libBusy;
+  if (libBusy) when.textContent = libBusy;
+  if (libBusy === LIB_CHECKING) libStatus('run', 'Checking…');
+  if (!libDiag) {
+    if (!libBusy) { libStatus('off', 'Not checked yet'); when.textContent = libNote || 'Compares the engine with the library'; }
+    rows.hidden = true; return;
+  }
+  const checks = Object.fromEntries(libDiag.checks.map(c => [c.id, c]));
+  // Only what the user can act on is listed, nothing at zero. The exception: entries whose
+  // torrent is missing, the one fault that breaks playback, shown with what repairs them.
+  const missing = checks.missing_torrents?.count || 0;
+  const removable = checks.orphan_torrents?.removable || 0;
+  const counters = checks.stale_metadata_failures?.count || 0;
+  const shown = [];
+  if (missing) shown.push({ n: missing, label: missing === 1 ? 'entry whose torrent is missing' : 'entries whose torrent is missing', sub: 'the next sync adds them back', bad: true });
+  if (removable) shown.push({ n: removable, label: removable === 1 ? 'orphan torrent' : 'orphan torrents', sub: 'older than 7 days',
+    act: libPreview ? `<button type="button" class="btn ghost sm" data-lib="preview" aria-controls="lib-preview" aria-expanded="true">Hide</button>`
+      : `<button type="button" class="btn sm" data-lib="preview" aria-controls="lib-preview" aria-expanded="false">Remove</button>` });
+  if (counters) shown.push({ n: counters, label: counters === 1 ? 'stale failure counter' : 'stale failure counters', sub: 'for torrents no longer in the engine',
+    act: `<button type="button" class="btn sm" data-lib="counters">Clear</button>` });
+  if (!libBusy) when.textContent = (libNote ? libNote + ' · ' : '') + `checked ${ago(libDiag.at)} · ${(libDiag.duration_ms / 1000).toFixed(1)} s`;
+  if (libBusy !== LIB_CHECKING) {
+    const findings = shown.length - (missing ? 1 : 0);
+    if (missing) libStatus('err', `${missing} ${missing === 1 ? 'entry' : 'entries'} without torrent`);
+    else if (findings) libStatus('', `${findings} finding${findings === 1 ? '' : 's'}`, true);
+    else libStatus('', 'Consistent');
+  }
+  if (!shown.length) { rows.hidden = true; return; }
+  rows.innerHTML = shown.map(r => `<div class="lib-row${r.bad ? ' bad' : ''}"><span class="n">${r.n.toLocaleString()}</span>
+      <span class="d">${esc(r.label)}<small title="${esc(r.sub)}">${esc(r.sub)}</small></span>${r.act || '<span></span>'}</div>`).join('');
+  rows.hidden = false;
+}
+
+async function libCheck() {
+  if (libBusy) return;
+  if (libPreview) { libPreview = null; renderPreview(); }
+  libBusy = LIB_CHECKING; libNote = ''; renderLib();
+  try {
+    const r = await fetch('/api/library/diagnostics');
+    if (r.ok) libDiag = await r.json();
+    else libNote = r.status === 409 ? 'a check is already running' : 'check failed (' + r.status + ')';
+  } catch (e) { libNote = 'check failed: connection error'; }
+  libBusy = ''; renderLib();
+}
+
+let libPreview = null;
+function renderPreview(err, result) {
+  const p = $('lib-preview');
+  if (result) { p.innerHTML = `<div class="r">${esc(result)}</div><div class="acts"><button type="button" class="btn sm" data-lib="close">Close</button></div>`; p.hidden = false; return; }
+  if (err) { p.innerHTML = `<div class="e">${esc(err)}</div><div class="acts"><button type="button" class="btn sm" data-lib="close">Close</button></div>`; p.hidden = false; return; }
+  if (!libPreview) { p.hidden = true; return; }
+  const n = libPreview.candidates, sel = libPreview.selected || [];
+  if (!n) {
+    p.innerHTML = `<div class="r">Nothing left to remove.</div><div class="acts"><button type="button" class="btn sm" data-lib="close">Close</button></div>`;
+  } else {
+    p.innerHTML = `<div class="h"><b>${n.toLocaleString()} to remove</b><span class="spacer"></span><span class="mono small faint">older than 7 days</span></div>
+      <ul>${sel.slice(0, 4).map(o => `<li title="${esc(o.title)}">${esc(o.hash.slice(0, 8))} · ${esc(o.title || '—')} · ${esc(o.added)}</li>`).join('')}
+      ${n > 4 ? `<li class="faint">+ ${(n - 4).toLocaleString()} more</li>` : ''}</ul>
+      <div class="acts"><button type="button" class="btn sm" data-lib="close">Cancel</button><button type="button" class="btn danger sm" data-lib="remove">Remove</button></div>`;
+  }
+  p.hidden = false;
+}
+
+async function libOrphans(dry, max = 1000, countersOnly = false) {
+  const r = await fetch('/api/library/orphans', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dry_run: dry, max, counters_only: countersOnly }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+  return d;
+}
+
+async function libTogglePreview() {
+  if (libPreview) { libPreview = null; renderPreview(); renderLib(); return; }
+  if (libBusy) return;
+  libBusy = 'listing the orphans…'; renderLib();
+  try { libPreview = await libOrphans(true); libPreview.at = Date.now(); renderPreview(); }
+  catch (e) { renderPreview('Preview refused: ' + e.message); }
+  libBusy = ''; renderLib();
+}
+
+async function libRemoveAll() {
+  const n = libPreview?.candidates || 0;
+  if (!n || libBusy) return;
+  // A list left open for a while may no longer be what the server would remove: list again.
+  if (Date.now() - (libPreview.at || 0) > 5 * 60 * 1000) {
+    libBusy = 'listing the orphans again…'; renderLib();
+    try { libPreview = await libOrphans(true); libPreview.at = Date.now(); renderPreview(); }
+    catch (e) { renderPreview('Preview refused: ' + e.message); }
+    libBusy = ''; renderLib();
+    return;
+  }
+  if (!confirm(`Remove ${n} torrent${n === 1 ? '' : 's'} that nothing in the library references? Each one is checked again just before it goes. This cannot be undone.`)) return;
+  let removed = 0, kept = 0, err = '';
+  const failed = new Set();
+  try {
+    // A batch at a time, never past the count the user confirmed: torrents that age past the
+    // threshold meanwhile wait for the next preview.
+    for (;;) {
+      const left = n - removed - kept - failed.size;
+      if (left <= 0) break;
+      libBusy = `removing… ${removed.toLocaleString()} of ${n.toLocaleString()}`; renderLib();
+      const d = await libOrphans(false, Math.min(1000, left));
+      removed += d.released.length; kept += d.kept.length;
+      d.failed.forEach(f => failed.add(f.split(':')[0]));
+      if (!d.released.length || d.candidates <= d.selected.length) break;
+    }
+  } catch (e) { err = e.message; }
+  const res = `${removed.toLocaleString()} of ${n.toLocaleString()} removed` + (kept ? ` · ${kept} kept, referenced again` : '')
+    + (failed.size ? ` · ${failed.size} failed, see the log` : '') + (err ? ` · stopped: ${err}` : '');
+  libPreview = null; renderPreview(null, res);
+  libBusy = ''; renderLib();
+  await libCheck();
+}
+
+async function libClearCounters() {
+  if (libBusy) return;
+  libBusy = 'clearing the counters…'; renderLib();
+  let res;
+  try { const d = await libOrphans(false, 1, true); res = `${d.stale_failures.length} counter${d.stale_failures.length === 1 ? '' : 's'} cleared` + (d.failed.length ? ` · ${d.failed.length} failed, see the log` : ''); }
+  catch (e) { res = 'Not cleared: ' + e.message; }
+  libPreview = null; renderPreview(null, res);
+  libBusy = ''; renderLib();
+  await libCheck();
+}
+
+$('lib-check').addEventListener('click', libCheck);
+$('lib').addEventListener('click', e => {
+  const b = e.target.closest('[data-lib]'); if (!b) return;
+  if (b.dataset.lib === 'preview') libTogglePreview();
+  else if (b.dataset.lib === 'close') { libPreview = null; renderPreview(); renderLib(); }
+  else if (b.dataset.lib === 'remove') libRemoveAll();
+  else if (b.dataset.lib === 'counters') libClearCounters();
+});
+fetch('/api/library/diagnostics?cached=1').then(r => r.ok ? r.json() : null).then(d => { libDiag = d; renderLib(); }).catch(() => { });
+setInterval(() => { if (!libBusy) renderLib(); }, 60000);
 
 function doRestart() { TiramisuRestart.start({ title: 'Restart Tiramisu?', ok: 'Restart' }); }
 

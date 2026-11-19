@@ -34,6 +34,7 @@ type TVSyncerConfig struct {
 	QualityScoring  config.QualityScoringConfig
 	DB              *metadb.DB // V1.7.1: Optional SQLite backend
 	AudioRegistry   library.AudioRegistry
+	Release         ReleaseFunc
 	// InvalidatePath, when set, is called after removing a stub file/dir so the FUSE
 	// layer drops its cached state for it (see main.invalidateSyncRemovedPath).
 	InvalidatePath func(string)
@@ -73,6 +74,7 @@ func NewTVSyncer(cfg TVSyncerConfig) *TVSyncer {
 		Weights:         cfg.QualityScoring.TVWeights(),
 		InvalidatePath:  cfg.InvalidatePath,
 		AudioRegistry:   cfg.AudioRegistry,
+		Release:         cfg.Release,
 	}
 
 	return &TVSyncer{

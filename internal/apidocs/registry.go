@@ -47,7 +47,7 @@ var Common = []Status{
 var MCPTools = []string{
 	"resolve_title", "search_releases", "get_job", "cancel_job", "add_release",
 	"resolve_album", "search_album", "add_album", "inspect_torrent", "add_audio",
-	"list_library", "list_gaps", "remove_entries",
+	"list_library", "list_gaps", "remove_entries", "check_consistency",
 }
 
 // Groups is the stable public API. UI-only routes stay out on purpose.
@@ -117,10 +117,55 @@ var Groups = []Group{
 			Errors:   []Status{{405, "not GET"}, {500, "a media directory or the gaps could not be read"}, {503, "audio registry unavailable"}},
 		},
 		{
+			Method: "GET", Path: "/api/library/diagnostics", Summary: "Read-only consistency check of the library against the engine",
+			Desc: "Compares the torrents GoStorm holds with what the library references (stubs under movies/ and tv/, tv_episodes, audio " +
+				"projections) and with the inode map. Each check has a count and up to 20 samples: orphan_torrents (with " +
+				"older_than_30_days), missing_torrents, stubs_without_hash, tv_stubs_unregistered, tv_registry_without_stub, " +
+				"inode_ghosts, stale_metadata_failures, stuck_audio. It changes nothing; one run at a time. Torrents added in " +
+				"the last 10 minutes are not counted as orphans; while a sync runs the counts can be off by what it is changing. " +
+				"With cached=1 it returns the last result since startup (null before the first) without walking anything.",
+			Params:   []Param{{"cached", "1", false, "Return the last result instead of running the check"}},
+			ParamsIn: "query",
+			Example:  "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/library/diagnostics",
+			Response: "{\n  \"at\": 1795600000,\n  \"duration_ms\": 900,\n  \"checks\": [\n    {\"id\": \"orphan_torrents\", \"description\": \"…\", \"count\": 598, \"older_than_30_days\": 594, \"samples\": [\"0a1b… Some.Release (2026-09-23)\"]}\n  ]\n}",
+			OK:       200,
+			Errors:   []Status{{405, "not GET"}, {409, "a check is already running"}, {500, "the state DB or a media directory could not be read"}},
+		},
+		{
+			Method: "POST", Path: "/api/library/orphans", Summary: "List or remove the torrents nothing references",
+			Desc: "The orphan torrents of the consistency check, older than min_age_days, oldest first. dry_run defaults to " +
+				"true and only lists them; with dry_run false each one is removed from the engine after a last check that no " +
+				"stub, tv_episodes row, audio projection or add in flight cites it (kept otherwise). At most max per call. " +
+				"Refused while a stub cannot be read, since its torrent cannot be told. One run at a time, shared with the check.",
+			Params: []Param{
+				{"dry_run", "bool", false, "true (default) lists only"},
+				{"max", "int", false, "Torrents per call, default 50, at most 1000"},
+				{"min_age_days", "int", false, "Only torrents added before this many days ago, default 7"},
+				{"counters_only", "bool", false, "With dry_run false: clear the stale failure counters, remove no torrent"},
+			},
+			ParamsIn: "body",
+			Example:  "curl -X POST -H 'Authorization: Bearer tmr_…' -d '{\"dry_run\":true}' {{ORIGIN}}/api/library/orphans",
+			Response: "{\n  \"dry_run\": true,\n  \"candidates\": 598,\n  \"selected\": [{\"hash\": \"0a1b…\", \"title\": \"Some.Release\", \"added\": \"2026-04-04\"}],\n  \"released\": [], \"kept\": [], \"failed\": [],\n  \"duration_ms\": 1100\n}",
+			OK:       200,
+			Errors:   []Status{{400, "malformed body"}, {405, "not POST"}, {409, "a check or collection is running, or a stub cannot be read"}, {500, "the state DB or a media directory could not be read"}},
+		},
+		{
+			Method: "POST", Path: "/api/library/release", Summary: "Remove a torrent from the engine if nothing references it",
+			Desc: "For a client that hydrated a torrent (inspect) and filed nothing from it. The torrent goes only if no stub, " +
+				"tv_episodes row, audio projection or add in flight cites it; released says whether it went.",
+			Params:   []Param{{"hash", "string", true, "40-character info hash"}},
+			ParamsIn: "body",
+			Example:  "curl -X POST -H 'Authorization: Bearer tmr_…' -d '{\"hash\":\"0a1b…\"}' {{ORIGIN}}/api/library/release",
+			Response: "{\"released\": true}",
+			OK:       200,
+			Errors:   []Status{{400, "malformed body or hash"}, {404, "the engine does not hold this torrent"}, {405, "not POST"}, {502, "the engine or a reference check failed"}},
+		},
+		{
 			Method: "POST", Path: "/api/library/remove", Summary: "Remove a stub, optionally blacklisting the release",
 			Desc: "The torrent goes only when no other stub points at it: a season pack is one torrent behind many episodes. " +
 				"Without blacklist the sync may add the title back, which is what you want when replacing a release. " +
-				"warnings appears only when something went half-way, e.g. the stub went but the blacklist was not written. " +
+				"warnings appears only when something went half-way, e.g. the stub went but the blacklist was not written; " +
+				"torrent_errors when the stub went but the engine kept the torrent (the orphan collection takes it later). " +
 				"Audio is idempotent and answers other objects: by path {type, path, removed (bool), state \"absent\" when " +
 				"nothing was there, torrent_referenced, torrent_dropped}; by prefix {type, prefix, removed (count), " +
 				"torrent_referenced, torrent_dropped}.",

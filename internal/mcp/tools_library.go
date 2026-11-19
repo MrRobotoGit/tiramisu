@@ -57,6 +57,8 @@ type RemoveOutput struct {
 	Failed     []string `json:"failed,omitempty"`
 	// Warnings are removals for good that the sync may still undo.
 	Warnings []string `json:"warnings,omitempty"`
+	// TorrentErrors are torrents the engine kept although their entry is gone.
+	TorrentErrors []string `json:"torrent_errors,omitempty"`
 }
 
 func isAudio(kind string) bool { return kind == "music" || kind == "audiobook" }
@@ -70,6 +72,12 @@ func (s *server) registerLibrary(srv *sdk.Server) {
 		Name:        "list_gaps",
 		Description: "TV episodes the reaper removed because their release died and nothing live replaced them. The engine re-searches them on its own; never re-add a dead_hash.",
 	}, s.listGaps)
+	readOnly := true
+	sdk.AddTool(srv, &sdk.Tool{
+		Name:        "check_consistency",
+		Description: "Read-only check of the library against the engine: orphan torrents, stubs or audio pointing to missing torrents, TV registry drift, inode ghosts, stale metadata failures, stuck audio. Counts and up to 20 samples each; it fixes nothing.",
+		Annotations: &sdk.ToolAnnotations{ReadOnlyHint: readOnly},
+	}, s.checkConsistency)
 	destructive := true
 	sdk.AddTool(srv, &sdk.Tool{
 		Name:        "remove_entries",
@@ -131,6 +139,16 @@ func (s *server) listGaps(_ context.Context, _ *sdk.CallToolRequest, _ GapsInput
 	return nil, GapsOutput{Gaps: gaps, Total: total}, nil
 }
 
+type ConsistencyInput struct{}
+
+func (s *server) checkConsistency(ctx context.Context, _ *sdk.CallToolRequest, _ ConsistencyInput) (*sdk.CallToolResult, *library.Diagnosis, error) {
+	d, err := s.deps.Library.Diagnose(ctx)
+	if err != nil {
+		return errResult(err), nil, nil
+	}
+	return nil, d, nil
+}
+
 func (s *server) removeEntries(ctx context.Context, _ *sdk.CallToolRequest, in RemoveInput) (*sdk.CallToolResult, RemoveOutput, error) {
 	if in.Blacklist == nil {
 		return errResult(fmt.Errorf("blacklist is required: ask the user whether this removal is for good or to replace")), RemoveOutput{}, nil
@@ -155,12 +173,14 @@ func (s *server) removeEntries(ctx context.Context, _ *sdk.CallToolRequest, in R
 	if !in.Confirm {
 		return nil, out, nil
 	}
+	// DropTorrent: removing an album also releases its torrent once nothing cites it, as
+	// video removal always does; without it the torrent stayed in the engine for good.
 	var reqs []library.RemoveRequest
 	if in.Prefix != "" {
-		reqs = append(reqs, library.RemoveRequest{Type: in.Type, Prefix: in.Prefix, Blacklist: *in.Blacklist})
+		reqs = append(reqs, library.RemoveRequest{Type: in.Type, Prefix: in.Prefix, Blacklist: *in.Blacklist, DropTorrent: true})
 	} else {
 		for _, p := range entries {
-			reqs = append(reqs, library.RemoveRequest{Type: in.Type, Path: p, Blacklist: *in.Blacklist})
+			reqs = append(reqs, library.RemoveRequest{Type: in.Type, Path: p, Blacklist: *in.Blacklist, DropTorrent: true})
 		}
 	}
 	for _, r := range reqs {
@@ -172,6 +192,7 @@ func (s *server) removeEntries(ctx context.Context, _ *sdk.CallToolRequest, in R
 		}
 		if v, ok := resp.(*library.RemoveResponse); ok {
 			out.Warnings = append(out.Warnings, v.Warnings...)
+			out.TorrentErrors = append(out.TorrentErrors, v.TorrentErrors...)
 		}
 		out.Removed = append(out.Removed, target)
 	}

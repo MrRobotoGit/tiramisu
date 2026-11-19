@@ -36,6 +36,7 @@
   --sig-green: #2E7A4C;  --sig-green-bg: rgba(46, 158, 91, .15);
   --accent-hi: #F8B6A4;
   --term: #15181B;
+  --term-hi: #FFFFFF;
   --term-text: #C6CDD2;
   --term-dim: #69737B;
   --area: rgba(18, 21, 24, .06);
@@ -63,6 +64,7 @@
   --sig-green: #6FD39A;  --sig-green-bg: rgba(61, 203, 116, .14);
   --accent-hi: #FFC2B0;
   --term: #08090A;
+  --term-hi: #FFFFFF;
   --term-text: #B6BEC4;
   --term-dim: #566069;
   --area: rgba(230, 234, 237, .07);
@@ -95,7 +97,7 @@ button, input, select { font: inherit; color: inherit; }
   color: var(--ink3);
 }
 .label.ink { color: var(--ink); }
-.h1 { font-size: 32px; font-weight: 350; letter-spacing: -.015em; line-height: 1.1; margin: 0; }
+.h1 { font-size: 32px; font-weight: 300; letter-spacing: -.015em; line-height: 1.1; margin: 0; }
 .kpi { font-size: 46px; font-weight: 300; letter-spacing: -.035em; line-height: 1; }
 .kpi-s { font-size: 30px; font-weight: 300; letter-spacing: -.025em; line-height: 1; }
 .muted { color: var(--ink2); }
@@ -226,7 +228,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 .lamp.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
 .lamp.err { background: var(--accent); }
-/* Engine health in the rail: green when online (the only place green is used). */
+/* Engine health in the rail: green when online. Green also marks a completed step (restart, sign-in). */
 #rail-lamp.run { background: var(--ok); }
 #rail-lamp.run::after { border-color: var(--ok); }
 .lamp.run::after {
@@ -285,7 +287,8 @@ button, input, select { font: inherit; color: inherit; }
   padding: 0;
   flex: 0 0 auto;
 }
-.key:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
+.key:hover { border-color: var(--ink); color: var(--ink); }
+.key[data-kill]:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
 
 /* ---------- segmented ---------- */
 .seg {
@@ -324,6 +327,8 @@ button, input, select { font: inherit; color: inherit; }
 }
 .chip-tag.fill { background: var(--ink); border-color: var(--ink); color: var(--inv); }
 .chip-tag.accent { border-color: var(--accent-ink); color: var(--accent-ink); }
+/* On the ink change bar the darker accent-ink would not read: the bright accent does. */
+.chip-tag.accent.on-dark { border-color: var(--accent); color: var(--accent); }
 .chip-tag.soft { background: var(--well); border-color: transparent; }
 /* Signal chips (stream badges): tinted fill, coloured text, no frame. */
 .chip-tag.sig-yellow { background: var(--sig-yellow-bg); border-color: transparent; color: var(--sig-yellow); }
@@ -337,7 +342,7 @@ button, input, select { font: inherit; color: inherit; }
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  font-weight: 450;
+  font-weight: 500;
   margin-bottom: 6px;
 }
 .input {
@@ -375,7 +380,7 @@ button, input, select { font: inherit; color: inherit; }
   transform: rotate(45deg);
   pointer-events: none;
 }
-.input.mono input { font-family: var(--sans); font-size: 13px; }
+.input.mono input { font-family: var(--mono); font-size: 12px; }
 .input input[type="time"]::-webkit-calendar-picker-indicator { display: none; }
 .input input[readonly], .input input:disabled { color: var(--ink3); }
 .field.is-disabled { opacity: .45; }
@@ -495,7 +500,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .terminal .ln { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .terminal .ts { color: var(--term-dim); }
 .terminal .err { color: var(--accent); }
-.terminal .warn { color: #fff; font-weight: 500; }
+.terminal .warn { color: var(--term-hi); font-weight: 500; }
 .terminal .ok { color: var(--term-text); font-weight: 500; }
 
 /* ---------- change bar ---------- */
@@ -570,7 +575,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-ui > * { pointer-events: auto; }
 .sw-ui.v { position: static; display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
 .sw-ui.v:empty { display: none; }
-.sw-card { position: absolute; z-index: 5; width: 250px; font: 400 12px/1.4 var(--sans); color: var(--ink); padding: 10px 12px; background: var(--panel); border: 1px solid var(--hair2); border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.12); display: flex; flex-direction: column; gap: 4px; }
+.sw-card { position: absolute; z-index: 5; width: 250px; font: 400 12px/1.4 var(--sans); color: var(--ink); padding: 10px 12px; background: var(--panel); border: 1px solid var(--hair2); border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
 .sw-d-title { font-weight: 500; font-size: 13px; color: var(--ink); }
 .sw-d-row { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--ink); }
 .sw-d-sub { font-size: 11px; line-height: 15px; color: var(--ink2); margin: -2px 0 6px; overflow-wrap: anywhere; }

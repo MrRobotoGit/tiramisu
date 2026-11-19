@@ -88,6 +88,9 @@ read only at import; a database moved elsewhere is set with `TIRAMISU_STATE_DB`.
 | `plex.library_id` | `0` | Plex movies library section ID (0 = skip the refresh) |
 | `plex.tv_library_id` | `0` | Plex TV series library section ID (0 = skip the refresh) |
 | `plex.music_library_id` | `0` | Plex music library section Tiramisu files into: rescanned after an audio add or removal, and the only library the music sync follows new albums from (0 = both off). Jellyfin setups leave it at 0 |
+| `orphan_collection.enabled` | `false` | After each successful movie sync, remove the torrents nothing in the library references (the orphan collection of `/api/library/orphans`, with all its checks) |
+| `orphan_collection.min_age_days` | `7` | Only torrents added before this many days ago |
+| `orphan_collection.max_per_run` | `50` | Torrents removed per run, at most 1000 |
 | `scheduler.music_sync` | Sunday 15:00 | Weekly music sync slot (not in the Control Panel Scheduler, which has no music row: change it as in [config.json: import only](#configjson-import-only); the Dashboard can still run it) |
 | `music_discovery.new_releases.enabled` | `true` | Follow the new albums of the artists in Tiramisu's music library |
 | `music_discovery.new_releases.window_days` | `30` | How recent an album's first edition must be to count as new |

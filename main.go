@@ -1180,19 +1180,13 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	forceCloseVirtualFile(fullPath)
 	tailFillTargets.Delete(fullPath)
 
-	// Extract hash and remove torrent from GoStorm
-	success, blacklisted, err := globalTorrentRemover.RemoveTorrentFromFile(fullPath)
+	// Blacklist first, the torrent last: a crash in between leaves at most an orphan
+	// torrent, never a stub without one that the next sync would rehydrate.
+	hash, blacklisted, err := globalTorrentRemover.IdentifyAndBlacklist(fullPath)
 	if err != nil {
-		logger.Printf("UNLINK ERROR: failed to remove torrent: %v", err)
-		// Continue with file deletion even if torrent removal fails
-	} else if success {
-		logger.Printf("UNLINK: torrent successfully removed from GoStorm")
-	} else if blacklisted {
-		// Also reached when an audio projection still owns the torrent, which the
-		// guard logs with its own reason.
-		logger.Printf("UNLINK: torrent not removed (already gone, or still referenced), but hash was blacklisted")
-	} else {
-		logger.Printf("UNLINK: torrent not removed and hash not blacklisted (see the warning above)")
+		logger.Printf("UNLINK ERROR: cannot identify the torrent: %v", err)
+	} else if !blacklisted {
+		logger.Printf("UNLINK: hash not blacklisted (see the warning above)")
 	}
 
 	// Delete physical .mkv file
@@ -1202,6 +1196,17 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	}
 
 	registry.RemoveFromRegistry(fullPath)
+	if hash != "" {
+		released, err := globalTorrentRemover.ReleaseHash(hash)
+		switch {
+		case err != nil:
+			logger.Printf("UNLINK ERROR: torrent %s not removed: %v", hash[:8], err)
+		case released:
+			logger.Printf("UNLINK: torrent successfully removed from GoStorm")
+		default:
+			logger.Printf("UNLINK: torrent %s kept, still referenced", hash[:8])
+		}
+	}
 	globalDirCache.Delete(d.physicalPath)
 	// Same reason as the sync removal path: a lookup by exact path is answered from
 	// the metadata cache, which would keep serving this file for the whole TTL.
@@ -5543,6 +5548,16 @@ func main() {
 		}()
 	})
 
+	// The syncs are built before the library manager, and release torrents through it.
+	var libraryRef atomic.Pointer[library.Manager]
+	releaseTorrent := func(ctx context.Context, hash string) (bool, error) {
+		m := libraryRef.Load()
+		if m == nil {
+			return false, errors.New("library not ready: torrent kept")
+		}
+		return m.ReleaseIfUnused(ctx, hash)
+	}
+
 	// Sync Scheduler (Fase 1)
 	// Routes are always registered so the Control Panel's manual "Run now" works
 	// immediately after enabling+saving, without requiring a restart. Only the
@@ -5582,6 +5597,12 @@ func main() {
 				InvalidatePath:  invalidateSyncRemovedPath,
 				DB:              stateDB,
 				AudioRegistry:   audioOwnershipRegistry(),
+				Release:         releaseTorrent,
+				AfterRun: func(ctx context.Context) {
+					if oc := gc().OrphanCollection; oc.Enabled && libraryRef.Load() != nil {
+						libraryRef.Load().AutoCollect(ctx, oc.MinAgeDays, oc.MaxPerRun)
+					}
+				},
 			}),
 			"tv": engines.NewTVSyncer(engines.TVSyncerConfig{
 				GoStormURL:      gc().GoStormBaseURL,
@@ -5599,6 +5620,7 @@ func main() {
 				QualityScoring:  gc().QualityScoringConfig,
 				DB:              stateDB,
 				AudioRegistry:   audioOwnershipRegistry(),
+				Release:         releaseTorrent,
 				InvalidatePath:  invalidateSyncRemovedPath,
 			}),
 			"music": engines.NewMusicSyncEngine(engines.MusicSyncConfig{
@@ -5616,6 +5638,7 @@ func main() {
 				GoStormURL:      gc().GoStormBaseURL,
 				DB:              stateDB,
 				AudioRegistry:   audioOwnershipRegistry(),
+				Release:         releaseTorrent,
 				TMDBAPIKey:      gc().TMDBAPIKey,
 				TorrentioURL:    gc().TorrentioURL,
 				PlexURL:         gc().Plex.URL,
@@ -5682,8 +5705,15 @@ func main() {
 			UnpublishAudioPath: unpublishAudioProjectionLive,
 			// The audio reaper skips albums with an open session: the swarm counter is
 			// only acquitted when that session closes.
-			ActiveSession:  ttffActiveByHash,
+			ActiveSession: ttffActiveByHash,
+			// The library removes through the engine API, which leaves the SSD warmup files.
+			OnRelease: func(hash string) {
+				if warmup.DiskWarmup != nil {
+					warmup.DiskWarmup.RemoveHash(hash)
+				}
+			},
 			InvalidatePath: invalidateSyncRemovedPath,
+			Diagnostics:    diagnosticsDB(),
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.
 			Gaps: func() ([]library.Gap, error) {
@@ -5725,11 +5755,18 @@ func main() {
 			TVSection:    gc().Plex.TVLibraryID,
 			MusicSection: gc().Plex.MusicLibraryID,
 		})
+		libraryRef.Store(libMgr)
+		if globalTorrentRemover != nil {
+			globalTorrentRemover.SetRelease(libMgr.ReleaseIfUnused)
+		}
 		libHandler := library.NewHandler(libMgr)
 		http.HandleFunc("/api/library/add", libHandler.Add)
 		http.HandleFunc("/api/library/remove", libHandler.Remove)
 		http.HandleFunc("/api/library/list", libHandler.List)
 		http.HandleFunc("/api/library/inspect", libHandler.Inspect)
+		http.HandleFunc("/api/library/diagnostics", libHandler.Diagnostics)
+		http.HandleFunc("/api/library/orphans", libHandler.Orphans)
+		http.HandleFunc("/api/library/release", libHandler.Release)
 		mcp.Register(http.DefaultServeMux, mcp.Deps{
 			Library:  libMgr,
 			Config:   gc,
@@ -6365,6 +6402,14 @@ func audioNamespaceEntries() int {
 // audioProjectionRegistry returns the projection registry only when it is really
 // open: a typed-nil *metadb.DB would satisfy the interface and then panic.
 func audioProjectionRegistry() library.AudioProjectionRegistry {
+	if stateDB == nil {
+		return nil
+	}
+	return stateDB
+}
+
+// diagnosticsDB is the read-only consistency check's view of the state DB, nil without one.
+func diagnosticsDB() library.DiagnosticsDB {
 	if stateDB == nil {
 		return nil
 	}

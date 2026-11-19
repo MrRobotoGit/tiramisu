@@ -156,12 +156,28 @@ func GetTorrent(hash metainfo.Hash) *TorrentDB {
 	return t
 }
 
-func RemTorrent(hash metainfo.Hash) {
-	if ReadOnly || stateDB == nil {
-		return
+// RemTorrent deletes a stored torrent. The error says the row is still there.
+func RemTorrent(hash metainfo.Hash) error {
+	if ReadOnly {
+		return errors.New("read-only mode: torrent not removed")
 	}
-	if err := stateDB.DeleteGoStormTorrent(hash.HexString()); err != nil {
+	if stateDB == nil {
+		return errors.New("state DB not set: torrent not removed")
+	}
+	err := stateDB.DeleteGoStormTorrent(hash.HexString())
+	invalidateTorrent(hash.HexString())
+	if err != nil {
 		log.TLogln("Error rem torrent", hash.HexString(), ":", err)
 	}
-	invalidateTorrent(hash.HexString())
+	return err
+}
+
+// ListTorrentRefs returns the hash and title of every stored torrent, from the light
+// columns only. An error is returned, not an empty list: callers use it to decide what is
+// missing, and an empty answer would read as "everything is missing".
+func ListTorrentRefs() ([]metadb.TorrentRef, error) {
+	if stateDB == nil {
+		return nil, errors.New("state DB not set")
+	}
+	return stateDB.ListGoStormTorrentRefs()
 }

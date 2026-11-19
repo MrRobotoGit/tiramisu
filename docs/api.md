@@ -156,8 +156,43 @@ hole. Filing the episode yourself with `/api/library/add` closes its gap too: a
 gap is cleared whenever the episode has a live release again, whoever put it
 there.
 
+### Consistency check and orphan torrents (v1.12.1)
+
+`diagnostics` compares what the engine holds with what the library references
+(stubs, `tv_episodes`, audio projections, the inode map) and changes nothing.
+`cached=1` returns the last result instead of walking the stubs again; the
+Dashboard reads it that way.
+
+```bash
+curl -s 'http://127.0.0.1:9080/api/library/diagnostics' | jq '.checks[] | {id, count, removable}'
+curl -s 'http://127.0.0.1:9080/api/library/diagnostics?cached=1'
+```
+
+`orphans` lists the torrents nothing references, older than `min_age_days`
+(default 7), oldest first. `dry_run` defaults to `true`; with `false` each one is
+checked again just before it is removed. At most `max` per call (default 50, up
+to 1000). It refuses (409) when `movies/` or `tv/` is missing or has no stub,
+when a stub cannot be read, or when more than 25% of the torrents look
+unreferenced. `counters_only` clears the failure counters of torrents no longer
+in the engine and removes no torrent.
+
+```bash
+curl -s -X POST -d '{}' http://127.0.0.1:9080/api/library/orphans | jq '{candidates, selected: .selected[:5]}'
+curl -s -X POST -d '{"dry_run":false,"max":50}' http://127.0.0.1:9080/api/library/orphans | jq '{released: (.released|length), kept, failed}'
+```
+
+`release` removes one torrent only if nothing references it, for a client that
+hydrated one with `inspect` and filed nothing from it (404 when the engine does
+not hold it). A `remove` whose torrent the engine kept reports it in
+`torrent_errors`; the orphan collection takes it later.
+
+```bash
+curl -s -X POST -d '{"hash":"<40-char info hash>"}' http://127.0.0.1:9080/api/library/release
+```
+
 > [!WARNING]
-> `/api/library/add` and `/api/library/remove` write and delete files in the
+> `/api/library/add`, `/api/library/remove`, `/api/library/orphans` and
+> `/api/library/release` write and delete files or torrents in the
 > library. Turn on [sign-in](#sign-in-and-api-tokens) before exposing `:9080`
 > beyond a trusted network.
 

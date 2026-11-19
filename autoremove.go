@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -26,6 +27,14 @@ type TorrentRemover struct {
 	nativeBridge *native.NativeClient // V160: Native Bridge
 	logger       *log.Logger
 	hashPattern  *regexp.Regexp // Still useful for fallback
+	// release is the library's single release point (ReleaseIfUnused), set once it exists.
+	release func(ctx context.Context, hash string) (bool, error)
+}
+
+// SetRelease routes torrent removal through the library, which also checks the other
+// stubs and tv_episodes rows: one episode of a season pack must not take the pack.
+func (tr *TorrentRemover) SetRelease(fn func(ctx context.Context, hash string) (bool, error)) {
+	tr.release = fn
 }
 
 // NewTorrentRemover creates a new torrent remover
@@ -37,9 +46,10 @@ func NewTorrentRemover(nativeBridge *native.NativeClient, logger *log.Logger) *T
 	}
 }
 
-// RemoveTorrentFromFile extracts hash from file, blacklists it and removes the torrent.
+// IdentifyAndBlacklist extracts the hash from a stub and blacklists it. The torrent is
+// released by ReleaseHash once the stub and its registry rows are gone.
 // blacklisted reports whether the release really reached the blacklist.
-func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (removed, blacklisted bool, err error) {
+func (tr *TorrentRemover) IdentifyAndBlacklist(fullPath string) (hash string, blacklisted bool, err error) {
 	filename := filepath.Base(fullPath)
 	title := tr.deriveTitleFromPath(fullPath)
 
@@ -60,7 +70,7 @@ func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (removed, black
 	// CRITICAL FIX: Ensure hash is valid and 40 chars before proceeding
 	fullHash = strings.ToLower(fullHash)
 	if len(fullHash) != 40 {
-		return false, false, fmt.Errorf("invalid or missing hash (%s) for: %s", fullHash, filename)
+		return "", false, fmt.Errorf("invalid or missing hash (%s) for: %s", fullHash, filename)
 	}
 
 	tr.logger.Printf("AutoRemove: identified hash %s for %s", fullHash[:8], title)
@@ -72,14 +82,17 @@ func (tr *TorrentRemover) RemoveTorrentFromFile(fullPath string) (removed, black
 		tr.logger.Printf("AutoRemove: WARNING: %s not blacklisted, the sync may add it back: %v", fullHash[:8], err)
 	}
 
-	// 3. Attempt to remove from GoStorm
-	removed, err = tr.removeTorrent(fullHash)
-	if err != nil {
-		tr.logger.Printf("AutoRemove: removal from GoStorm failed for %s: %v", fullHash[:8], err)
-		return false, blacklisted, nil
-	}
+	return fullHash, blacklisted, nil
+}
 
-	return removed, blacklisted, nil
+// ReleaseHash removes the torrent when nothing references it any more.
+func (tr *TorrentRemover) ReleaseHash(hash string) (bool, error) {
+	if tr.release != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return tr.release(ctx, hash) // the library's OnRelease cleans the SSD warmup files
+	}
+	return tr.removeTorrent(hash)
 }
 
 // extractHashFromFile reads the virtual mkv to get the hash.
@@ -264,7 +277,9 @@ func (tr *TorrentRemover) removeTorrent(hash string) (bool, error) {
 	}
 
 	// Use Native Bridge to remove torrent
-	tr.nativeBridge.RemoveTorrent(hash)
+	if err := tr.nativeBridge.RemoveTorrent(hash); err != nil {
+		return false, err
+	}
 
 	if globalSyncCacheManager != nil {
 		globalSyncCacheManager.ClearNegativeCache(hash)

@@ -24,6 +24,7 @@ type Library interface {
 	List(kind string) ([]library.Item, error)
 	ListAudio(req library.AudioListRequest) (*library.AudioListResponse, error)
 	ListGaps() ([]library.Gap, int, error)
+	Diagnose(ctx context.Context) (*library.Diagnosis, error)
 	RemoveAny(ctx context.Context, req library.RemoveRequest) (any, error)
 }
 
@@ -128,6 +129,7 @@ Rules:
 - Pass overrides to search_releases only when the user explicitly asked to change the profile in this conversation. Never use them on your own to find something.
 - Before remove_entries with confirm=true on movie or tv, show the whole preview and ask whether the removal is for good (blacklist=true) or to replace (blacklist=false) if the user did not say. Music and audiobook have no blacklist and always take blacklist=false: albums the music sync imported stay out, but one added by hand may come back if the music discovery recommends it later. Say so when the user wants it gone for good.
 - A remove_entries warning means the entry is gone but was not blacklisted: say the sync may add it back.
+- remove_entries torrent_errors means the entry is gone but the engine kept its torrent: say so; the orphan collection removes it later.
 - Never re-add the dead_hash of a gap: it is the release the reaper discarded. The engine retries gaps on its own.
 - To undo a wrong add: remove_entries on that entry, blacklist=true for movie or tv, false for music and audiobook.
 - When the user drops a search or an inspect, or before retrying one, cancel_job the job still running: running jobs share a cap.

@@ -332,10 +332,13 @@ func applyFiles(ctx context.Context, library libraryWriter, artist, title string
 		})
 	}
 	if len(adds) == 0 {
+		releaseUnfiled(ctx, library, candidate.Hash)
 		return AddResult{}, fmt.Errorf("no FLAC file in %s", candidate.Title)
 	}
 	result, err := library.Add(ctx, releaseRef(candidate), artist+" - "+title, candidate.TorrentFile, adds)
 	if err != nil {
+		// Inspect hydrated it, so the add's own rollback took it as preexisting and kept it.
+		releaseUnfiled(ctx, library, candidate.Hash)
 		// The release title stays in the error: the caller logs it verbatim and an
 		// anonymous "add failed" costs a manual investigation.
 		return AddResult{}, fmt.Errorf("add %s: %w", candidate.Title, err)
@@ -525,4 +528,16 @@ func sanitizeComponent(name string) string {
 		return "Unknown"
 	}
 	return library.SafeComponent(name)
+}
+
+// releaseUnfiled lets go of a torrent Inspect hydrated and nothing was filed from. The
+// library keeps it if anything references it; a failure leaves it to the orphan collection.
+func releaseUnfiled(ctx context.Context, library libraryWriter, hash string) {
+	r, ok := library.(interface {
+		Release(ctx context.Context, hash string) error
+	})
+	if !ok || hash == "" {
+		return
+	}
+	_ = r.Release(context.WithoutCancel(ctx), hash)
 }

@@ -194,6 +194,11 @@ func (t *Tiramisu) Inspect(ctx context.Context, hash, title string, torrentFile 
 	return response.Files, nil
 }
 
+// Release removes the torrent from the engine unless something references it.
+func (t *Tiramisu) Release(ctx context.Context, hash string) error {
+	return t.do(ctx, http.MethodPost, "/api/library/release", map[string]string{"hash": hash}, nil)
+}
+
 // RemovePath removes one projection by its section-relative path.
 func (t *Tiramisu) RemovePath(ctx context.Context, path string) error {
 	return t.do(ctx, http.MethodPost, "/api/library/remove", map[string]string{"type": "music", "path": path}, nil)

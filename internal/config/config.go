@@ -120,6 +120,15 @@ type SchedulerConfig struct {
 	WatchlistSync WatchlistSyncConfig `json:"watchlist_sync"`
 }
 
+// OrphanCollectionConfig removes, after each successful movie sync, the torrents nothing
+// references (POST /api/library/orphans with dry_run false). Off by default; zero values
+// take the endpoint's defaults (7 days, 50 per run).
+type OrphanCollectionConfig struct {
+	Enabled    bool `json:"enabled"`
+	MinAgeDays int  `json:"min_age_days"`
+	MaxPerRun  int  `json:"max_per_run"`
+}
+
 // EngineConfig holds per-engine paths for subprocess sync.
 type EngineConfig struct {
 	ScriptPath string
@@ -365,6 +374,9 @@ type Config struct {
 
 	// --- Built-in Sync Scheduler ---
 	Scheduler SchedulerConfig `json:"scheduler"`
+
+	// --- Orphan torrent collection, after each movie sync ---
+	OrphanCollection OrphanCollectionConfig `json:"orphan_collection"`
 
 	// --- Music Discovery (weekly sync) ---
 	MusicDiscovery MusicDiscoveryConfig `json:"music_discovery"`

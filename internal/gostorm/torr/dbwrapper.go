@@ -63,8 +63,8 @@ func GetTorrentDB(hash metainfo.Hash) *Torrent {
 	return torr
 }
 
-func RemTorrentDB(hash metainfo.Hash) {
-	settings.RemTorrent(hash)
+func RemTorrentDB(hash metainfo.Hash) error {
+	return settings.RemTorrent(hash)
 }
 
 func ListTorrentsDB() map[metainfo.Hash]*Torrent {

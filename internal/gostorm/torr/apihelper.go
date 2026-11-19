@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -331,10 +333,15 @@ func SetIPBlocklist(list iplist.Ranger) {
 	}
 }
 
-func RemTorrent(hashHex string) {
+// ErrMalformedHash is the caller's mistake, not a failed removal.
+var ErrMalformedHash = errors.New("malformed hash")
+
+// RemTorrent closes a torrent and deletes it from the DB. The error says the stored row
+// is still there (read-only mode, a malformed hash, a DB failure).
+func RemTorrent(hashHex string) error {
 	if sets.ReadOnly {
 		log.TLogln("API RemTorrent: Read-only DB mode!", hashHex)
-		return
+		return errors.New("read-only mode: torrent not removed")
 	}
 	btsMu.RLock()
 	defer btsMu.RUnlock()
@@ -342,7 +349,7 @@ func RemTorrent(hashHex string) {
 	hash, ok := parseHash(hashHex)
 	if !ok {
 		log.TLogln("API RemTorrent: malformed hash:", hashHex)
-		return
+		return fmt.Errorf("%w %q", ErrMalformedHash, hashHex)
 	}
 	if bts.RemoveTorrent(hash) {
 		if sets.BTsets.UseDisk && hashHex != "" && hashHex != "/" {
@@ -358,7 +365,7 @@ func RemTorrent(hashHex string) {
 			}
 		}
 	}
-	RemTorrentDB(hash)
+	return RemTorrentDB(hash)
 }
 
 func ListTorrent() []*Torrent {
@@ -577,4 +584,37 @@ func Preload(torr *Torrent, index int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	torr.Preload(ctx, index, size)
+}
+
+// HashTitle is one entry of the light torrent listing.
+type HashTitle struct {
+	Hash  string `json:"hash"`
+	Title string `json:"title"`
+}
+
+// ListTorrentHashes lists the hash and title of every torrent: the stored ones and those
+// active in memory but not stored yet. No status is built, unlike ListTorrent.
+func ListTorrentHashes() ([]HashTitle, error) {
+	refs, err := sets.ListTorrentRefs()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]HashTitle, 0, len(refs))
+	seen := make(map[string]bool, len(refs))
+	for _, r := range refs {
+		h := strings.ToLower(r.Hash)
+		seen[h] = true
+		out = append(out, HashTitle{Hash: h, Title: r.Title})
+	}
+	for _, t := range ListActiveTorrent() {
+		if t == nil || t.TorrentSpec == nil {
+			continue
+		}
+		h := t.TorrentSpec.InfoHash.HexString()
+		if !seen[h] {
+			seen[h] = true
+			out = append(out, HashTitle{Hash: h, Title: t.Title})
+		}
+	}
+	return out, nil
 }

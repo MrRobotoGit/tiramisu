@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tiramisu/internal/metadb"
@@ -84,9 +85,13 @@ type Config struct {
 	// UnpublishAudioPath, when set, drops a removed projection from the namespace the
 	// VFS dispatches on, before its stub is unlinked.
 	UnpublishAudioPath func(AudioProjection)
+	// OnRelease, when set, runs after ReleaseIfUnused removed a torrent (SSD warmup files).
+	OnRelease func(hash string)
 	// ActiveSession, when set, reports whether a hash has an open playback session.
 	// The list exposes it so a reaper can skip an album that is being listened to.
 	ActiveSession func(hash string) bool
+	// Diagnostics, when set, is what the read-only consistency check reads. *metadb.DB satisfies it.
+	Diagnostics DiagnosticsDB
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what
@@ -100,6 +105,9 @@ type Manager struct {
 
 	refreshPending map[int]bool
 	refreshDirty   map[int]bool
+
+	diagMu   sync.Mutex // one consistency check at a time
+	lastDiag atomic.Pointer[Diagnosis]
 }
 
 func New(cfg Config) *Manager {
@@ -246,6 +254,9 @@ type RemoveResponse struct {
 	// Warnings names removals asked for good whose release could not be blacklisted:
 	// the sync may add those titles back.
 	Warnings []string `json:"warnings,omitempty"`
+	// TorrentErrors names torrents the engine failed to remove: the stubs are gone, the
+	// orphan collection takes the torrent later.
+	TorrentErrors []string `json:"torrent_errors,omitempty"`
 }
 
 // Item is one stub as reported by List.
@@ -275,6 +286,11 @@ func cleanupCtx(ctx context.Context) (context.Context, context.CancelFunc) {
 
 // dropTorrent reports whether the engine removed the torrent.
 func (m *Manager) dropTorrent(ctx context.Context, hash string) bool {
+	return m.removeTorrent(ctx, hash) == nil
+}
+
+// removeTorrent asks the engine to delete the torrent and clears its failure counter.
+func (m *Manager) removeTorrent(ctx context.Context, hash string) error {
 	cctx, cancel := cleanupCtx(ctx)
 	defer cancel()
 	removeErr := m.cfg.GoStorm.RemoveTorrent(cctx, hash)
@@ -288,7 +304,7 @@ func (m *Manager) dropTorrent(ctx context.Context, hash string) bool {
 			m.cfg.Logger.Printf("[LibraryAPI] WARNING: cannot clear the failure counter for %s: %v", hash, err)
 		}
 	}
-	return removeErr == nil
+	return removeErr
 }
 
 // Add registers the torrent with GoStorm, waits for its file list, and writes the stub
@@ -743,44 +759,11 @@ func (m *Manager) deleteStub(_ context.Context, path string) error {
 // removed; two concurrent Removes would both see the last stub gone and drop twice.
 // It reports whether the torrent was dropped.
 func (m *Manager) dropTorrentIfUnused(ctx context.Context, hash string) bool {
-	// A stub that carries no hash identifies no torrent: findByHash would match on a
-	// bare "_.mkv" suffix and the engine would be asked to remove the empty hash.
-	if hash == "" {
-		return false
+	released, err := m.ReleaseIfUnused(ctx, hash)
+	if err != nil {
+		m.cfg.Logger.Printf("[LibraryAPI] WARNING: torrent %s not released: %v", hash, err)
 	}
-	// Never wait: whoever holds this hash is adding that same release right now, so
-	// either it needs the torrent or its own cleanup will drop it.
-	unlock, ok := m.hashLocks.TryLock(hash)
-	if !ok {
-		return false
-	}
-	defer unlock()
-
-	for _, kind := range []string{"movie", "tv"} {
-		found, err := m.findByHash(kind, hash)
-		if err != nil {
-			m.cfg.Logger.Printf("[LibraryAPI] WARNING: keeping torrent %s, cannot check its stubs: %v", hash, err)
-			return false
-		}
-		if len(found) > 0 {
-			return false
-		}
-	}
-	// Audio lives in the projection registry, not as a stub under the media
-	// directories, so the scan above cannot see it: one torrent behind both a movie
-	// and an album would be dropped from under the album. Staged and removing rows
-	// count too - a removal still in flight may have a reader holding the file open.
-	if m.cfg.AudioRegistry != nil {
-		referenced, err := m.cfg.AudioRegistry.AudioHashReferenced(hash)
-		if err != nil {
-			m.cfg.Logger.Printf("[LibraryAPI] WARNING: keeping torrent %s, cannot check its audio projections: %v", hash, err)
-			return false
-		}
-		if referenced {
-			return false
-		}
-	}
-	return m.dropTorrent(ctx, hash)
+	return released
 }
 
 // pickFileForEpisode prefers the file whose name carries the requested episode number;
@@ -869,6 +852,11 @@ func (m *Manager) findByHash(kind, hash string) ([]AddedFile, error) {
 	var out []AddedFile
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			// A file removed during the walk is simply gone; returning it would end
+			// the walk early and the release would miss the stubs after it.
+			if os.IsNotExist(err) && path != dir {
+				return nil
+			}
 			// A directory we cannot read would silently shrink the answer, and a
 			// missing stub here means a duplicate add.
 			return err
@@ -948,7 +936,10 @@ func (m *Manager) Remove(ctx context.Context, req RemoveRequest) (*RemoveRespons
 
 	// Only now, with the stubs gone, is it safe to decide which torrents nobody needs.
 	for hash := range hashes {
-		m.dropTorrentIfUnused(ctx, hash)
+		if _, err := m.ReleaseIfUnused(ctx, hash); err != nil {
+			m.cfg.Logger.Printf("[LibraryAPI] WARNING: torrent %s not released: %v", hash, err)
+			resp.TorrentErrors = append(resp.TorrentErrors, hash+": "+err.Error())
+		}
 	}
 
 	for _, path := range resp.Removed {
@@ -1074,6 +1065,31 @@ func (m *Manager) insideMediaDirs(clean string) bool {
 // List reports the stubs on disk. It is how a client with no filesystem access knows
 // what the library already holds.
 func (m *Manager) List(kind string) ([]Item, error) {
+	return m.list(context.Background(), kind)
+}
+
+// stubWalker visits every .mkv under root. An entry that vanishes between being listed and
+// being read is skipped: a stub rewrite renames its .tmp away and the syncs delete stubs,
+// and stopping there returned a partial list as if it were whole.
+func stubWalker(ctx context.Context, root string, visit func(path string)) filepath.WalkFunc {
+	return func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) && path != root {
+				return nil
+			}
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(strings.ToLower(path), ".mkv") {
+			visit(path)
+		}
+		return nil
+	}
+}
+
+func (m *Manager) list(ctx context.Context, kind string) ([]Item, error) {
 	dir := m.cfg.MoviesDir
 	if strings.HasPrefix(strings.ToLower(kind), "tv") {
 		dir = m.cfg.TVDir
@@ -1082,21 +1098,17 @@ func (m *Manager) List(kind string) ([]Item, error) {
 	if dir == "" {
 		return items, nil
 	}
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".mkv") {
-			return nil
-		}
+	err := filepath.Walk(dir, stubWalker(ctx, dir, func(path string) {
 		st := readStub(path)
 		season, episode := ParseSeasonEpisode(filepath.Base(path))
 		items = append(items, Item{
 			Path: path, FusePath: m.fusePath(path), Size: st.Size, Hash: st.Hash,
 			IMDB: st.IMDB, FileIndex: st.FileIndex, Season: season, Episode: episode,
 		})
-		return nil
-	})
+	}))
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
 	if err != nil && !os.IsNotExist(err) {
 		return nil, errf(http.StatusInternalServerError, "cannot read %s: %v", dir, err)
 	}

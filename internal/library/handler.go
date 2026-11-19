@@ -217,3 +217,117 @@ func writeAPIError(w http.ResponseWriter, err error) {
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())
 }
+
+// Diagnostics answers GET /api/library/diagnostics: the read-only consistency check.
+func (h *Handler) Diagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	// The Dashboard reads the last result on load: opening it must not walk the stubs.
+	if r.URL.Query().Get("cached") == "1" {
+		writeJSON(w, http.StatusOK, h.mgr.LastDiagnosis())
+		return
+	}
+	d, err := h.mgr.Diagnose(r.Context())
+	if errors.Is(err, ErrDiagnosisRunning) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// Orphans lists the torrents nothing references (dry run, the default) or releases them.
+func (h *Handler) Orphans(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req OrphanRequest
+	if len(bytes.TrimSpace(body)) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if dec.More() {
+			writeError(w, http.StatusBadRequest, "trailing data after the JSON body")
+			return
+		}
+	}
+	rep, err := h.mgr.CollectOrphans(r.Context(), req)
+	if errors.Is(err, ErrDiagnosisRunning) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
+}
+
+// Release removes a torrent from the engine only if nothing references it: for a client
+// that hydrated one (inspect) and filed nothing from it.
+func (h *Handler) Release(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "POST only")
+		return
+	}
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req struct {
+		Hash string `json:"hash"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if dec.More() {
+		writeError(w, http.StatusBadRequest, "trailing data after the JSON body")
+		return
+	}
+	hash := canonicalHashKey(req.Hash)
+	if len(hash) != 40 {
+		writeError(w, http.StatusBadRequest, "hash must be a 40-character info hash")
+		return
+	}
+	// The engine treats an unknown hash as removed: say so instead of "released".
+	refs, err := h.mgr.cfg.GoStorm.ListTorrentRefs(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	known := false
+	for _, t := range refs {
+		if diagHash(t.Hash) == hash {
+			known = true
+			break
+		}
+	}
+	if !known {
+		writeError(w, http.StatusNotFound, "the engine does not hold this torrent")
+		return
+	}
+	released, err := h.mgr.ReleaseIfUnused(r.Context(), hash)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"released": released})
+}

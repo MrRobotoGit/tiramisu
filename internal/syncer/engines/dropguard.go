@@ -56,14 +56,26 @@ func ownershipOf(reg library.AudioRegistry, db *metadb.DB) library.AudioRegistry
 	return audioRegistry(db)
 }
 
+// ReleaseFunc deletes a torrent only when nothing references it: library.Manager.ReleaseIfUnused.
+type ReleaseFunc func(ctx context.Context, hash string) (bool, error)
+
+// release goes through the library's single release point when the host wired it, which
+// also checks the other stubs and tv_episodes; the audio-only guard is the fallback.
+func release(ctx context.Context, rel ReleaseFunc, gs *GoStormClient, reg library.AudioRegistry, logger *log.Logger, hash string) (bool, error) {
+	if rel != nil {
+		return rel(ctx, hash)
+	}
+	return dropTorrentGuardedWith(ctx, gs, reg, logger, hash)
+}
+
 func (e *MovieGoEngine) dropTorrent(ctx context.Context, hash string) (bool, error) {
-	return dropTorrentGuardedWith(ctx, e.gostorm, ownershipOf(e.audioReg, e.db), e.logger, hash)
+	return release(ctx, e.release, e.gostorm, ownershipOf(e.audioReg, e.db), e.logger, hash)
 }
 
 func (e *TVGoEngine) dropTorrent(ctx context.Context, hash string) (bool, error) {
-	return dropTorrentGuardedWith(ctx, e.gostorm, ownershipOf(e.audioReg, e.db), e.logger, hash)
+	return release(ctx, e.release, e.gostorm, ownershipOf(e.audioReg, e.db), e.logger, hash)
 }
 
 func (e *WatchlistGoEngine) dropTorrent(ctx context.Context, hash string) (bool, error) {
-	return dropTorrentGuardedWith(ctx, e.gostorm, ownershipOf(e.audioReg, e.db), e.logger, hash)
+	return release(ctx, e.release, e.gostorm, ownershipOf(e.audioReg, e.db), e.logger, hash)
 }

@@ -36,12 +36,11 @@
 
         /* language flags */
         .chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-        .chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 8px; border-radius: 3px; background: var(--ink); color: var(--inv); font-size: 11px; font-weight: 500; }
-        #excluded-flags-row .chip { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px var(--hair2); }
-        .chip button { border: 0; background: transparent; color: inherit; cursor: pointer; opacity: .7; padding: 0 4px; }
-        .chip button:hover { opacity: 1; }
+        .lang-chip { gap: 4px; padding-right: 2px; }
+        .lang-chip button { border: 0; background: transparent; color: inherit; cursor: pointer; opacity: .7; padding: 0 4px; font: inherit; }
+        .lang-chip button:hover { opacity: 1; }
         .picker-anchor { position: relative; }
-        .picker { display: none; position: absolute; left: 0; top: calc(100% + 6px); z-index: 30; width: 260px; background: var(--panel); border: 1px solid var(--hair2); border-radius: 6px; padding: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+        .picker { display: none; position: absolute; left: 0; top: calc(100% + 6px); z-index: 30; width: 260px; background: var(--panel); border: 1px solid var(--hair2); border-radius: 6px; padding: 8px; }
         .picker.open { display: block; }
         .picker input { width: 100%; height: 30px; border: 1px solid var(--hair); border-radius: 4px; background: var(--well); padding: 0 8px; outline: 0; }
         .picker-list { max-height: 220px; overflow-y: auto; margin-top: 6px; display: flex; flex-direction: column; }
@@ -95,7 +94,7 @@
         .seg .preset-custom:not(.active) { opacity: .45; }
         .search .input { width: 300px; }
         .search .kbd { font-family: var(--mono); font-size: 10px; color: var(--ink3); border: 1px solid var(--hair2); border-radius: 3px; padding: 0 4px; }
-        .search-results { display: none; position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 30; background: var(--panel); border: 1px solid var(--hair2); border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+        .search-results { display: none; position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 30; background: var(--panel); border: 1px solid var(--hair2); border-radius: 6px; padding: 4px; }
         .search-results.open { display: block; }
         .search-results button { display: flex; width: 100%; gap: 8px; align-items: baseline; border: 0; background: transparent; padding: 7px 8px; border-radius: 4px; cursor: pointer; text-align: left; }
         .search-results button:hover, .search-results button.hl { background: var(--well); }
@@ -594,13 +593,13 @@
                             <span class="label">Settings · 04</span>
                             <div class="row">
                                 <h1 class="h1">Engine</h1><span class="spacer"></span>
-                                <span class="scope"><span class="lamp run"></span><span class="label">GoStorm · applies live</span></span>
+                                <span class="scope"><span class="lamp"></span><span class="label">Applies live</span></span>
                             </div>
                             <p>The embedded GoStorm torrent engine: piece cache, warmup on SSD, swarm limits and protocol behaviour.</p>
                         </div>
 
                         <div class="card">
-                            <div class="card-head"><span class="num">04.1</span><span class="label ink">Cache &amp; Data</span><span class="spacer"></span><span class="scope"><span class="lamp run"></span><span class="label">Live</span></span></div>
+                            <div class="card-head"><span class="num">04.1</span><span class="label ink">Cache &amp; Data</span><span class="spacer"></span><span class="scope"><span class="lamp"></span><span class="label">Live</span></span></div>
                             <div class="card-body">
                                 <div class="grid2">
                                     <div class="fader" data-rec="128">
@@ -621,7 +620,7 @@
                         </div>
 
                         <div class="card">
-                            <div class="card-head"><span class="num">04.2</span><span class="label ink">Warmup &amp; SSD</span><span class="spacer"></span><span class="scope"><span class="lamp run"></span><span class="label">Live · quota on restart</span></span></div>
+                            <div class="card-head"><span class="num">04.2</span><span class="label ink">Warmup &amp; SSD</span><span class="spacer"></span><span class="scope"><span class="lamp"></span><span class="label">Live · quota on restart</span></span></div>
                             <div class="card-body">
                                 <div class="toggle-row" style="padding-top:0">
                                     <div class="text"><div class="title">Use Warmup Cache</div><div class="hint">Keeps the head and tail of every title on SSD for an instant start.</div></div>
@@ -641,7 +640,7 @@
                         </div>
 
                         <div class="card">
-                            <div class="card-head"><span class="num">04.3</span><span class="label ink">Swarm Limits</span><span class="spacer"></span><span class="scope"><span class="lamp run"></span><span class="label">Live</span></span></div>
+                            <div class="card-head"><span class="num">04.3</span><span class="label ink">Swarm Limits</span><span class="spacer"></span><span class="scope"><span class="lamp"></span><span class="label">Live</span></span></div>
                             <div class="card-body">
                                 <div class="grid4">
                                     <div class="field"><label>Connections Limit</label>
@@ -665,7 +664,7 @@
                         </div>
 
                         <div class="card">
-                            <div class="card-head"><span class="num">04.4</span><span class="label ink">Network &amp; Protocol</span><span class="spacer"></span><span class="scope"><span class="lamp run"></span><span class="label">Live</span></span></div>
+                            <div class="card-head"><span class="num">04.4</span><span class="label ink">Network &amp; Protocol</span><span class="spacer"></span><span class="scope"><span class="lamp"></span><span class="label">Live</span></span></div>
                             <div class="card-body">
                                 <div class="grid2 adv-only">
                                     <div class="field"><label>Listen Port <span class="chip-tag">Adv</span><span class="chip-tag" id="listen-lock" hidden>NAT-PMP</span></label>
@@ -700,7 +699,7 @@
                         </div>
 
                         <div class="card">
-                            <div class="card-head"><span class="num">04.5</span><span class="label ink">Behaviors</span><span class="spacer"></span><span class="scope"><span class="lamp run"></span><span class="label">Live</span></span></div>
+                            <div class="card-head"><span class="num">04.5</span><span class="label ink">Behaviors</span><span class="spacer"></span><span class="scope"><span class="lamp"></span><span class="label">Live</span></span></div>
                             <div class="card-body tight">
                                 <div class="toggle-row" style="padding-top:0">
                                     <div class="text"><div class="title">Smart Responsive Mode</div><div class="hint">FAST mode: serves data without waiting for full piece verification. Pair with Adaptive Shield to auto-protect against corruption.</div></div>
@@ -910,7 +909,7 @@
                         <span class="label">Settings · 07</span>
                         <div class="row">
                             <h1 class="h1">Access</h1><span class="spacer"></span>
-                            <span class="scope"><span class="lamp" id="acc-scope-lamp"></span><span class="label">Applies immediately</span></span>
+                            <span class="scope"><span class="lamp" id="acc-scope-lamp"></span><span class="label">Applies live</span></span>
                         </div>
                         <p>Who can open the Control Panel, the Dashboard, the API and the MCP server on this port. Webhooks from Plex and Jellyfin are always accepted.</p>
                     </div>
@@ -998,7 +997,7 @@
                         <div class="card-body">
                             <div class="acc-status">
                                 <div class="hint" style="flex:1">Removes the requirement for this port. The user and the tokens are kept, so turning it back on restores them. Asks for the password.</div>
-                                <button type="button" class="btn danger sm" onclick="accDisable()">Turn off</button>
+                                <button type="button" class="btn danger sm" onclick="accDisable()"><span class="ico">■</span>Turn off</button>
                             </div>
                         </div>
                     </div>
@@ -1036,7 +1035,7 @@
             <div class="changebar" id="changebar" aria-live="polite">
                 <span class="count" id="cb-count"><span class="lamp" id="cb-lamp"></span><span id="cb-title">Loading…</span></span>
                 <span class="list" id="cb-list"></span>
-                <span class="chip-tag accent" id="cb-restart" hidden></span>
+                <span class="chip-tag accent on-dark" id="cb-restart" hidden></span>
                 <span class="msg small" id="cb-msg"></span>
                 <button type="button" class="btn ghost sm" id="cb-discard" hidden onclick="discardChanges()">Discard</button>
                 <button type="button" class="btn primary sm" id="cb-apply" hidden onclick="applyChanges()">Apply</button>
@@ -1229,7 +1228,7 @@
             else if (cacheSize > budget) warn = 'Cache Size exceeds Budget, wasted GoStorm RAM';
             else if (budget >= cacheSize * 4) warn = 'Budget too large for Cache Size, wasted RAM';
             metric.className = 'readahead-metric' + (warn ? ' warn' : '');
-            metric.textContent = warn ? `${base} ⚠ ${warn}` : `${base} ✓`;
+            metric.textContent = warn ? `${base} · ${warn}` : base;
         }
         ['read_ahead_budget_mb', 'cacheSize', 'readerReadAHead'].forEach(name => {
             const el = document.querySelector(`[name="${name}"]`);
@@ -1271,14 +1270,15 @@
         }
 
         function currentLangCodes(rowId) {
-            return [...document.getElementById(rowId).querySelectorAll('.chip')].map(c => c.dataset.code);
+            return [...document.getElementById(rowId).querySelectorAll('.lang-chip')].map(c => c.dataset.code);
         }
 
         function renderLangChip(rowId, code, name) {
             const row = document.getElementById(rowId);
             const anchor = row.querySelector('.picker-anchor');
             const chip = document.createElement('span');
-            chip.className = 'chip';
+            // The system chip: filled for preferred, outline for excluded.
+            chip.className = 'chip-tag lang-chip' + (rowId === 'excluded-flags-row' ? '' : ' fill');
             chip.dataset.code = code;
 
             const flagSpan = document.createElement('span');
@@ -1299,7 +1299,7 @@
 
         function setLangChips(rowId, codes) {
             const row = document.getElementById(rowId);
-            row.querySelectorAll('.chip').forEach(c => c.remove());
+            row.querySelectorAll('.lang-chip').forEach(c => c.remove());
             (codes || []).forEach(code => {
                 const entry = LANG_COUNTRIES.find(([c]) => c === code);
                 renderLangChip(rowId, code, entry ? entry[1] : code);
@@ -2310,7 +2310,8 @@
                     : restartPending ? 'Saved — restart to apply' : 'All changes saved';
             const stamp = savedAt ? `Saved ${savedAt} · ` : '';
             const vis = typeof sections !== 'undefined' ? sections.find(s => !s.hidden) : null;
-            const effect = vis && vis.id === 'sec-engine' ? 'engine settings apply live' : 'takes effect after Restart';
+            const effect = { 'sec-engine': 'engine settings apply live', 'sec-access': 'applies live',
+                'sec-release': 'used by the next sync', 'sec-scheduler': 'picked up within 1 minute' }[vis && vis.id] || 'takes effect after Restart';
             document.getElementById('cb-list').textContent = n ? changes.map(c => c.text).join('  ·  ')
                 : restartPending ? stamp + 'takes effect after Restart. Engine changes are already live.'
                     : stamp + effect;

@@ -166,7 +166,7 @@ func (m *Manager) inspectCueTracks(ctx context.Context, hash string, files []Fil
 // knownTorrentHashes snapshots what the engine already holds. A failed listing
 // reports not-ok: the caller must not add without it.
 func (m *Manager) knownTorrentHashes(ctx context.Context) (map[string]bool, bool) {
-	torrents, err := m.cfg.GoStorm.ListTorrents(ctx)
+	torrents, err := m.cfg.GoStorm.ListTorrentRefs(ctx)
 	if err != nil {
 		// Logged because this fails the whole request: without it the caller sees
 		// only "cannot establish ownership" and the cause is invisible.

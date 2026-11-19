@@ -19,11 +19,18 @@ type TorrentStats struct {
 	FileStats   []FileStat `json:"file_stats"`
 }
 
+// TorrentRef is a torrent's hash and title: all that bookkeeping needs, without the
+// per-torrent status a full listing builds.
+type TorrentRef struct {
+	Hash  string `json:"hash"`
+	Title string `json:"title"`
+}
+
 // GoStorm is the engine API the library manager needs. *engines.GoStormClient
 // implements it; tests substitute a fake.
 type GoStorm interface {
 	AddTorrent(ctx context.Context, magnet, title string) (string, error)
 	GetTorrentInfo(ctx context.Context, hash string, maxWait int) (*TorrentStats, error)
 	RemoveTorrent(ctx context.Context, hash string) error
-	ListTorrents(ctx context.Context) ([]TorrentStats, error)
+	ListTorrentRefs(ctx context.Context) ([]TorrentRef, error)
 }

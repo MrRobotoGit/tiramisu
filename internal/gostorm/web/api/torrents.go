@@ -35,7 +35,7 @@ type torrReqJS struct {
 //
 //	@Tags			API
 //
-//	@Param			request	body	torrReqJS	true	"Torrent request. Available params for action: add, get, set, rem, list, drop, wipe. link required for add, hash required for get, set, rem, drop."
+//	@Param			request	body	torrReqJS	true	"Torrent request. Available params for action: add, get, set, rem, list, hashes, drop, wipe. link required for add, hash required for get, set, rem, drop."
 //
 //	@Accept			json
 //	@Produce		json
@@ -73,6 +73,10 @@ func torrents(c *gin.Context) {
 	case "active":
 		{
 			listActiveTorrents(c)
+		}
+	case "hashes":
+		{
+			listTorrentHashes(c)
 		}
 	case "drop":
 		{
@@ -184,8 +188,14 @@ func remTorrent(req torrReqJS, c *gin.Context) {
 		c.AbortWithError(http.StatusBadRequest, errors.New("hash is empty"))
 		return
 	}
-	torr.RemTorrent(req.Hash)
-
+	if err := torr.RemTorrent(req.Hash); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, torr.ErrMalformedHash) {
+			status = http.StatusBadRequest
+		}
+		c.AbortWithError(status, err)
+		return
+	}
 	c.Status(200)
 }
 
@@ -200,6 +210,17 @@ func listTorrents(c *gin.Context) {
 		stats = append(stats, tr.Status())
 	}
 	c.JSON(200, stats)
+}
+
+// listTorrentHashes answers the light listing: hash and title of every torrent, stored or
+// active, without building each one's status.
+func listTorrentHashes(c *gin.Context) {
+	list, err := torr.ListTorrentHashes()
+	if err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+	c.JSON(200, list)
 }
 
 func listActiveTorrents(c *gin.Context) {
@@ -228,7 +249,7 @@ func dropTorrent(req torrReqJS, c *gin.Context) {
 func wipeTorrents(c *gin.Context) {
 	torrents := torr.ListTorrent()
 	for _, t := range torrents {
-		torr.RemTorrent(t.TorrentSpec.InfoHash.HexString())
+		torr.RemTorrent(t.TorrentSpec.InfoHash.HexString()) // wipe removes what it can
 	}
 
 	c.Status(200)

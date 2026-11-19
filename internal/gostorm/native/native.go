@@ -741,7 +741,9 @@ func (c *NativeClient) ListTorrents() ([]TorrentStats, error) {
 
 // RemoveTorrent removes a torrent from the server
 func (c *NativeClient) RemoveTorrent(hash string) error {
-	torr.RemTorrent(hash)
+	if err := torr.RemTorrent(hash); err != nil {
+		return err
+	}
 	// V272: Clean up disk warmup files for this hash
 	if warmup.DiskWarmup != nil && hash != "" {
 		warmup.DiskWarmup.RemoveHash(hash)

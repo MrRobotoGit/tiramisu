@@ -192,6 +192,7 @@ func (e *TVGoEngine) dropReplacedPack(ctx context.Context, pack deadPack, search
 	}
 
 	removed := 0
+	released := false
 	kept := 0
 	for _, ep := range pack.Episodes {
 		if !verified[seasonFromEpisodeKey(ep.EpisodeKey)] {
@@ -230,7 +231,8 @@ func (e *TVGoEngine) dropReplacedPack(ctx context.Context, pack deadPack, search
 		// One call for the whole pack: every episode points at the same torrent. A stub
 		// kept above still needs it, so the torrent only goes when none is left.
 		if kept == 0 {
-			if _, err := e.dropTorrent(ctx, pack.Hash); err != nil {
+			var err error
+			if released, err = e.dropTorrent(ctx, pack.Hash); err != nil {
 				e.logger.Printf("[TVSync] WARNING: failed to remove torrent %s: %v", pack.Hash[:8], err)
 			}
 		}
@@ -242,8 +244,9 @@ func (e *TVGoEngine) dropReplacedPack(ctx context.Context, pack deadPack, search
 			pack.Hash[:8], kept)
 	}
 	// The counter outlives the release otherwise: the row stays and is re-read every
-	// run, and a hash picked again later would arrive already condemned.
-	if e.db != nil {
+	// run, and a hash picked again later would arrive already condemned. A torrent
+	// still in use keeps its counter, as in removeStub.
+	if released && e.db != nil {
 		if err := e.db.ClearMetadataFailure(pack.Hash); err != nil {
 			e.logger.Printf("[TVSync] Warning: could not clear the failure counter for %s: %v", pack.Hash[:8], err)
 		}
