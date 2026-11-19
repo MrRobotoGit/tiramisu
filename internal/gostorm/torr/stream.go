@@ -44,11 +44,23 @@ func (w *contextResponseWriter) Write(p []byte) (n int, err error) {
 // alone calls context.Background(), which never unblocks on a piece that never arrives).
 type ctxReader struct {
 	*torrstor.Reader
-	ctx context.Context
+	ctx    context.Context
+	onData func()
 }
 
 func (r *ctxReader) Read(p []byte) (int, error) {
-	return r.Reader.ReadContext(r.ctx, p)
+	n, err := r.Reader.ReadContext(r.ctx, p)
+	if n > 0 && r.onData != nil {
+		r.onData()
+	}
+	return n, err
+}
+
+// idleContext is cancelled after d without a call to touch: a stream lives while data flows.
+func idleContext(parent context.Context, d time.Duration) (context.Context, func(), context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	timer := time.AfterFunc(d, cancel)
+	return ctx, func() { timer.Reset(d) }, func() { timer.Stop(); cancel() }
 }
 
 func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter) error {
@@ -57,11 +69,8 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 	defer atomic.AddInt32(&activeStreams, -1)
 	// Stream disconnect timeout (same as torrent)
 	streamTimeout := sets.BTsets.TorrentDisconnectTimeout
-	// V800: In STRICT mode (non-responsive), pieces must complete SHA-1 verification before serving.
-	// This takes longer than responsive (per-chunk) mode, so the fixed 15-30s absolute timeout
-	// expires mid-piece on slow swarms, killing the stream and forcing reconnect thrashing.
-	// Doubling the timeout for STRICT mode gives pieces enough time to complete without affecting
-	// TorrentDisconnectTimeout's use elsewhere (torrent expiry, idle detection, AI Tuner).
+	// V800: STRICT mode serves only SHA-1 verified pieces, so data arrives in larger gaps:
+	// double the inactivity timeout there, leaving TorrentDisconnectTimeout's other uses alone.
 	if !torrstor.IsResponsive() {
 		streamTimeout *= 2
 	}
@@ -154,11 +163,12 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 	if req.Header.Get("Range") != "" {
 		resp.Header().Set("Accept-Ranges", "bytes")
 	}
-	// Create a context with timeout if configured
+	// Inactivity timeout: an absolute deadline cut a healthy stream every streamTimeout seconds.
 	ctx := req.Context()
+	var touch func()
 	if streamTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(streamTimeout)*time.Second)
+		ctx, touch, cancel = idleContext(ctx, time.Duration(streamTimeout)*time.Second)
 		defer cancel()
 	}
 	// Update request with new context
@@ -169,7 +179,7 @@ func (t *Torrent) Stream(fileID int, req *http.Request, resp http.ResponseWriter
 		ctx:            ctx,
 	}
 	http.ServeContent(wrappedResp, req, file.Path(), time.Unix(t.Timestamp, 0),
-		streamContent(&ctxReader{Reader: reader, ctx: ctx}, req.Header.Get("Range")))
+		streamContent(&ctxReader{Reader: reader, ctx: ctx, onData: touch}, req.Header.Get("Range")))
 
 	if sets.BTsets.EnableDebug {
 		if clerr != nil {
