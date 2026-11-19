@@ -34,7 +34,7 @@ func New(dbPath string, logger Logger) (*DB, error) {
 		f.Close()
 	}
 
-	d, err := sql.Open("sqlite", dbPath)
+	d, err := sql.Open("sqlite", dbPath+"?"+rwPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("metadb: open: %w", err)
 	}
@@ -69,6 +69,15 @@ func (d *DB) Close() error {
 	}
 	return d.db.Close()
 }
+
+// Checkpoint folds the WAL back into the DB and truncates it.
+func (d *DB) Checkpoint() error {
+	_, err := d.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
+}
+
+// Path is the DB file.
+func (d *DB) Path() string { return d.path }
 
 // hasColumn reports whether a table already carries a column.
 func (d *DB) hasColumn(table, column string) bool {
@@ -121,19 +130,16 @@ func (d *DB) SQL() *sql.DB {
 	return d.db
 }
 
+// Pragmas go in the DSN so the driver applies them to every connection it opens: set with
+// Exec they held only on the first one, and a reopened connection silently lost them.
+const (
+	rwPragmas = "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	roPragmas = "_pragma=busy_timeout(5000)"
+)
+
+// applyPragmas opens the first connection, so a pragma that fails is reported by New.
 func (d *DB) applyPragmas() error {
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA foreign_keys=ON",
-	}
-	for _, p := range pragmas {
-		if _, err := d.db.Exec(p); err != nil {
-			return fmt.Errorf("%s: %w", p, err)
-		}
-	}
-	return nil
+	return d.db.Ping()
 }
 
 // ExecSchema creates all tables if they do not exist. Idempotent.
@@ -277,6 +283,9 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 	if err := d.execConfigSchema(); err != nil {
 		return err
 	}
+	if err := d.execGoStormSchema(); err != nil {
+		return err
+	}
 	return d.execAudioSchema()
 }
 
@@ -287,12 +296,12 @@ func OpenReadOnly(dbPath string) (*DB, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, fmt.Errorf("metadb: %w", err)
 	}
-	d, err := sql.Open("sqlite", dbPath)
+	d, err := sql.Open("sqlite", dbPath+"?"+roPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("metadb: open: %w", err)
 	}
 	d.SetMaxOpenConns(1)
-	if _, err := d.Exec("PRAGMA busy_timeout=5000"); err != nil {
+	if err := d.Ping(); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("metadb: busy_timeout: %w", err)
 	}

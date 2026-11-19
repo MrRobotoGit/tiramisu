@@ -42,11 +42,12 @@ func InitSets(readOnly, searchWA bool) {
 	ReadOnly = readOnly
 	SearchWA = searchWA
 
-	bboltDB := NewTDB()
-	if bboltDB == nil {
-		log.TLogln("Error open bboltDB:", filepath.Join(Path, "config.db"))
+	// config.db was imported by ImportLegacyDB in main, before this goroutine started.
+	if stateDB == nil {
+		log.TLogln("[GoStormDB] state DB not set: SetStateDB must run before InitSets")
 		os.Exit(1)
 	}
+	sqlDB := NewSQLiteDB(stateDB)
 
 	jsonDB := NewJsonDB()
 	if jsonDB == nil {
@@ -57,7 +58,7 @@ func InitSets(readOnly, searchWA bool) {
 	// Optional forced migration (for manual control)
 	if migrationMode := os.Getenv("TS_MIGRATION_MODE"); migrationMode != "" {
 		log.TLogln(fmt.Sprintf("Executing forced migration: %s", migrationMode))
-		if err := SmartMigrate(bboltDB, jsonDB, migrationMode); err != nil {
+		if err := SmartMigrate(sqlDB, jsonDB, migrationMode); err != nil {
 			log.TLogln("Migration warning:", err)
 		}
 	}
@@ -67,18 +68,18 @@ func InitSets(readOnly, searchWA bool) {
 	quarantined := quarantineCorruptSettings(jsonDB)
 
 	// Determine storage preferences
-	settingsStoragePref := determineStoragePreferences(bboltDB, jsonDB)
+	settingsStoragePref := determineStoragePreferences(sqlDB, jsonDB)
 	if quarantined {
 		// The file existing at all means settings were kept in JSON. Stay there, and let
-		// the migration below repopulate the fresh file from the BBolt copy if one exists.
+		// the migration below repopulate the fresh file from the DB copy if one exists.
 		settingsStoragePref = true
 	}
 
 	// Apply migrations (clean, one-way)
-	applyCleanMigrations(bboltDB, jsonDB, settingsStoragePref)
+	applyCleanMigrations(sqlDB, jsonDB, settingsStoragePref)
 
 	// Setup routing
-	setupDatabaseRouting(bboltDB, jsonDB, settingsStoragePref)
+	setupDatabaseRouting(sqlDB, jsonDB, settingsStoragePref)
 
 	// Load settings
 	loadBTSets()
@@ -88,9 +89,6 @@ func InitSets(readOnly, searchWA bool) {
 		BTsets.StoreSettingsInJson = settingsStoragePref
 		SetBTSets(BTsets)
 	}
-
-	// Migrate old torrents
-	MigrateTorrents()
 
 	logConfiguration(settingsStoragePref)
 }
@@ -113,13 +111,13 @@ func quarantineCorruptSettings(jsonDB GoStormDB) bool {
 		log.TLogln("Settings file is corrupt and could not be set aside:", err)
 		return false
 	}
-	log.TLogln("Settings file was corrupt, moved to", dest, "- restoring from the BBolt copy or defaults")
+	log.TLogln("Settings file was corrupt, moved to", dest, "- restoring from the DB copy or defaults")
 	return true
 }
 
-func determineStoragePreferences(bboltDB, jsonDB GoStormDB) (settingsInJson bool) {
+func determineStoragePreferences(sqlDB, jsonDB GoStormDB) (settingsInJson bool) {
 	// Try to load existing settings first
-	if existing := loadExistingSettings(bboltDB, jsonDB); existing != nil {
+	if existing := loadExistingSettings(sqlDB, jsonDB); existing != nil {
 		if IsDebug() {
 			log.TLogln(fmt.Sprintf("Found settings: StoreSettingsInJson=%v",
 				existing.StoreSettingsInJson))
@@ -144,7 +142,7 @@ func determineStoragePreferences(bboltDB, jsonDB GoStormDB) (settingsInJson bool
 	return settingsInJson
 }
 
-func loadExistingSettings(bboltDB, jsonDB GoStormDB) *BTSets {
+func loadExistingSettings(sqlDB, jsonDB GoStormDB) *BTSets {
 	// Try JSON first
 	if buf := jsonDB.Get("Settings", "BitTorr"); buf != nil {
 		var sets BTSets
@@ -152,15 +150,15 @@ func loadExistingSettings(bboltDB, jsonDB GoStormDB) *BTSets {
 			return &sets
 		}
 	}
-	// A JSON file that exists but cannot be parsed must not fall through to BBolt: the
+	// A JSON file that exists but cannot be parsed must not fall through to the DB: the
 	// fallback would flip the backend to a stale copy, and the migration then clears the
 	// file we failed to read.
 	if j, ok := jsonDB.(*JsonDB); ok && !j.readable("Settings") {
-		log.TLogln("Settings JSON unreadable, keeping JSON storage (no fallback to BBolt)")
+		log.TLogln("Settings JSON unreadable, keeping JSON storage (no fallback to the DB)")
 		return &BTSets{StoreSettingsInJson: true}
 	}
-	// Try BBolt
-	if buf := bboltDB.Get("Settings", "BitTorr"); buf != nil {
+	// Try the DB
+	if buf := sqlDB.Get("Settings", "BitTorr"); buf != nil {
 		var sets BTSets
 		if err := json.Unmarshal(buf, &sets); err == nil {
 			return &sets
@@ -169,12 +167,12 @@ func loadExistingSettings(bboltDB, jsonDB GoStormDB) *BTSets {
 	return nil
 }
 
-func applyCleanMigrations(bboltDB, jsonDB GoStormDB, settingsInJson bool) {
+func applyCleanMigrations(sqlDB, jsonDB GoStormDB, settingsInJson bool) {
 	// Settings migration
 	if settingsInJson {
-		safeMigrate(bboltDB, jsonDB, "Settings", "BitTorr", "JSON", true)
+		safeMigrate(sqlDB, jsonDB, "Settings", "BitTorr", "JSON", true)
 	} else {
-		safeMigrate(jsonDB, bboltDB, "Settings", "BitTorr", "BBolt", true)
+		safeMigrate(jsonDB, sqlDB, "Settings", "BitTorr", "SQLite", true)
 	}
 }
 
@@ -204,26 +202,25 @@ func safeMigrate(source, target GoStormDB, xpath, name, targetName string, clear
 	}
 }
 
-func setupDatabaseRouting(bboltDB, jsonDB GoStormDB, settingsInJson bool) {
+func setupDatabaseRouting(sqlDB, jsonDB GoStormDB, settingsInJson bool) {
 	dbRouter := NewXPathDBRouter()
 
 	if settingsInJson {
 		dbRouter.RegisterRoute(jsonDB, "Settings")
 	} else {
-		dbRouter.RegisterRoute(bboltDB, "Settings")
+		dbRouter.RegisterRoute(sqlDB, "Settings")
 	}
 
-	dbRouter.RegisterRoute(bboltDB, "Torrents")
 	tdb = NewDBReadCache(dbRouter)
 }
 
 func logConfiguration(settingsInJson bool) {
 	settingsLoc := "JSON"
 	if !settingsInJson {
-		settingsLoc = "BBolt"
+		settingsLoc = "SQLite"
 	}
 
-	log.TLogln(fmt.Sprintf("Storage: Settings->%s, Torrents->BBolt",
+	log.TLogln(fmt.Sprintf("Storage: Settings->%s, Torrents->SQLite",
 		settingsLoc))
 }
 
@@ -236,22 +233,18 @@ func SwitchSettingsStorage(useJson bool) error {
 	dbMigrationLock.Lock()
 	defer dbMigrationLock.Unlock()
 
-	bboltDB := NewTDB()
-	if bboltDB == nil {
-		return errors.New("failed to open BBolt DB")
+	sqlDB := NewSQLiteDB(stateDB)
+	if sqlDB == nil {
+		return errors.New("state DB not available")
 	}
-	// DON'T CLOSE! They're still in use by tdb
-	// defer bboltDB.CloseDB()
 
 	jsonDB := NewJsonDB()
 	if jsonDB == nil {
 		return errors.New("failed to open JSON DB")
 	}
-	// DON'T CLOSE! They're still in use by tdb
-	// defer jsonDB.CloseDB()
 
 	log.TLogln(fmt.Sprintf("Switching Settings storage to %s",
-		map[bool]string{true: "JSON", false: "BBolt"}[useJson]))
+		map[bool]string{true: "JSON", false: "SQLite"}[useJson]))
 
 	// Update storage preference (must be called before migrate as this setting migrate too)
 	if BTsets != nil {
@@ -261,9 +254,9 @@ func SwitchSettingsStorage(useJson bool) error {
 
 	var err error
 	if useJson {
-		err = MigrateSettingsToJson(bboltDB, jsonDB)
+		err = MigrateSettingsToJson(sqlDB, jsonDB)
 	} else {
-		err = MigrateSettingsFromJson(jsonDB, bboltDB)
+		err = MigrateSettingsFromJson(jsonDB, sqlDB)
 	}
 
 	if err != nil {
@@ -287,7 +280,7 @@ func GetStoragePreferences() map[string]interface{} {
 		if BTsets.StoreSettingsInJson {
 			prefs["settings"] = "json"
 		} else {
-			prefs["settings"] = "bbolt"
+			prefs["settings"] = "sqlite"
 		}
 	}
 

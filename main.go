@@ -5025,6 +5025,10 @@ func main() {
 		torr.PeerInfo = geoip.Start(context.Background(), GetStateDir(), logger.Printf).PeerInfo
 	}
 
+	settings.SetStateDB(boot.DB)
+	if err := settings.ImportLegacyDB(); err != nil {
+		config.Fatal(err)
+	}
 	go func() {
 		logger.Println("Starting Embedded GoStorm Engine...")
 		server.Start() // Starts Web Server on 8090 and Engine

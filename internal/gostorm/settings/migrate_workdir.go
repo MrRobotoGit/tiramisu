@@ -12,7 +12,7 @@ import (
 // process working directory, because Path was never assigned and filepath.Join("", name)
 // yields a relative name.
 var workdirState = []string{
-	"config.db",     // bbolt: torrents, and settings when StoreSettingsInJson is false
+	"config.db",     // legacy BBolt store, imported into tiramisu.db at start
 	"settings.json", // BTSets when StoreSettingsInJson is true (the default)
 	"torrents.json",
 	"trackers.txt",

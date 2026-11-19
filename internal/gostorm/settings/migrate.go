@@ -1,129 +1,33 @@
 package settings
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
-	"time"
 
 	"tiramisu/internal/gostorm/log"
-	"tiramisu/internal/gostorm/web/api/utils"
-
-	bolt "go.etcd.io/bbolt"
 )
 
-var dbTorrentsName = []byte("Torrents")
-
-type torrentBackupDB struct {
-	Name      string
-	Magnet    string
-	InfoBytes []byte
-	Hash      string
-	Size      int64
-	Timestamp int64
-}
-
-// Migrate from torrserver.db to config.db
-// TODO: migrate categories and data too
-func MigrateTorrents() {
-	if _, err := os.Lstat(filepath.Join(Path, "torrserver.db")); os.IsNotExist(err) {
-		return
-	}
-
-	db, err := bolt.Open(filepath.Join(Path, "torrserver.db"), 0o666, &bolt.Options{Timeout: 5 * time.Second})
-	if err != nil {
-		log.TLogln("MigrateTorrents", err)
-		return
-	}
-
-	torrs := make([]*torrentBackupDB, 0)
-	err = db.View(func(tx *bolt.Tx) error {
-		tdb := tx.Bucket(dbTorrentsName)
-		if tdb == nil {
-			return nil
-		}
-		c := tdb.Cursor()
-		for h, _ := c.First(); h != nil; h, _ = c.Next() {
-			hdb := tdb.Bucket(h)
-			if hdb != nil {
-				torr := new(torrentBackupDB)
-				torr.Hash = string(h)
-				tmp := hdb.Get([]byte("Name"))
-				if tmp == nil {
-					return fmt.Errorf("error load torrent")
-				}
-				torr.Name = string(tmp)
-
-				tmp = hdb.Get([]byte("Link"))
-				if tmp == nil {
-					return fmt.Errorf("error load torrent")
-				}
-				torr.Magnet = string(tmp)
-
-				tmp = hdb.Get([]byte("Size"))
-				if tmp == nil {
-					return fmt.Errorf("error load torrent")
-				}
-				torr.Size = b2i(tmp)
-
-				tmp = hdb.Get([]byte("Timestamp"))
-				if tmp == nil {
-					return fmt.Errorf("error load torrent")
-				}
-				torr.Timestamp = b2i(tmp)
-
-				torrs = append(torrs, torr)
-			}
-		}
-		return nil
-	})
-	db.Close()
-	if err == nil && len(torrs) > 0 {
-		for _, torr := range torrs {
-			spec, err := utils.ParseLink(torr.Magnet)
-			if err != nil {
-				continue
-			}
-
-			title := torr.Name
-			if len(spec.DisplayName) > len(title) {
-				title = spec.DisplayName
-			}
-			log.TLogln("Migrate torrent", torr.Name, torr.Hash, torr.Size)
-			AddTorrent(&TorrentDB{
-				TorrentSpec: spec,
-				Title:       title,
-				Timestamp:   torr.Timestamp,
-				Size:        torr.Size,
-			})
-		}
-	}
-	os.Remove(filepath.Join(Path, "torrserver.db"))
-}
-
-// MigrateSettingsToJson migrates Settings from BBolt to JSON
-func MigrateSettingsToJson(bboltDB, jsonDB GoStormDB) error {
+// MigrateSettingsToJson migrates Settings from the DB to JSON
+func MigrateSettingsToJson(sqlDB, jsonDB GoStormDB) error {
 	// if BTsets != nil {
 	// 	return errors.New("migration must be called before initializing BTSets")
 	// }
-	migrated, err := MigrateSingle(bboltDB, jsonDB, "Settings", "BitTorr")
+	migrated, err := MigrateSingle(sqlDB, jsonDB, "Settings", "BitTorr")
 	if migrated {
-		log.TLogln("Settings migrated from BBolt to JSON")
+		log.TLogln("Settings migrated from the DB to JSON")
 	}
 	return err
 }
 
-// MigrateSettingsFromJson migrates Settings from JSON to BBolt
-func MigrateSettingsFromJson(jsonDB, bboltDB GoStormDB) error {
+// MigrateSettingsFromJson migrates Settings from JSON to the DB
+func MigrateSettingsFromJson(jsonDB, sqlDB GoStormDB) error {
 	// if BTsets != nil {
 	// 	return errors.New("migration must be called before initializing BTSets")
 	// }
-	migrated, err := MigrateSingle(jsonDB, bboltDB, "Settings", "BitTorr")
+	migrated, err := MigrateSingle(jsonDB, sqlDB, "Settings", "BitTorr")
 	if migrated {
-		log.TLogln("Settings migrated from JSON to BBolt")
+		log.TLogln("Settings migrated from JSON to the DB")
 	}
 	return err
 }
@@ -167,18 +71,18 @@ func MigrateSingle(source, target GoStormDB, xpath, name string) (bool, error) {
 }
 
 // SmartMigrate - keep for manual/advanced use
-func SmartMigrate(bboltDB, jsonDB GoStormDB, forceDirection string) error {
+func SmartMigrate(sqlDB, jsonDB GoStormDB, forceDirection string) error {
 	// if BTsets != nil {
 	// 	return errors.New("migration must be called before initializing BTSets")
 	// }
 	switch forceDirection {
 	case "settings_to_json":
-		return MigrateSettingsToJson(bboltDB, jsonDB)
-	case "settings_to_bbolt":
-		return MigrateSettingsFromJson(jsonDB, bboltDB)
+		return MigrateSettingsToJson(sqlDB, jsonDB)
+	case "settings_to_bbolt", "settings_to_sqlite":
+		return MigrateSettingsFromJson(jsonDB, sqlDB)
 	case "sync_both":
 		// Simple sync: copy missing data both ways
-		if err := migrateMissing(bboltDB, jsonDB, "Settings", "BitTorr"); err != nil {
+		if err := migrateMissing(sqlDB, jsonDB, "Settings", "BitTorr"); err != nil {
 			return err
 		}
 		return nil
@@ -264,10 +168,6 @@ func verifyMigration(source, target GoStormDB, xpath, name string, originalData 
 		log.TLogln(fmt.Sprintf("Verified migration of %s/%s", xpath, name))
 	}
 	return nil
-}
-
-func b2i(v []byte) int64 {
-	return int64(binary.BigEndian.Uint64(v))
 }
 
 func migrateMissing(db1, db2 GoStormDB, xpath, name string) error {

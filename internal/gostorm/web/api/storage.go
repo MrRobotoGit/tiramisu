@@ -41,7 +41,7 @@ func UpdateStorageSettings(c *gin.Context) {
 	}
 
 	if settingsPref, ok := prefs["settings"].(string); ok && settingsPref != "" {
-		if settingsPref != "json" && settingsPref != "bbolt" {
+		if settingsPref != "json" && settingsPref != "sqlite" && settingsPref != "bbolt" { // bbolt: old name of sqlite
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid settings storage value"})
 			return
 		}
