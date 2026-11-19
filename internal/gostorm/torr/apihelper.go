@@ -527,9 +527,17 @@ func SetDefSettings() {
 	applySettings(sets.SetDefaultConfig, nil)
 }
 
-// SaveDefSettings is a manual reset to the defaults, recorded in the Engine history.
+// SaveDefSettings is a manual reset to the defaults, recorded in the Engine history. The
+// keys NAT-PMP and the install own keep their value, as on any manual save.
 func SaveDefSettings(o Origin) {
-	applySettings(sets.SetDefaultConfig, &o)
+	applySettings(func() {
+		var prev, def sets.BTSets
+		json.Unmarshal(sets.CurrentJSON(), &prev)
+		sets.SetDefaultConfig()
+		json.Unmarshal(sets.CurrentJSON(), &def)
+		sets.KeepIgnoredFrom(&def, &prev)
+		sets.SetBTSets(&def)
+	}, &o)
 }
 
 func dropAllTorrent() {

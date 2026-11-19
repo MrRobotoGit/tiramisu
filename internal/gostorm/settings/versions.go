@@ -2,7 +2,9 @@ package settings
 
 import (
 	"encoding/json"
+	"net"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +40,26 @@ func ActorFrom(source, actor string) (string, string) {
 	return source, actor
 }
 
+// ActorFromRequest is ActorFrom for a request from remoteAddr: only the :9080 proxy, on
+// loopback, may say who saved; with :8090 open to the LAN anyone else is recorded as api.
+func ActorFromRequest(remoteAddr, source, actor string) (string, string) {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
+		return ActorFrom("", "")
+	}
+	return ActorFrom(source, actor)
+}
+
+// HeaderSafe drops control characters, which Go's HTTP client refuses in a header value.
+func HeaderSafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // SetPortManagedExternally tells the history that NAT-PMP sets the peer port: it is then
 // left out of comparisons and never restored, since an old port is not forwarded.
 func SetPortManagedExternally(on bool) { portManaged.Store(on) }
@@ -65,13 +87,17 @@ func CurrentJSON() []byte {
 func KeepIgnored(s *BTSets) {
 	btsetsMu.RLock()
 	defer btsetsMu.RUnlock()
-	if BTsets == nil {
-		return
+	if BTsets != nil {
+		KeepIgnoredFrom(s, BTsets)
 	}
-	s.StoreSettingsInJson = BTsets.StoreSettingsInJson
-	s.SslPort, s.SslCert, s.SslKey = BTsets.SslPort, BTsets.SslCert, BTsets.SslKey
+}
+
+// KeepIgnoredFrom copies the keys HistoryIgnoredKeys lists from src into dst.
+func KeepIgnoredFrom(dst, src *BTSets) {
+	dst.StoreSettingsInJson = src.StoreSettingsInJson
+	dst.SslPort, dst.SslCert, dst.SslKey = src.SslPort, src.SslCert, src.SslKey
 	if portManaged.Load() {
-		s.PeersListenPort = BTsets.PeersListenPort
+		dst.PeersListenPort = src.PeersListenPort
 	}
 }
 

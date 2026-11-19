@@ -5509,7 +5509,7 @@ func main() {
 		req.Header.Set("Content-Type", "application/json")
 		source, actor := authSvc.Actor(r)
 		req.Header.Set(settings.HeaderSource, source) // for the Engine settings history
-		req.Header.Set(settings.HeaderActor, actor)
+		req.Header.Set(settings.HeaderActor, settings.HeaderSafe(actor))
 		resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 		if err != nil {
 			http.Error(w, "gostorm unreachable: "+err.Error(), http.StatusBadGateway)

@@ -54,6 +54,6 @@ func settings(c *gin.Context) {
 
 // origin is who saved, from the :9080 proxy headers, for the Engine history.
 func origin(c *gin.Context, note string) torr.Origin {
-	source, actor := sets.ActorFrom(c.GetHeader(sets.HeaderSource), c.GetHeader(sets.HeaderActor))
+	source, actor := sets.ActorFromRequest(c.Request.RemoteAddr, c.GetHeader(sets.HeaderSource), c.GetHeader(sets.HeaderActor))
 	return torr.Origin{Source: source, Actor: actor, Note: note}
 }
