@@ -316,6 +316,19 @@ install's telemetry id, and answers with the new version, what changed and wheth
 only a signed-in Control Panel session: a token gets `403`, because a rollback can
 turn HTTPS off or change the trusted proxies.
 
+### Engine settings history
+
+The GoStorm Engine settings (cache size, connections, peer port…) have their own
+history, shown in the same Control Panel page: `GET /api/gostorm/history`,
+`GET /api/gostorm/history/{id}/restore` and `POST /api/gostorm/rollback` work like the
+configuration routes above, with the same access rule. Only manual saves become
+versions (Control Panel, `POST /api/gostorm/settings` with `set` or `def`, a restore):
+the peer port NAT-PMP sets and the defaults written at start-up do not.
+`StoreSettingsInJson`, the SSL fields, and `PeersListenPort` while NAT-PMP is on, are
+never compared, and a save or a restore keeps their current value: with NAT-PMP the
+peer port is the one the VPN forwards, not the one in the form. A restore applies at once, with no restart,
+but GoStorm reconnects its BitTorrent client: playback in progress stops.
+
 ---
 
 ## MCP Server

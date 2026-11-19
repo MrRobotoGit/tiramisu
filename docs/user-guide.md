@@ -262,7 +262,7 @@ its settings take effect: on restart (Tiramisu settings, saved in the state data
 | **Release Selection** | Preferred and excluded language flags, preferred terms; quality scoring preset and bonuses for Movies and TV Series, with a preview of what wins right now |
 | **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule, `scheduler.music_sync`) |
 | **Access** *(live)* | Optional sign-in for `:9080` (one user, password), API tokens for agents and scripts, browser sessions, and HTTPS *(restart)*: a guided card to turn it on, download and trust the CA, and move clients to `https://`. See [Sign-in and API tokens](api.md#sign-in-and-api-tokens) and [HTTPS](api.md#https) |
-| **History** *(restart)* | The last 50 saved versions of the configuration, who saved each one and what it changed (keys and tokens only as changed); filter by restart or secrets, and restore any version through the change bar: the newer ones stay in the list |
+| **History** *(restart)* | The last 50 saved versions of the configuration and, marked *engine*, the last 50 manual saves of the Engine settings: who saved each one and what it changed (keys and tokens only as changed); filter by restart, secrets or Engine, and restore any version through the change bar: the newer ones stay in the list. An Engine restore applies at once and restarts the BitTorrent client, so playback in progress stops |
 
 Keys and tokens (media server token, TMDB and Prowlarr API keys) are write-only: the
 Control Panel shows whether one is set, never its value. Leave the field empty to keep it.
