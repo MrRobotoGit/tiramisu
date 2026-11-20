@@ -3805,6 +3805,15 @@ type ReadAheadCache struct {
 	isEvicting       int32 // atomic flag prevents concurrent global evictions
 
 	pieceLens sync.Map // path → int64 adaptive chunk size (aligned to piece boundary)
+
+	readers func(path string) []raReader // open readers of a path, for eviction; nil = activeHandles
+}
+
+// raReader is one open handle's position as eviction sees it.
+type raReader struct {
+	off     int64
+	primary bool
+	tail    bool // reading the SSD tail: needs nothing from raCache
 }
 
 // SetPieceLen stores the aligned chunk size for path derived from piece length.
@@ -4143,11 +4152,19 @@ func (c *ReadAheadCache) Put(p string, start, end int64, d []byte) {
 	responsiveOnly := torrstor.IsResponsive()
 	shard.buffers[key] = &RaBuffer{start, end, dataCopy, time.Now().UnixNano(), sessID, responsiveOnly}
 
-	// Evict from this shard while over budget; keep last item to avoid evicting the chunk just added.
-	for newUsed > globalLimit && len(shard.order) > 1 {
-		v := shard.order[0]
-		shard.order = shard.order[1:]
-		if old, ok := shard.buffers[v]; ok {
+	// Evict from this shard while over budget, least needed first; never the chunk just added.
+	exhausted := false
+	if newUsed > globalLimit {
+		readers := make(map[string]raPathReaders)
+		for newUsed > globalLimit {
+			i := c.pickVictim(shard, key, globalLimit, readers)
+			if i < 0 {
+				exhausted = true
+				break
+			}
+			v := shard.order[i]
+			shard.order = append(shard.order[:i], shard.order[i+1:]...)
+			old := shard.buffers[v]
 			evictedSize := int64(len(old.data))
 			shard.total -= evictedSize
 			delete(shard.buffers, v)
@@ -4157,7 +4174,7 @@ func (c *ReadAheadCache) Put(p string, start, end int64, d []byte) {
 	}
 
 	// Local shard exhausted: trigger global eviction to free stale data from other shards.
-	if newUsed > globalLimit && len(shard.order) <= 1 {
+	if newUsed > globalLimit && exhausted {
 		c.muContext.Lock()
 		ap := c.activePath
 		sid := c.currentSessionID
@@ -4184,6 +4201,116 @@ func (c *ReadAheadCache) Put(p string, start, end int64, d []byte) {
 		}
 		shard.order = newOrder
 	}
+}
+
+// raPathReaders is one path's open readers, resolved once per eviction pass.
+type raPathReaders struct {
+	open          bool  // any handle open on the path
+	anchor        int64 // primary player position as the pump follows it
+	anchorUnknown bool  // the only primaries read the SSD tail
+	secondaries   []int64
+}
+
+func (c *ReadAheadCache) pathReaders(path string) raPathReaders {
+	src := c.readers
+	if src == nil {
+		src = handleReaders
+	}
+	var pr raPathReaders
+	primary, tailPrimary := false, false
+	for _, r := range src(path) {
+		pr.open = true
+		off := max(r.off, 0)
+		switch {
+		case r.tail:
+			if r.primary {
+				tailPrimary = true
+			}
+		case r.primary:
+			primary = true
+			pr.anchor = max(pr.anchor, off)
+		default:
+			pr.secondaries = append(pr.secondaries, off)
+		}
+	}
+	// Mirrors the pump: no streaming primary means it fills from 0, a tail-only one hides its position.
+	pr.anchorUnknown = !primary && tailPrimary
+	return pr
+}
+
+// handleReaders lists the open handles on path; reads only atomics, safe under a shard lock.
+func handleReaders(path string) []raReader {
+	var rs []raReader
+	activeHandles.Range(func(key, _ interface{}) bool {
+		h, ok := key.(*MkvHandle)
+		if ok && h.path == path {
+			off := atomic.LoadInt64(&h.lastOff)
+			rs = append(rs, raReader{off: off, primary: h.isPrimaryHandle.Load(), tail: shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize)})
+		}
+		return true
+	})
+	return rs
+}
+
+// Eviction tiers, lowest evicted first.
+const (
+	raTierUnneeded      = iota // no open handle, behind every reader, or beyond what any reader needs
+	raTierPrimaryAhead         // pump lead ahead of the primary, farthest first
+	raTierSecondaryNext        // the chunk a secondary is reading and the next one
+	raTierPrimaryNext          // the chunk the primary is reading and the next one
+)
+
+// pickVictim returns the index in s.order of the chunk to evict, or -1 if only keep is left.
+func (c *ReadAheadCache) pickVictim(s *raShard, keep string, budget int64, cache map[string]raPathReaders) int {
+	best, bestTier, bestStart := -1, 0, int64(0)
+	for i := 0; i < len(s.order); i++ {
+		k := s.order[i]
+		b, ok := s.buffers[k]
+		if !ok {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			i--
+			continue
+		}
+		if k == keep {
+			continue
+		}
+		path := k[:strings.LastIndexByte(k, ':')]
+		pr, ok := cache[path]
+		if !ok {
+			pr = c.pathReaders(path)
+			cache[path] = pr
+		}
+		tier := raChunkTier(pr, b.start, b.end, c.ChunkSize(path), budget)
+		if tier == raTierUnneeded {
+			return i // oldest unneeded chunk
+		}
+		if best < 0 || tier < bestTier || (tier == bestTier && tier == raTierPrimaryAhead && b.start > bestStart) {
+			best, bestTier, bestStart = i, tier, b.start
+		}
+	}
+	return best
+}
+
+func raChunkTier(pr raPathReaders, start, end, chunk, budget int64) int {
+	if !pr.open {
+		return raTierUnneeded
+	}
+	if pr.anchorUnknown {
+		return raTierPrimaryAhead
+	}
+	tier := raTierUnneeded
+	if end >= pr.anchor && start < pr.anchor+2*chunk {
+		return raTierPrimaryNext
+	}
+	if end >= pr.anchor && start <= pr.anchor+budget {
+		tier = raTierPrimaryAhead
+	}
+	for _, off := range pr.secondaries {
+		if end >= off && start < off+2*chunk {
+			return raTierSecondaryNext
+		}
+	}
+	return tier
 }
 
 // Stats returns read-ahead cache statistics for metrics endpoint
