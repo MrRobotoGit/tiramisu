@@ -625,6 +625,7 @@ func (c *PeerConn) onReadRequest(r Request, startFetch bool) error {
 		allocReservation: c.peerRequestDataAllocLimiter.Reserve(int64(r.Length)),
 	}
 	c.peerRequests[r] = value
+	c.peerRequestOrder = append(c.peerRequestOrder, queuedPeerRequest{r, value})
 	if startFetch {
 		c.startPeerRequestServer()
 	}
@@ -640,17 +641,21 @@ func (c *PeerConn) startPeerRequestServer() {
 	}
 }
 
+// Serves in arrival order: reservations are granted FIFO and released only when a chunk is sent, so
+// waiting on a later request while an earlier granted one is unread deadlocks the upload (#37).
 func (c *PeerConn) peerRequestServer() {
 	c.locker().Lock()
-again:
-	if !c.closed.IsSet() {
-		for r, state := range c.peerRequests {
-			if state.data != nil {
-				continue
-			}
-			c.servePeerRequest(r, state)
-			goto again
+	for !c.closed.IsSet() && len(c.peerRequestOrder) > 0 {
+		q := c.peerRequestOrder[0]
+		c.peerRequestOrder[0] = queuedPeerRequest{}
+		c.peerRequestOrder = c.peerRequestOrder[1:]
+		if cur, ok := c.peerRequests[q.r]; !ok || cur != q.state || q.state.data != nil {
+			continue
 		}
+		c.servePeerRequest(q.r, q.state)
+	}
+	if len(c.peerRequestOrder) == 0 {
+		c.peerRequestOrder = nil
 	}
 	c.peerRequestServerRunning = false
 	c.locker().Unlock()

@@ -121,6 +121,9 @@ type (
 		peerInterested bool
 		peerChoking    bool
 		peerRequests   map[Request]*peerRequestState
+		// Unread requests in arrival order, the order alloclim grants their reservations. Entries
+		// removed or replaced in peerRequests are skipped when popped.
+		peerRequestOrder []queuedPeerRequest
 		// True while the single request-serving goroutine is running. Guarded by the client lock.
 		peerRequestServerRunning bool
 		PeerPrefersEncryption    bool // as indicated by 'e' field in extension handshake
@@ -138,6 +141,11 @@ type (
 	}
 
 	PeerSource string
+
+	queuedPeerRequest struct {
+		r     Request
+		state *peerRequestState
+	}
 
 	peerRequestState struct {
 		data             []byte
@@ -363,6 +371,7 @@ func (p *Peer) close() {
 	for _, prs := range p.peerRequests {
 		prs.allocReservation.Drop()
 	}
+	p.peerRequestOrder = nil
 	p.peerImpl.onClose()
 	if p.t != nil {
 		p.t.decPeerPieceAvailability(p)

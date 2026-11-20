@@ -31,7 +31,8 @@ func (me *Limiter) Reserve(n int64) *Reservation {
 	}
 	me.init()
 	me.mu.Lock()
-	if n <= me.value {
+	// Never overtake earlier waiters: callers rely on grants following reservation order.
+	if len(me.waiting) == 0 && n <= me.value {
 		me.value -= n
 		r.granted.Set()
 	} else {
