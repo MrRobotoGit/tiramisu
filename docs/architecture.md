@@ -343,9 +343,9 @@ detail behind those two.
 
 ### Tentacle vs GoStorm (simulator)
 
-Measured on the same machine, on the same simulated swarms, against the last GoStorm build (v1.12) and Tentacle v1.13.0.
+Measured on the same machine, on the same simulated swarms, v1.12.03 Legacy (the last GoStorm release) against v1.13.0 Tentacle.
 
-| Test | GoStorm | Tentacle | |
+| Test | v1.12.03 Legacy (GoStorm) | v1.13.0 Tentacle | |
 |---|---|---|---|
 | Read from cache, latency p95 | 302 µs | **128 µs** | 2.4× faster |
 | Read from cache, throughput | 3,758 MiB/s | **8,227 MiB/s** | 2.2× more |
