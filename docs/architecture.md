@@ -294,7 +294,7 @@ and uses real production profiling data to inline hot paths and lay out
 branches. On a Pi 4 Cortex-A72, which has no hardware AES or SHA1, PGO alone is
 worth roughly **5–7% of CPU**.
 
-### 11. Tentacle: Tiramisu's own engine on an anacrolix/torrent fork
+### 11. Tentacle: a torrent engine built around FUSE
 
 Tentacle is Tiramisu's own native torrent engine, and it was built around FUSE
 rather than bolted onto it.
