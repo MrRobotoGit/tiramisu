@@ -296,15 +296,23 @@ worth roughly **5–7% of CPU**.
 
 ### 11. Tentacle: Tiramisu's own engine on an anacrolix/torrent fork
 
-Tentacle is Tiramisu's own streaming engine, written for one job: playing a
-file while it is still downloading. It asks the swarm for the pieces the player
-needs next, keeps them in a fixed RAM budget, verifies them, and hands them to
-FUSE through an in-memory pipe paced by the player. It replaced
-GoStorm, the engine derived from [TorrServer Matrix](https://github.com/YouROK/TorrServer),
-in v1.13.0. The peer protocol still comes from Tiramisu's patched fork of
-**[anacrolix/torrent](https://github.com/anacrolix/torrent)** (MPL-2.0), reached
-through a single adapter; everything between the swarm and the FUSE pipe is
-Tiramisu's own code:
+Tentacle is Tiramisu's own native torrent engine, and it was built around FUSE
+rather than bolted onto it.
+
+A normal torrent client downloads a file and hands it over when it is done.
+Tentacle starts from the opposite end: a player opening a file that does not
+exist yet. Every read that arrives through FUSE becomes the engine's plan,
+which pieces to ask the swarm for, in what order and by when, so the strangers
+on the other side end up racing to stay a few seconds ahead of the scene you
+are watching. It keeps only as much of the film in memory as that lead needs,
+lets the player's own pace set how fast data flows, and turns strict the moment
+a peer sends bad data, without stopping the picture.
+
+To Plex, Jellyfin or Infuse it is just a file on a disk. Under the hood, the
+peer protocol comes from Tiramisu's patched fork of
+**[anacrolix/torrent](https://github.com/anacrolix/torrent)** (MPL-2.0); the
+engine replaced GoStorm, derived from
+[TorrServer Matrix](https://github.com/YouROK/TorrServer), in v1.13.0. Its parts:
 
 | Part | What it does |
 |---|---|
