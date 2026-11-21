@@ -32,7 +32,9 @@
 
 Tiramisu turns torrents into ordinary, seekable `.mkv` files on a FUSE virtual filesystem. Plex, Jellyfin, Infuse or any player reads them like files on a local disk, while every byte is fetched live from the BitTorrent swarm. Nothing is downloaded in advance, there are no temporary copies and no storage quota.
 
-Underneath is **Tentacle**, Tiramisu's own native torrent engine, built around FUSE rather than bolted onto it. A normal client downloads a file and hands it over when it is done; Tentacle starts from a player opening a file that does not exist yet. Every read becomes the plan for which pieces to fetch next, so the swarm ends up racing to stay a few seconds ahead of the scene you are watching, while data flows from peers through RAM to the media server with no HTTP proxy in between. The result is 4K HDR Dolby Vision playback that starts in under a second from the warmup cache (2–4 s on a cold swarm) and seeks instantly, on hardware as small as a Raspberry Pi 4.
+**Tentacle** is Tiramisu's native torrent engine, built around FUSE. It lets the player lead: every read that reaches a virtual file tells Tentacle which pieces matter next, and it chases them from the swarm against the clock, a few seconds ahead of the scene on screen. A seek moves the whole effort to the new spot at once. Data travels from the peers through RAM to the media server along an in-memory pipe, at the pace the player sets. And when a peer sends bad data, Tentacle shields the picture: it turns strict for that torrent alone, finds the one peer responsible, bans it and carries on.
+
+The result is 4K HDR Dolby Vision playback that starts in under a second from the warmup cache (2–4 s on a cold swarm) and seeks instantly, on hardware as small as a Raspberry Pi 4.
 
 ---
 

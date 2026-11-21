@@ -296,17 +296,7 @@ worth roughly **5–7% of CPU**.
 
 ### 11. Tentacle: a torrent engine built around FUSE
 
-Tentacle is Tiramisu's own native torrent engine, and it was built around FUSE
-rather than bolted onto it.
-
-A normal torrent client downloads a file and hands it over when it is done.
-Tentacle starts from the opposite end: a player opening a file that does not
-exist yet. Every read that arrives through FUSE becomes the engine's plan,
-which pieces to ask the swarm for, in what order and by when, so the strangers
-on the other side end up racing to stay a few seconds ahead of the scene you
-are watching. It keeps only as much of the film in memory as that lead needs,
-lets the player's own pace set how fast data flows, and turns strict the moment
-a peer sends bad data, without stopping the picture.
+Tentacle is Tiramisu's native torrent engine, built around FUSE. It lets the player lead: every read that reaches a virtual file tells Tentacle which pieces matter next, and it chases them from the swarm against the clock, a few seconds ahead of the scene on screen. A seek moves the whole effort to the new spot at once. Data travels from the peers through RAM to the media server along an in-memory pipe, at the pace the player sets. And when a peer sends bad data, Tentacle shields the picture: it turns strict for that torrent alone, finds the one peer responsible, bans it and carries on.
 
 To Plex, Jellyfin or Infuse it is just a file on a disk. Under the hood, the
 peer protocol comes from Tiramisu's patched fork of
