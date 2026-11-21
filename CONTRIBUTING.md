@@ -10,7 +10,7 @@ Tiramisu is not a download manager, not a debrid client, not a media library UI,
 
 ## What is welcome
 
-- Improvements, bug fixes, data race fixes and optimizations in the FUSE layer, in the GoStorm engine, and in the torrent client layer, including the vendored anacrolix/torrent fork.
+- Improvements, bug fixes, data race fixes and optimizations in the FUSE layer, in the Tentacle engine, and in the torrent client layer, including the vendored anacrolix/torrent fork.
 - Agentic autonomy built on the MCP server: tools that expose engine primitives and the engine's configurable policy are welcome. Not welcome: policy hardcoded without configuration, or tools that let the agent choose for the user. Never without guardrails.
 - Docker: the maintainer does not run Tiramisu in Docker by design, but every improvement to the Docker image is more than welcome.
 

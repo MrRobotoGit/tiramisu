@@ -20,9 +20,8 @@ If empty, force a Plex/Jellyfin library scan. The scan reads the first MB of eac
 
 Check active torrent status:
 ```bash
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"active"}' http://127.0.0.1:8090/torrents | \
-  jq '.[] | {title: .title[:50], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
+curl -s http://127.0.0.1:9080/api/torrents | \
+  jq '.[] | {title: .title[:50], speed_mbs, peers, status}'
 ```
 
 If peer count < 3 and you are routing through WireGuard, check NAT-PMP configuration.
@@ -60,18 +59,17 @@ If you are routing BitTorrent traffic through WireGuard, enable NAT-PMP to resto
 Without an open inbound port, peers cannot initiate connections: the engine
 relies solely on outbound ones.
 
-**If you are not using a VPN, forward the peer port on your router.** Tiramisu
-asks the router for the mapping over UPnP on its own, but many routers ship with
-UPnP disabled (and some ISP routers do not offer it at all). When that request
-fails nothing is logged as an error: the port simply stays closed and peer
-counts stay low.
+**If you are not using a VPN, forward the peer port on your router.** Since
+v1.13.0 Tiramisu no longer asks the router for a mapping over UPnP: the only
+automatic mapping is NAT-PMP, when it is turned on. Without a forward the port
+simply stays closed and peer counts stay low; nothing is logged as an error.
 
-1. Pin the port. In the Control Panel, set **GoStorm → `PeersListenPort`** to a
+1. Pin the port. In the Control Panel, set **Tentacle → Listen Port** to a
    fixed high port (e.g. `64407`). Left at `0` the engine picks a new random port
    on every start, which no static forward can follow.
 2. Forward that same port to the machine running Tiramisu, **both TCP and UDP**.
-3. Verify from outside your network that the port is open: a closed port and a
-   working UPnP mapping look identical from the inside.
+3. Verify from outside your network that the port is open: from the inside, a
+   closed port and an open one look the same.
 
 A router that drops the unforwarded traffic *and* logs every drop can also wear
 out its own flash storage over time; if your router has a firewall logging
@@ -156,15 +154,16 @@ stays closed instead of opening up. Restore the database, or reset as above.
 </details>
 
 <details>
-<summary><b>Tiramisu stops at start with "GoStorm: importing config.db"</b></summary>
+<summary><b>Tiramisu stops at start with "config.db (BBolt) was never imported"</b></summary>
 
-Up to v1.11.17 GoStorm kept the torrent list in `config.db` (BBolt). The first start
-of a newer version imports it into `STATE/tiramisu.db`, and stops if it cannot: starting
-anyway would mean an empty torrent list and default GoStorm settings. `config.db` is left
-untouched, so nothing is lost. The log line says why (an unreadable or truncated file, a
-full disk). Free space or restore a good copy of `config.db`, then start again; a later
-start retries and never overwrites rows already imported. To go back instead, start the
-previous version: it still reads `config.db`.
+Up to v1.11.17 the torrent list and the engine settings were in `config.db` (BBolt),
+next to the binary (in Docker, in `/state`). Later versions up to v1.12 import it into
+`STATE/tiramisu.db` on their first start; v1.13.0 no longer reads it, and stops rather
+than start with an empty torrent list and default settings. `config.db` is left
+untouched, so nothing is lost. Start v1.12.03 once (Docker: the
+`mrrobotogit/tiramisu:v1.12.03` image with the same volumes) to import it, then
+v1.13.0 again. A `config.db` left behind after an import is ignored (the log says
+so) and can be deleted.
 
 </details>
 
@@ -173,9 +172,9 @@ previous version: it still reads `config.db`.
 
 With sign-in on, every call to `:9080` needs an API token
 (`-H "Authorization: Bearer tmr_..."`), created in **Control Panel → Access**.
-The GoStorm API on `:8090` listens on `127.0.0.1` only since v1.11.15: run its
-commands on the host, or set `"gostorm_listen_ip": "all"` in the configuration
-([how](configuration.md#configjson-import-only)).
+Since v1.13.0 nothing listens on `:8090`: the engine runs in-process and is reached
+through `:9080` only. Move scripts to the Library API, `/api/torrents` and
+`/api/gostorm/settings` (see [API Quick Reference](api.md#api-quick-reference)).
 
 </details>
 
@@ -216,7 +215,7 @@ Paths below use the defaults set by `install.sh`. All are configurable during in
 | Path | Purpose |
 |------|---------|
 | `~/Tiramisu/tiramisu` | Production binary |
-| `~/Tiramisu/STATE/tiramisu.db` | SQLite state database: the configuration and its history, GoStorm torrent list and settings, inode map, sync caches, episode registry, scheduler state, sign-in |
+| `~/Tiramisu/STATE/tiramisu.db` | SQLite state database: the configuration and its history, the torrent list and Tentacle settings, inode map, sync caches, episode registry, scheduler state, sign-in |
 | `~/Tiramisu/STATE/config.last.json` | Copy of the configuration, rewritten at every save: the way back if the database cannot be opened |
 | `~/Tiramisu/config.json.imported-*` | A `config.json` already imported, kept as it was |
 | `~/Tiramisu/logs/` | All service logs (`tiramisu.log`, `movies-sync.log`, `tv-sync.log`, `watchlist-sync.log`) |

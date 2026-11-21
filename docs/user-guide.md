@@ -61,19 +61,21 @@ Run a library scan after adding the library. Plex/Jellyfin reads the first megab
 <details>
 <summary><b>Step 3: Add Your First Movie</b></summary>
 
-**Manually via API:**
+**Manually via the Library API** (registers the torrent and writes the `.mkv` stub):
 ```bash
-curl -X POST http://127.0.0.1:8090/torrents \
-  -H "Content-Type: application/json" \
-  -d '{"action":"add","link":"magnet:?xt=urn:btih:...","title":"Interstellar (2014)"}'
+curl -s -X POST -H 'Content-Type: application/json' --max-time 120 \
+  -d '{"type":"movie","hash":"<infohash>","title":"Interstellar","year":2014,
+       "release_title":"Interstellar.2014.2160p.UHD.BluRay.REMUX.DV-GRP"}' \
+  http://127.0.0.1:9080/api/library/add
 ```
+See [Library API](api.md#library-api-9080) for TV, magnets and the other fields.
 
 **Via sync engine (recommended):**
 Trigger from the Control Panel (`:9080/control`) → Scheduler → Movies → "Run now", or via API:
 ```bash
 curl -X POST http://127.0.0.1:9080/api/scheduler/movies/run
 ```
-The engine fetches popular films from TMDB, finds the best available torrent for each via Prowlarr/Torrentio, adds them to GoStorm, and writes virtual `.mkv` stub files.
+The engine fetches popular films from TMDB, finds the best available torrent for each via Prowlarr/Torrentio, adds them to the engine, and writes virtual `.mkv` stub files.
 
 </details>
 
@@ -82,7 +84,7 @@ The engine fetches popular films from TMDB, finds the best available torrent for
 
 ```
 1. Plex/Jellyfin requests /mnt/tiramisu-mkv-virtual/movies/Interstellar.mkv
-2. FUSE Open() triggers Wake(), GoStorm activates the torrent
+2. FUSE Open() triggers Wake(), Tentacle activates the torrent
 3. Plex/Jellyfin metadata probes → served from SSD warmup cache if enabled, otherwise from the torrent pump
 4. Plex/Jellyfin probes MKV Cues at end → served from SSD tail cache if enabled
 5. Plex or Jellyfin sends media.play webhook → Tiramisu activates Priority Mode
@@ -100,7 +102,7 @@ When Plex/Jellyfin seeks to a new timestamp:
 1. `Read()` is called at the new offset, `lastOff` is updated immediately
 2. If the jump exceeds 256 MB: `Interrupt()` closes the pipe, pump goroutine unblocks atomically
 3. Pump detects `lastOff` is > 256 MB ahead, snaps to aligned chunk position
-4. Pump restarts via `startStream(newOff)`, GoStorm repositions torrent reader
+4. Pump restarts via `startStream(newOff)`, Tentacle opens a new stream at that offset
 5. Data arrives from peers or SSD cache within seconds
 
 The pump goroutine survives `ErrInterrupted`, it sleeps 200 ms and continues the read loop, so no goroutine restart overhead.
@@ -121,7 +123,7 @@ The engine:
 1. Queries `discover.provider.plex.tv` for your watchlist
 2. Resolves each entry to an IMDB ID (falls back to TMDB)
 3. Queries Prowlarr/Torrentio for the best stream (minimum 10 seeders)
-4. Adds to GoStorm and writes a virtual `.mkv` stub
+4. Adds it to the engine and writes a virtual `.mkv` stub
 
 </details>
 
@@ -129,7 +131,7 @@ The engine:
 <summary><b>Step 7: Monitor in Real Time</b></summary>
 
 ```bash
-# Control Panel, Tiramisu + GoStorm settings, paths, scheduler, restart button
+# Control Panel, Tiramisu + Tentacle settings, paths, scheduler, restart button
 open http://<tiramisu-host>:9080/control
 
 # Dashboard: live swarm, streams, services, scheduler, logs
@@ -144,10 +146,9 @@ curl -s http://<tiramisu-host>:9080/api/scheduler/status | jq
 # Live log key events only
 ssh pi@<tiramisu-host> "tail -f /home/pi/Tiramisu/logs/tiramisu.log | grep -E '(OPEN|NATIVE|Interrupt|Jump|DiskWarmup|Emergency)'"
 
-# Active torrents in RAM with speed (the GoStorm API answers on the host only)
-ssh pi@<tiramisu-host> "curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{\"action\":\"active\"}' http://127.0.0.1:8090/torrents" | \
-  jq '.[] | {title: .title[:60], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
+# Active torrents in RAM with speed and peers
+curl -s http://<tiramisu-host>:9080/api/torrents | \
+  jq '.[] | {title: .title[:60], speed_mbs, peers, status}'
 ```
 
 </details>
@@ -172,34 +173,29 @@ Enable the scheduler with the **Enable Scheduler** toggle, pick weekdays and sta
 </details>
 
 <details>
-<summary><b>Step 9: Tune GoStorm Settings</b></summary>
+<summary><b>Step 9: Tune Tentacle Settings</b></summary>
 
-Via the Control Panel at `:9080/control`, or via API:
+Via the Control Panel at `:9080/control` → **Tentacle**, or via API. `set` takes the
+whole settings document (a missing key is saved as zero), so read it, change what
+you need and send it back:
 
 ```bash
-curl -X POST http://127.0.0.1:8090/settings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "action": "set",
-    "sets": {
-      "CacheSize": 100663296,
-      "ReaderReadAHead": 95,
-      "PreloadCache": 0,
-      "ConnectionsLimit": 25,
-      "TorrentDisconnectTimeout": 10,
-      "UseDisk": true,
-      "ResponsiveMode": true
-    }
-  }'
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"action":"get"}' http://127.0.0.1:9080/api/gostorm/settings | \
+  jq '{action: "set", sets: (.ConnectionsLimit = 25 | .ResponsiveMode = true)}' | \
+  curl -s -X POST -H 'Content-Type: application/json' -d @- \
+  http://127.0.0.1:9080/api/gostorm/settings
 ```
 
-| Setting | Value | Rationale |
-|---------|-------|-----------| 
-| `CacheSize` | 96 MB | Lean engine strategy, feed FUSE 256 MB buffer; smaller heap = lower GC. 64 MB caused buffering in testing. |
+The route keeps its `gostorm` name for compatibility.
+
+| Setting | Default | Notes |
+|---------|---------|-------|
+| `CacheSize` | 128 MB | Piece cache per torrent, feeding the FUSE read-ahead buffer. Below 96 MB playback buffers. |
 | `ConnectionsLimit` | 25 | Matches FUSE master semaphore; prevents Samba thread exhaustion |
-| `ResponsiveMode` | `true` | Serve unverified data; Adaptive Shield corrects corruption automatically |
-| `UseDisk` | `true` | Enable SSD warmup cache |
-| `TorrentDisconnectTimeout` | 10 s | Fast peer cleanup for RAM footprint |
+| `ResponsiveMode` | `true` | Serve written but not yet verified data; Adaptive Shield corrects corruption automatically |
+| `UseDisk` | `false` | Enable the SSD warmup cache; needs a warmup files path (`TorrentsSavePath`) |
+| `TorrentDisconnectTimeout` | 15 s | How long an idle torrent stays in RAM; also how long a stalled read waits for data |
 
 </details>
 
@@ -246,9 +242,9 @@ With [HTTPS](api.md#https) on, the same address moves to `https://<your-pi-ip>:9
 ### Layout
 
 Eight sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
-**Sources & Media**, **Engine**, **Release Selection**, **Scheduler**, **Access** and **History**. Each section says when
+**Sources & Media**, **Tentacle**, **Release Selection**, **Scheduler**, **Access** and **History**. Each section says when
 its settings take effect: on restart (Tiramisu settings, saved in the state database) or live
-(GoStorm engine settings, pushed through its API). Find any setting with <kbd>⌘K</kbd>.
+(Tentacle settings, applied to the running engine). Find any setting with <kbd>⌘K</kbd>.
 
 - **Simple / Advanced**: Simple shows the settings you change most often; Advanced shows everything, with expert cards marked as such.
 - **Change bar**: every edit is collected at the bottom of the page with its old and new value. **Apply** saves them all (live ones take effect at once) and becomes **Apply & restart** when one of them needs a restart; **Discard** reverts. Leaving the page with pending changes asks first.
@@ -256,13 +252,13 @@ its settings take effect: on restart (Tiramisu settings, saved in the state data
 | Section | Settings |
 |---------|----------|
 | **Streaming & FUSE** | FUSE Cache Budget, Master Concurrency, Streaming Threshold; Physical Source Path, FUSE Mount Path; FUSE Block, Attr/Entry Timeout; Metadata Cache, Max Cache Entries, Cleanup Interval |
-| **Network & VPN** | NAT-PMP (enable, Gateway IP, VPN Interface, Local Port, Refresh/Lifetime); GoStorm URL, Rescue Grace/Cooldown, Metrics Port, Proxy Port, Log Level; IP BlockList (enable, URL, filter) |
+| **Network & VPN** | NAT-PMP (enable, Gateway IP, VPN Interface, Local Port, Refresh/Lifetime); Stub URL prefix, Rescue Grace/Cooldown, Metrics Port, Proxy Port, Log Level; IP BlockList (enable, URL, filter) |
 | **Sources & Media** | Prowlarr URL and API key, Torrentio URL; TMDB API key; media server type (Plex or Jellyfin), URL, token, Movies / TV Series / Music library IDs |
-| **Engine** *(live)* | Cache Size, Readahead Cache; Warmup Cache, path and SSD quota; Connections Limit, DL/UP Rate, Disconnect Timeout; Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt; Smart Responsive Mode, Adaptive Shield, Debug Log |
+| **Tentacle** *(live)* | Cache Size, Readahead Cache; Warmup Cache, path and SSD quota; Connections Limit, DL/UP Rate, Disconnect Timeout; Listen Port, Retrackers Mode, IPv6/DHT/PEX/TCP/uTP/Upload/Force Encrypt; Smart Responsive Mode, Adaptive Shield, Debug Log |
 | **Release Selection** | Preferred and excluded language flags, preferred terms; quality scoring preset and bonuses for Movies and TV Series, with a preview of what wins right now |
 | **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule, `scheduler.music_sync`) |
 | **Access** *(live)* | Optional sign-in for `:9080` (one user, password), API tokens for agents and scripts, browser sessions, and HTTPS *(restart)*: a guided card to turn it on, download and trust the CA, and move clients to `https://`. See [Sign-in and API tokens](api.md#sign-in-and-api-tokens) and [HTTPS](api.md#https) |
-| **History** *(restart)* | The last 50 saved versions of the configuration and, marked *engine*, the last 50 manual saves of the Engine settings: who saved each one and what it changed (keys and tokens only as changed); filter by restart, secrets or Engine, and restore any version through the change bar: the newer ones stay in the list. An Engine restore applies at once and restarts the BitTorrent client, so playback in progress stops |
+| **History** *(restart)* | The last 50 saved versions of the configuration and, marked *engine*, the last 50 manual saves of the Tentacle settings: who saved each one and what it changed (keys and tokens only as changed); filter by restart, secrets or Tentacle, and restore any version through the change bar: the newer ones stay in the list. A Tentacle restore applies at once and restarts the BitTorrent client, so playback in progress stops |
 
 Keys and tokens (media server token, TMDB and Prowlarr API keys) are write-only: the
 Control Panel shows whether one is set, never its value. Leave the field empty to keep it.
@@ -284,13 +280,13 @@ With [HTTPS](api.md#https) on: `https://<your-pi-ip>:9080/dashboard`.
 ### Live Swarm
 
 The default view of the speed panel (switch to **Timeline** for the classic chart).
-One graph from left to right: **peers → torrents → piece cache → FUSE buffer → clients**.
+One graph from left to right: **peers → torrents → Tentacle (piece cache) → FUSE (read-ahead buffer) → clients**.
 
 - **Peers**: seeders, leechers, uTP and half-open connections; newcomers pulse in, departures fade out; banned peers are marked with a cross.
 - **Torrents**: pipe width follows the download speed; a torrent that is downloading pulses, an idle one stays still.
-- **FUSE buffer**: the pipe between cache and FUSE works as a level meter of the read-ahead buffer (active / stale).
+- **FUSE**: the pipe between Tentacle and FUSE works as a level meter of the read-ahead buffer (active / stale).
 - **Clients**: the device that is watching, from Plex or Jellyfin sessions (`Apple TV · Plex`), or the SMB client address when the player reads the share directly.
-- **Adaptive Shield**: a hash failure travels down the affected pipe; in STRICT the live pipes turn orange with a clean-streak ring on GoStorm, and the colour drains toward the clients when FAST mode returns.
+- **Adaptive Shield**: a hash failure travels down the affected pipe; in STRICT the live pipes turn orange with a clean-streak ring on the Tentacle node, and the colour drains toward the clients when FAST mode returns.
 
 ### Status Grid
 
@@ -298,7 +294,7 @@ Six tiles:
 
 | Card | What it shows |
 |------|--------------| 
-| **GOSTORM** | API ping latency (green = responding). |
+| **TENTACLE** | Engine status (green = online). |
 | **FUSE** | Number of virtual `.mkv` files currently exposed. |
 | **VPN** | WireGuard interface status: VPN IP and gateway. |
 | **NAT-PMP** | Active external port assigned by VPN gateway. |
@@ -307,7 +303,7 @@ Six tiles:
 
 ### Download Speed Graph
 
-**Rolling chart** (last 5 minutes) of GoStorm download speed in Mbps, sampled every 5 seconds, with the Adaptive Shield timeline underneath.
+**Rolling chart** (last 5 minutes) of the engine's download speed in Mbps, sampled every 2.5 seconds, with the Adaptive Shield timeline underneath.
 
 ### Active Streams
 

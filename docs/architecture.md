@@ -34,7 +34,10 @@ On a standard virtual filesystem, these IDs are random and change every time the
 ## Components
 
 ```
-BitTorrent Peers ←→ GoStorm Engine (:8090)
+BitTorrent Peers ←→ anacrolix/torrent fork (peer protocol)
+                         │
+         Tentacle Engine (in-process, no port)
+         piece store · streamer · torrent registry
                          │
               Native Bridge (In-Memory Pipe)
               Zero-Network, Zero-Copy Hot Path
@@ -59,8 +62,10 @@ BitTorrent Peers ←→ GoStorm Engine (:8090)
 
 | Port | Purpose |
 |------|---------|
-| `:8090` | GoStorm API, JSON torrent management (`127.0.0.1` only; see `gostorm_listen_ip`) |
 | `:9080` | Control Panel, Metrics, Dashboard, Webhook, Scheduler, Library API, MCP. Plain HTTP, and HTTPS on the same port when turned on ([HTTPS](api.md#https)) |
+
+The engine has no HTTP port of its own. Up to v1.12 the GoStorm engine also served
+a JSON API on `:8090`; since v1.13.0 nothing listens there.
 
 ---
 
@@ -76,9 +81,12 @@ every subsystem below exists to remove one specific way this can fail.
 
 ### 1. Zero-Network Native Bridge
 
-Tiramisu is one process, not two. The GoStorm engine and the FUSE layer are
+Tiramisu is one process, not two. The Tentacle engine and the FUSE layer are
 compiled into the same binary, so when the media server asks for a byte range
 the FUSE side calls straight into the engine through an in-memory `io.Pipe()`.
+Behind the pipe, an ordered stream reads the engine's piece store from the
+player's position and advances only as the pipe is drained, so the player's
+consumption sets the pace of priorities and deadlines.
 There is no TCP round trip, no HTTP headers to parse, no serialization and no
 proxy in the middle; metadata lookups are plain Go function calls. That is what
 removes the network latency that makes HTTP-based streaming proxies stutter on
@@ -87,7 +95,7 @@ small hardware.
 ### 2. Two-Layer SSD Warmup Cache *(optional)*
 
 An optional SSD cache that makes repeat playback almost instant. It is enabled
-and configured from the Control Panel → GoStorm settings, and it is independent
+and configured from the Control Panel → Tentacle settings, and it is independent
 of the core streaming path: without it Tiramisu still works, it just pays the
 cold-start cost again.
 
@@ -182,8 +190,12 @@ leaving Fast mode on. The counter clears on a genuine clean streak, not on
 seeks or a `media.stop`, so a swarm that keeps sending bad pieces gets
 progressively more scrutiny instead of restarting the same short timer.
 A peer that keeps corrupting is banned outright, and the ban is remembered for
-30 days, across restarts. The mode switch itself is an atomic boolean, so the
-hot read path pays no lock.
+30 days, across restarts. A piece that fails its hash check is downloaded again
+from peers that did not touch the failed attempt, a failure counts toward a
+peer's ban only when that peer was the piece's sole contributor, and peers cached
+from earlier sessions get no special trust. The shield is kept per torrent: one
+swarm sending bad data does not put the other streams in Strict. The piece store
+never serves a byte that was not written, in either mode.
 
 ### 5. Seek-Master Architecture
 
@@ -223,15 +235,15 @@ subprocess to babysit.
 
 | Engine | Trigger | What it does |
 |--------|---------|-------------|
-| **Movies** | Scheduler / manual | TMDB Discover + Popular → Prowlarr/Torrentio → GoStorm → virtual `.mkv` |
+| **Movies** | Scheduler / manual | TMDB Discover + Popular → Prowlarr/Torrentio → Tentacle → virtual `.mkv` |
 | **TV Series** | Scheduler / manual | TV series with fullpack-first approach, episode registry |
-| **Watchlist** | Scheduler / manual | Plex cloud watchlist → IMDB → Prowlarr/Torrentio → GoStorm |
+| **Watchlist** | Scheduler / manual | Plex cloud watchlist → IMDB → Prowlarr/Torrentio → Tentacle |
 | **Music** | Scheduler / manual | New albums of your artists + new artists close to yours + niche artists of your genres + similar artists (Deezer) → MusicBrainz → Prowlarr → FLAC projections |
 
 **Quality ladder**: `4K DV > 4K HDR10+ > 4K HDR > 4K > 1080p REMUX > 1080p`\
 **Minimum seeders**: 15, for the main sync and the watchlist alike (the watchlist uses the movie profile)
 
-Everything the engine needs to remember, the GoStorm torrent list, the episode
+Everything the engine needs to remember, the torrent list, the episode
 registry, the negative caches and the scheduler state, is persisted in
 `STATE/tiramisu.db` (SQLite).
 The built-in scheduler replaces system cron, and it is configured from the
@@ -243,7 +255,7 @@ Behind a WireGuard tunnel the home router's port forwarding no longer applies,
 because the traffic leaves through the VPN gateway instead. Tiramisu runs a
 NAT-PMP sidecar that periodically asks the gateway for a TCP+UDP port mapping,
 installs the `iptables PREROUTING REDIRECT` rules that point the mapping at the
-local listener, and updates GoStorm's listen port. All of it at runtime: no
+local listener, and updates the engine's peer listen port. All of it at runtime: no
 restart, no manual rule editing.
 
 ### 9. IP Blocklist (optional)
@@ -282,32 +294,25 @@ and uses real production profiling data to inline hot paths and lay out
 branches. On a Pi 4 Cortex-A72, which has no hardware AES or SHA1, PGO alone is
 worth roughly **5–7% of CPU**.
 
-### 11. GoStorm Engine: a deep fork of TorrServer Matrix + anacrolix/torrent
+### 11. Tentacle: Tiramisu's own engine on an anacrolix/torrent fork
 
-GoStorm is a fork of **[TorrServer Matrix](https://github.com/YouROK/TorrServer)**
-(BitTorrent management layer) and
-**[anacrolix/torrent](https://github.com/anacrolix/torrent)** (peer
-protocol engine). Both upstreams have been patched extensively for streaming
-correctness and performance, in ways that are not present in the originals:
+Tentacle is the streaming engine inside the `tiramisu` binary. It replaced
+GoStorm, the engine derived from [TorrServer Matrix](https://github.com/YouROK/TorrServer),
+in v1.13.0. The peer protocol still comes from Tiramisu's patched fork of
+**[anacrolix/torrent](https://github.com/anacrolix/torrent)** (MPL-2.0), reached
+through a single adapter; everything between the swarm and the FUSE pipe is
+Tiramisu's own code:
 
-<details>
-<summary><b>Click to expand: 15+ targeted optimizations</b></summary>
-
-| Optimization | Problem → Solution |
+| Part | What it does |
 |---|---|
-| **O(1) `AddTorrent` DB write** | Original rewrote all 520 torrents on every add (O(N) fsync). Fixed to single `tdb.Set()`. |
-| **O(1) `GetTorrentDB`** | Original called `ListTorrent()` + 520 unmarshals to find one torrent. Fixed to direct key lookup. |
-| **InfoBytes + PeerAddrs caching** | `TorrentSpec.InfoBytes` was never persisted, re-activation required full metadata fetch. Now saved on `Wake()`. |
-| **Request rebuild debounce** | 300 rebuilds/s reduced to 60 → **5x CPU reduction**. |
-| **O(1) `clearPriority`** | Original iterated all ~512 cached pieces with global lock. Replaced with `localPriority` map tracking ~25 active pieces. |
-| **4 MB MemPiece buffer zeroing** | Channel pools reused buffers without zeroing → stale data from different files caused forward-jump corruption. Fixed with `clear(p.buffer)`. |
-| **raCache defensive copies** | `Get()` returned sub-slices of pooled buffers. On eviction, Plex/Jellyfin received overwritten data. Fixed with copies on `Put()` and `Get()`. |
-| **`cleanTrigger` panic fix** | `Cache.Close()` closed the channel while goroutines could still send → panics during peer upload. Fixed with separate `cleanStop` channel. |
-| **`PeekTorrent` discipline** | Monitoring endpoints using `GetTorrent()` caused silent torrent activation loops. All monitoring paths now use `PeekTorrent()`. |
-| **InodeMap GC fix** | Inode cleanup pruned virtual MKV stubs every 5 min (529 files). Fixed to use `WalkDir(physicalSourcePath)`. |
-| **8 additional race condition fixes** | Concurrent map writes, torn reads, nil pointer dereferences across `requesting.go`, `piece.go`, `cache.go`, `apihelper.go`. |
+| **Piece store** | Keeps piece data in RAM, allocated in chunks of up to 256 KiB as blocks arrive, so memory follows the data actually written. A per-block bitmap means a read never returns a byte that was not written. Eviction drops only verified pieces outside every reader's protected window and the head and tail zones, least recently used first. Runs Adaptive Shield, one per torrent. |
+| **Streamer** | Turns the piece store into ordered byte streams and schedules the engine: piece priorities, playout deadlines and the read-ahead window, anchored to each stream's position. Playback streams and short on-demand reads (seek probes, tail fetches) are kept apart, so a probe does not shrink the read-ahead of the film being watched. A read on a stalled swarm fails after an inactivity timeout instead of a fixed deadline, so a healthy stream is never cut. |
+| **Engine** | The torrent registry: adding, waking, expiring and removing torrents, persistence in `STATE/tiramisu.db`, statistics for `/metrics` and the Dashboard, trackers, the IP blocklist and its settings, with history and rollback. Settings that can apply live do so without reconnecting the BitTorrent client. |
+| **Native bridge** | The FUSE side's door to the engine: the pump that feeds the in-memory pipe, read-ahead fetches and wake-ups. |
 
-</details>
+Data stays compatible with earlier releases: the same database tables
+(`gostorm_torrents`, `gostorm_kv`, `gostorm_settings_versions`, kept under their
+old names), the same library and the same stubs.
 
 ---
 

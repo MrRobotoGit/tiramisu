@@ -72,9 +72,9 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 - **Native Plex and Jellyfin integration.** Playback webhooks switch the stream to Priority Mode, and titles are matched by IMDb id, so localized names still match.
 - **Control Panel and Dashboard.** Every setting in one place, and a live view of the swarm, streams, services, scheduler and logs, on desktop and phone. Each stream shows its piece map: what is ready ahead of the player and where the download frontier is.
 - **Library API and MCP server.** Add or remove titles over HTTP, or let an AI agent (Hermes, OpenClaw, Claude Code) search and file releases with your own scoring profile.
-- **Optional sign-in.** One user and a password for the Control Panel, the Dashboard and every API, plus named tokens: MCP tokens for AI agents, API tokens for apps and scripts built on Tiramisu. Keys and tokens in the config are write-only, and the GoStorm API answers on the host only.
+- **Optional sign-in.** One user and a password for the Control Panel, the Dashboard and every API, plus named tokens: MCP tokens for AI agents, API tokens for apps and scripts built on Tiramisu. Keys and tokens in the config are write-only.
 - **VPN friendly.** NAT-PMP port mapping for WireGuard and an optional IP blocklist, loaded before the engine starts when a cached copy exists.
-- **One binary.** GoStorm, a deeply patched fork of [TorrServer Matrix](https://github.com/YouROK/TorrServer) and [anacrolix/torrent](https://github.com/anacrolix/torrent), ships inside the single `tiramisu` binary.
+- **One binary, one port.** Tentacle, Tiramisu's own streaming engine, runs in-process on top of a patched fork of [anacrolix/torrent](https://github.com/anacrolix/torrent) inside the single `tiramisu` binary. The Control Panel, Dashboard, APIs and MCP server all share `:9080`.
 
 ---
 
@@ -105,7 +105,7 @@ Because Tiramisu exposes standard `.mkv` files on a standard filesystem, any pla
 
 Tiramisu includes a built-in sync engine that runs on a schedule and keeps your library up to date without any manual intervention.
 
-Every day, the engine queries **TMDB** (The Movie Database) for the latest releases, trending titles, and popular movies. For each title it finds, it searches **Prowlarr** (with Torrentio fallback) for the best available torrent (preferring 4K Dolby Vision, falling back to 1080p). If a good torrent is found, it registers it in GoStorm and creates the corresponding virtual `.mkv` file in the library.
+Every day, the engine queries **TMDB** (The Movie Database) for the latest releases, trending titles, and popular movies. For each title it finds, it searches **Prowlarr** (with Torrentio fallback) for the best available torrent (preferring 4K Dolby Vision, falling back to 1080p). If a good torrent is found, it registers it in the engine and creates the corresponding virtual `.mkv` file in the library.
 
 The next time the media server scans, it finds a new file, downloads the poster and description, and the film appears in your library ready to play.
 
@@ -227,7 +227,7 @@ Out of the box, anyone who can reach `:9080` on your network can use the Control
 - **Create the tokens first.** Tokens can be created while sign-in is still off: configure your clients, then turn it on, and nothing stops working.
 - **Plex and Jellyfin keep working.** Their playback webhooks stay open, so the media server needs no changes.
 - **Keys stay on the server.** Your Plex/Jellyfin token and your TMDB and Prowlarr API keys are write-only: the Control Panel shows whether each one is set, never its value.
-- **The engine API is private.** GoStorm's API on `:8090` listens on the Tiramisu host only, so no other device can manage torrents behind sign-in's back.
+- **One door.** The engine runs in-process and has no HTTP port of its own: torrents are managed only through `:9080`, behind sign-in.
 
 ```bash
 # An MCP client (Claude Code) with an MCP token
@@ -288,7 +288,7 @@ Not directly. Tiramisu has its own built-in sync engine that talks to TMDB, Prow
 Tiramisu is a general-purpose BitTorrent engine and streaming filesystem. It does not host, index, or distribute any copyrighted content itself; what you do with it is your responsibility, same as with any BitTorrent client.
 
 **Can I put Tiramisu on the internet?**
-Not directly. Turn on sign-in and HTTPS (Control Panel → Access), or put a reverse proxy with HTTPS in front of `:9080`; for access from outside your home a VPN (WireGuard, Tailscale) is safer than an open port. Never publish `:8090`: it listens on the host only by default, and it has no authentication.
+Not directly. Turn on sign-in and HTTPS (Control Panel → Access), or put a reverse proxy with HTTPS in front of `:9080`; for access from outside your home a VPN (WireGuard, Tailscale) is safer than an open port.
 
 **Is my data private?**
 Everything runs on your own hardware. No account, no third-party API key is required for the core engine to work (TMDB, Prowlarr, and Plex/Jellyfin integrations are optional and use your own credentials).
@@ -311,7 +311,7 @@ Tiramisu is free and open source. If it is useful to you, you can support its de
 
 ## Acknowledgements
 
-Tiramisu builds on [TorrServer](https://github.com/YouROK/TorrServer) and [anacrolix/torrent](https://github.com/anacrolix/torrent); both are embedded as patched forks.
+Tiramisu builds on [anacrolix/torrent](https://github.com/anacrolix/torrent), embedded as a patched fork. Its engine began as a fork of [TorrServer](https://github.com/YouROK/TorrServer); since v1.13.0 Tentacle, Tiramisu's own engine, has replaced it.
 
 The optional peer country and network view uses the DB-IP Lite databases: [IP geolocation by DB-IP](https://db-ip.com), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 

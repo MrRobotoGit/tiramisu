@@ -59,7 +59,7 @@ hole, so a show the discovery feed no longer returns can still be repaired later
 curl -X POST http://127.0.0.1:9080/api/scheduler/watchlist/run
 ```
 
-Reads Plex cloud watchlist → IMDB ID resolution → Prowlarr/Torrentio (min 15 seeders, the movie profile) → GoStorm.
+Reads Plex cloud watchlist → IMDB ID resolution → Prowlarr/Torrentio (min 15 seeders, the movie profile) → Tentacle.
 
 ### Music Sync
 
