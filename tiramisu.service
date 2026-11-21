@@ -1,5 +1,5 @@
 [Unit]
-Description=Tiramisu Unified Engine (GoStorm + FUSE Proxy)
+Description=Tiramisu Unified Engine (Tentacle + FUSE Proxy)
 After=network-online.target systemd-resolved.service nss-lookup.target local-fs.target remote-fs.target
 Wants=network-online.target
 StartLimitIntervalSec=0

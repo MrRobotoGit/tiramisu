@@ -56,6 +56,7 @@ that copy.
 
 `enable_state_db` is gone: the state database is always on. `state_db_path` is
 read only at import; a database moved elsewhere is set with `TIRAMISU_STATE_DB`.
+`gostorm_listen_ip` is gone too (v1.13.0): the engine has no port of its own to open.
 
 ### Full Field Reference
 
@@ -69,8 +70,7 @@ read only at import; a database moved elsewhere is set with `TIRAMISU_STATE_DB`.
 | `master_concurrency_limit` | `25` | Max concurrent data slots |
 | `metadata_cache_size_mb` | `50` | Metadata LRU cache budget |
 | `fuse_max_inflight_mb` | `0` | Cap on the RAM go-fuse checks out for in-flight requests; `0` leaves go-fuse's own default |
-| `gostorm_url` | `http://127.0.0.1:8090` | GoStorm internal API URL |
-| `gostorm_listen_ip` | *(empty)* | Where the GoStorm API (`:8090`) listens: empty = `127.0.0.1` only; `"all"` = every interface (the behaviour before v1.11.15), or a specific IP. Stays on every interface if `gostorm_url` is not a loopback address |
+| `gostorm_url` | `http://127.0.0.1:8090` | Stub URL prefix (Control Panel: **Stub URL prefix**). Written into every stub as an identifier only: since v1.13.0 nothing listens there. The key keeps its old name for compatibility; leave the default |
 | `auth_trusted_proxies` | *(empty)* | Reverse proxies (IPs or CIDRs) whose `X-Forwarded-For` the sign-in rate limit trusts; with HTTPS on, plain HTTP from them is also served. List proxy IPs, not whole subnets |
 | `https.enabled` | `false` | Serve `:9080` over HTTPS too ([details](api.md#https)). Read at start-up; set it from **Control Panel → Access → HTTPS** |
 | `https.cert_file` / `https.key_file` | *(empty)* | Your own certificate and key; empty = the local CA in `STATE/tls/`. Renewed files are reloaded within a minute |

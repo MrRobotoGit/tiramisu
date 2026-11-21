@@ -91,9 +91,6 @@ jobs:
           # imported on the first start and renamed; no /config.json mount is
           # needed. Both are asserted below.
           cp config.json.example "$GITHUB_WORKSPACE/ci-state/config.json"
-          # An upgrade from v1.11.17 or earlier: GoStorm's BBolt store, 2 torrents and
-          # settings with ConnectionsLimit 31, imported into tiramisu.db on the first start.
-          cp .github/ci/config.db "$GITHUB_WORKSPACE/ci-state/config.db"
           # /state is bind-mounted on purpose: the entrypoint warns when it is
           # not, and that warning is one of the things asserted below.
           docker run -d --name tiramisu-smoke \
@@ -101,7 +98,7 @@ jobs:
             --cap-add SYS_ADMIN \
             --security-opt apparmor=unconfined \
             -v "$GITHUB_WORKSPACE/ci-state:/state" \
-            -p 9080:9080 -p 8090:8090 \
+            -p 9080:9080 \
             tiramisu:smoke
 
       - name: Wait for the metrics endpoint
@@ -135,29 +132,19 @@ jobs:
             exit 1
           }
 
-      # GoStorm (:8090) listens on 127.0.0.1 inside the container: the engine reaches
-      # it, the published port must not. The mapping above is kept on purpose so
-      # that a regression to "every interface" shows up here.
-      - name: Check the Control Panel, GoStorm health, and that :8090 stays private
+      # The engine runs in-process: its health is the "tentacle" key of /api/health.
+      - name: Check the Control Panel and Tentacle health
         run: |
           set -eu
           curl -fsS --max-time 10 http://127.0.0.1:9080/control >/dev/null
           ok=false
           for _ in $(seq 1 30); do
-            if curl -fsS --max-time 5 http://127.0.0.1:9080/api/health | jq -e '.gostorm.ok == true' >/dev/null 2>&1; then
+            if curl -fsS --max-time 5 http://127.0.0.1:9080/api/health | jq -e '.tentacle.ok == true' >/dev/null 2>&1; then
               ok=true; break
             fi
             sleep 1
           done
-          [ "$ok" = true ] || { echo "::error::GoStorm is not healthy according to :9080/api/health"; exit 1; }
-          if curl -fsS --max-time 5 http://127.0.0.1:8090/echo >/dev/null 2>&1; then
-            echo "::error::the GoStorm API answers from outside the container"
-            exit 1
-          fi
-          docker logs tiramisu-smoke 2>&1 | grep -q 'API :8090 listening on 127.0.0.1 only' || {
-            echo "::error::GoStorm did not log its loopback bind"
-            exit 1
-          }
+          [ "$ok" = true ] || { echo "::error::Tentacle is not healthy according to :9080/api/health"; exit 1; }
 
       # Sign-in is off by default: an upgraded install must behave as before. Then
       # the whole flow once: a token created while open keeps working once on.
@@ -226,24 +213,39 @@ jobs:
               | grep -q 1 || { echo "::error::table $t is missing"; exit 1; }
           done
 
-      - name: Check the BBolt config.db was imported
+      # A BBolt config.db from v1.11.17 or earlier is no longer read: an install that
+      # never imported it must stop with instructions instead of starting empty.
+      - name: Check an unimported config.db stops the start
         run: |
           set -eu
-          st="$GITHUB_WORKSPACE/ci-state"
-          q() { sudo sqlite3 -cmd '.timeout 5000' "$st/STATE/tiramisu.db" "$1"; }
-          docker logs tiramisu-smoke 2>&1 | grep -q 'config.db imported: 2 torrents, 0 already present, 0 unreadable, 1 settings' || {
-            echo "::error::the config.db import did not run or did not import everything"
-            docker logs tiramisu-smoke 2>&1 | grep -i gostormdb || true
+          st="$GITHUB_WORKSPACE/ci-bbolt"
+          mkdir -p "$st"
+          cp .github/ci/config.db "$st/config.db"
+          docker run -d --name tiramisu-bbolt \
+            --device /dev/fuse \
+            --cap-add SYS_ADMIN \
+            --security-opt apparmor=unconfined \
+            -v "$st:/state" \
+            tiramisu:smoke
+          for _ in $(seq 1 60); do
+            docker ps --filter name=tiramisu-bbolt --filter status=running -q | grep -q . || break
+            sleep 1
+          done
+          running=$(docker inspect -f '{{.State.Running}}' tiramisu-bbolt)
+          code=$(docker inspect -f '{{.State.ExitCode}}' tiramisu-bbolt)
+          logs=$(docker logs tiramisu-bbolt 2>&1 || true)
+          docker rm -f tiramisu-bbolt >/dev/null 2>&1 || true
+          if [ "$running" = "true" ] || [ "$code" = "0" ]; then
+            echo "::error::the container did not stop with an error (running=$running, exit=$code)"
+            echo "$logs" | tail -n 50
+            exit 1
+          fi
+          echo "$logs" | grep -q 'config.db (BBolt) was never imported' || {
+            echo "::error::the start did not stop on an unimported config.db"
+            echo "$logs" | tail -n 50
             exit 1
           }
-          [ ! -e "$st/config.db" ] || { echo "::error::config.db was not renamed after the import"; exit 1; }
-          ls "$st"/config.db.migrated-* >/dev/null || { echo "::error::no config.db.migrated-* file"; exit 1; }
-          n=$(q 'SELECT COUNT(*) FROM gostorm_torrents;')
-          [ "$n" = 2 ] || { echo "::error::$n torrents in gostorm_torrents, want 2"; exit 1; }
-          q "SELECT value FROM gostorm_kv WHERE xpath='Settings' AND name='BitTorr';" | grep -q '"ConnectionsLimit":31' || {
-            echo "::error::the imported GoStorm settings are not in use"; exit 1; }
-          v=$(q 'SELECT COUNT(*) FROM gostorm_settings_versions;')
-          [ "$v" -ge 1 ] || { echo "::error::no Engine settings baseline version"; exit 1; }
+          [ -e "$st/config.db" ] || { echo "::error::config.db was moved or deleted"; exit 1; }
 
       # Nothing above proves the process is stable rather than merely reachable
       # once: a crash loop answers too, between restarts.

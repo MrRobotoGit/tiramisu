@@ -647,7 +647,7 @@ if "%_internal%"=="" exit /b 1
 
 set "__INTERNAL=%_internal%"
 
-for /f "usebackq tokens=1* delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $internal=[int]$env:__INTERNAL; $used = New-Object System.Collections.Generic.HashSet[int]; $ids = @(); try { $ids = docker ps -aq 2>$null } catch { $ids=@() }; foreach($id in $ids){ try { $j = docker inspect $id | ConvertFrom-Json } catch { continue }; if($null -eq $j -or $j.Count -lt 1){ continue }; $ports = $j[0].NetworkSettings.Ports; if($null -eq $ports){ continue }; foreach($prop in $ports.PSObject.Properties){ $bindings = $prop.Value; if($null -eq $bindings){ continue }; foreach($b in $bindings){ if($null -ne $b.HostPort -and $b.HostPort -match '^[0-9]+$'){ [void]$used.Add([int]$b.HostPort) } } } }; $reserved = New-Object System.Collections.Generic.HashSet[int]; function NextFree([int]$start){ $p=$start; while($used.Contains($p) -or $reserved.Contains($p)){ $p++ }; [void]$reserved.Add($p); return $p }; $plex = NextFree 32400; $jelly = NextFree 8096; $gostorm = NextFree 8090; $metrics = NextFree 9080; Write-Output ('PLEX_HOST_PORT='+$plex); Write-Output ('JELLYFIN_HOST_PORT='+$jelly); Write-Output ('GOSTORM_HOST_PORT='+$gostorm); Write-Output ('METRICS_HOST_PORT='+$metrics) }"`) do (
+for /f "usebackq tokens=1* delims==" %%A in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $internal=[int]$env:__INTERNAL; $used = New-Object System.Collections.Generic.HashSet[int]; $ids = @(); try { $ids = docker ps -aq 2>$null } catch { $ids=@() }; foreach($id in $ids){ try { $j = docker inspect $id | ConvertFrom-Json } catch { continue }; if($null -eq $j -or $j.Count -lt 1){ continue }; $ports = $j[0].NetworkSettings.Ports; if($null -eq $ports){ continue }; foreach($prop in $ports.PSObject.Properties){ $bindings = $prop.Value; if($null -eq $bindings){ continue }; foreach($b in $bindings){ if($null -ne $b.HostPort -and $b.HostPort -match '^[0-9]+$'){ [void]$used.Add([int]$b.HostPort) } } } }; $reserved = New-Object System.Collections.Generic.HashSet[int]; function NextFree([int]$start){ $p=$start; while($used.Contains($p) -or $reserved.Contains($p)){ $p++ }; [void]$reserved.Add($p); return $p }; $plex = NextFree 32400; $jelly = NextFree 8096; $metrics = NextFree 9080; Write-Output ('PLEX_HOST_PORT='+$plex); Write-Output ('JELLYFIN_HOST_PORT='+$jelly); Write-Output ('METRICS_HOST_PORT='+$metrics) }"`) do (
   set "%%A=%%B"
 )
 
@@ -794,7 +794,6 @@ echo [stack] Writing .env
   echo.
   echo PLEX_HOST_PORT=%PLEX_HOST_PORT%
   echo JELLYFIN_HOST_PORT=%JELLYFIN_HOST_PORT%
-  echo GOSTORM_HOST_PORT=%GOSTORM_HOST_PORT%
   echo METRICS_HOST_PORT=%METRICS_HOST_PORT%
   echo.
   echo TIRAMISU_METRICS_PORT=%TIRAMISU_METRICS_PORT%

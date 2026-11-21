@@ -351,18 +351,22 @@ install's telemetry id, and answers with the new version, what changed and wheth
 only a signed-in Control Panel session: a token gets `403`, because a rollback can
 turn HTTPS off or change the trusted proxies.
 
-### Engine settings history
+### Tentacle settings history
 
-The GoStorm Engine settings (cache size, connections, peer port…) have their own
-history, shown in the same Control Panel page: `GET /api/gostorm/history`,
-`GET /api/gostorm/history/{id}/restore` and `POST /api/gostorm/rollback` work like the
-configuration routes above, with the same access rule. Only manual saves become
-versions (Control Panel, `POST /api/gostorm/settings` with `set` or `def`, a restore):
+The Tentacle settings (cache size, connections, peer port…) have their own
+history, shown in the same Control Panel page: `GET /api/tentacle/history`,
+`GET /api/tentacle/history/{id}/restore` and `POST /api/tentacle/rollback` work like the
+configuration routes above, with the same access rule. The older `/api/gostorm/*`
+routes and the `gostorm` key of `/api/health` still answer, as aliases for existing
+scripts. Only manual saves become
+versions (Control Panel, `POST /api/tentacle/settings` with `set` or `def`, a restore):
 the peer port NAT-PMP sets and the defaults written at start-up do not.
-`StoreSettingsInJson`, the SSL fields, and `PeersListenPort` while NAT-PMP is on, are
+`StoreSettingsInJson`, and `PeersListenPort` while NAT-PMP is on, are
 never compared, and a save or a restore keeps their current value: with NAT-PMP the
-peer port is the one the VPN forwards, not the one in the form. A restore applies at once, with no restart,
-but GoStorm reconnects its BitTorrent client: playback in progress stops.
+peer port is the one the VPN forwards, not the one in the form. A restore applies at once: timeout, retrackers, read-ahead, Responsive and Shield apply live, other keys reconnect the BitTorrent client (playback in progress stops), and disk warmup and the save path wait for a restart (the answer then has `"restart": true`).
+Changes to the disconnect timeout, retrackers mode, Responsive mode, Adaptive
+Shield and read-ahead apply live; any other change reconnects the BitTorrent client, and playback
+in progress stops.
 
 ---
 
@@ -411,45 +415,37 @@ The MCP server needs v1.11.5 or later.
 
 ## API Quick Reference
 
-Two JSON APIs, one per layer: the GoStorm engine at `:8090` manages torrents and
-settings, the Tiramisu side at `:9080` exposes metrics (and the Library API, in
-its own section above). Handy for scripts, and for checking what is happening
-without opening the web UI.
+Everything goes through `:9080`: the engine runs inside the Tiramisu process and
+has no API port of its own. Up to v1.12 the GoStorm engine also answered on
+`:8090`; since v1.13.0 nothing listens there, so scripts that called it move to
+the routes below (and to the Library API, in its own section above). Handy for
+scripts, and for checking what is happening without opening the web UI.
 
-### GoStorm API (`:8090`)
-
-The GoStorm API listens on `127.0.0.1` only: run these commands on the Tiramisu
-host (or inside the container). Only the engine itself calls it. To reach it from
-the network, as before v1.11.15, set `"gostorm_listen_ip": "all"` in the
-configuration (see [config.json: import only](configuration.md#configjson-import-only),
-or `POST /api/config`); it has no authentication, so do that only on a trusted network.
+### Engine (`:9080`)
 
 ```bash
-# List all torrents (count)
+# Torrents in memory, with speed and peers
+curl -s http://127.0.0.1:9080/api/torrents | \
+  jq '.[] | {title: .title[:50], speed_mbs, peers, status}'
+
+# How full each torrent's piece cache in RAM is (v1.13.0: cache_filled and
+# cache_capacity, in bytes; the Tentacle station in Live Swarm draws this ratio)
+curl -s http://127.0.0.1:9080/api/torrents | \
+  jq '.[] | {title: .title[:50], cache_pct: (100 * .cache_filled / .cache_capacity | floor)}'
+
+# Read the Tentacle settings
 curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"list"}' http://127.0.0.1:8090/torrents | jq length
+  -d '{"action":"get"}' http://127.0.0.1:9080/api/tentacle/settings | jq
 
-# Add a torrent
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"add","link":"magnet:?xt=urn:btih:...","title":"Film Title (Year)"}' \
-  http://127.0.0.1:8090/torrents
-
-# Active torrents (in RAM, not DB)
+# Change some: "set" changes only the keys in "sets". "def" restores the defaults.
 curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"active"}' http://127.0.0.1:8090/torrents | \
-  jq '.[] | {title: .title[:50], speed_mbps: ((.download_speed//0)/1048576|round), peers: (.active_peers//0)}'
-
-# Read settings
-curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"get"}' http://127.0.0.1:8090/settings | jq
-
-# Remove a torrent
-curl -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"rem","hash":"<infohash>"}' http://127.0.0.1:8090/torrents
+  -d '{"action":"set","sets":{"ConnectionsLimit":25}}' \
+  http://127.0.0.1:9080/api/tentacle/settings
 ```
 
-The engine also accepts `drop` (unload from RAM, keep it in the DB) and `wipe`
-(remove every torrent, rarely what you want).
+Torrents are added and removed through the Library API, which also writes or
+removes the stub; with [sign-in](#sign-in-and-api-tokens) on, add
+`-H "Authorization: Bearer tmr_..."` to every call.
 
 Removing a title means removing its stub, not just its torrent. Two ways do it
 properly, and deleting the stub from the source directory is neither: that

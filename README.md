@@ -23,7 +23,7 @@
   <a href="https://github.com/MrRobotoGit/tiramisu/releases"><b>Releases</b></a>
 </p>
 
-<p align="center"><img src="docs/screenshots/ui-network-light-v2.gif" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
+<p align="center"><img src="docs/screenshots/ui-network-light-v3.gif" alt="Tiramisu live swarm: peers, torrents, the Tentacle and FUSE stations with their gauges, and the devices that are watching, in one graph"></p>
 <p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph. When a peer sends bad data, Adaptive Shield lights up the pipes it protects (see Screenshots).</sub></p>
 
 ---
@@ -32,7 +32,9 @@
 
 Tiramisu turns torrents into ordinary, seekable `.mkv` files on a FUSE virtual filesystem. Plex, Jellyfin, Infuse or any player reads them like files on a local disk, while every byte is fetched live from the BitTorrent swarm. Nothing is downloaded in advance, there are no temporary copies and no storage quota.
 
-The BitTorrent engine runs in the same process as the filesystem, so data flows from peers through RAM to the media server with no HTTP proxy in between. The result is 4K HDR Dolby Vision playback that starts in under a second from the warmup cache (2–4 s on a cold swarm) and seeks instantly, on hardware as small as a Raspberry Pi 4.
+**Tentacle** is Tiramisu's native torrent engine, built around FUSE. It lets the player lead: every read that reaches a virtual file tells Tentacle which pieces matter next, and it chases them from the swarm against the clock, a few seconds ahead of the scene on screen. A seek moves the whole effort to the new spot at once. Data travels from the peers through RAM to the media server along an in-memory pipe, at the pace the player sets. And when a peer sends bad data, Tentacle shields the picture: it turns strict for that torrent alone, finds the one peer responsible, bans it and carries on.
+
+The result is 4K HDR Dolby Vision playback that starts in under a second from the warmup cache (2–4 s on a cold swarm) and seeks instantly, on hardware as small as a Raspberry Pi 4.
 
 ---
 
@@ -40,16 +42,16 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/ui-dashboard-light-v2.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
-    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark-v2.png" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></td>
+    <td width="50%"><img src="docs/screenshots/ui-dashboard-light-v3.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
+    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark-v3.png" alt="Control Panel, Tentacle section in dark mode, with three pending changes in the change bar"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Dashboard</b>: speed, torrents, streams, services, scheduler and logs</sub></td>
     <td align="center"><sub><b>Control Panel</b>: every setting, with a change bar that applies them together</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/ui-network-strict-dark-v2.png" alt="Live swarm in dark mode during an Adaptive Shield STRICT episode"></td>
-    <td><img src="docs/screenshots/ui-control-panel-light-v2.png" alt="Control Panel, Streaming and FUSE section in light mode"></td>
+    <td><img src="docs/screenshots/ui-network-strict-dark-v3.png" alt="Live swarm in dark mode during an Adaptive Shield STRICT episode: the Tentacle station turns orange and counts its clean streak"></td>
+    <td><img src="docs/screenshots/ui-control-panel-light-v3.png" alt="Control Panel, Streaming and FUSE section in light mode"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Adaptive Shield</b>: a STRICT episode, live</sub></td>
@@ -57,9 +59,9 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
   </tr>
 </table>
 
-<p align="center"><img src="docs/screenshots/ui-piece-map-light-v2.gif" alt="Active streams with the piece map open: a fixed playhead over a strip of pieces, ready, arriving and not yet requested, up to the download frontier"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
+<p align="center"><img src="docs/screenshots/ui-piece-map-light-v3.gif" alt="Active streams with the piece map open: a strip of pieces from the playhead to the download frontier, labelled ready, arriving and not requested, with partly filled pieces and deadline underlines, next to the seconds of video ready ahead and their trend over the last 2 minutes"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
 
-<p align="center"><img src="docs/screenshots/ui-mobile-v2.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
+<p align="center"><img src="docs/screenshots/ui-mobile-v3.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
 
 ---
 
@@ -72,9 +74,9 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 - **Native Plex and Jellyfin integration.** Playback webhooks switch the stream to Priority Mode, and titles are matched by IMDb id, so localized names still match.
 - **Control Panel and Dashboard.** Every setting in one place, and a live view of the swarm, streams, services, scheduler and logs, on desktop and phone. Each stream shows its piece map: what is ready ahead of the player and where the download frontier is.
 - **Library API and MCP server.** Add or remove titles over HTTP, or let an AI agent (Hermes, OpenClaw, Claude Code) search and file releases with your own scoring profile.
-- **Optional sign-in.** One user and a password for the Control Panel, the Dashboard and every API, plus named tokens: MCP tokens for AI agents, API tokens for apps and scripts built on Tiramisu. Keys and tokens in the config are write-only, and the GoStorm API answers on the host only.
+- **Optional sign-in.** One user and a password for the Control Panel, the Dashboard and every API, plus named tokens: MCP tokens for AI agents, API tokens for apps and scripts built on Tiramisu. Keys and tokens in the config are write-only.
 - **VPN friendly.** NAT-PMP port mapping for WireGuard and an optional IP blocklist, loaded before the engine starts when a cached copy exists.
-- **One binary.** GoStorm, a deeply patched fork of [TorrServer Matrix](https://github.com/YouROK/TorrServer) and [anacrolix/torrent](https://github.com/anacrolix/torrent), ships inside the single `tiramisu` binary.
+- **One binary, one port.** Tentacle runs in-process inside the single `tiramisu` binary. The Control Panel, Dashboard, APIs and MCP server all share `:9080`.
 
 ---
 
@@ -105,7 +107,7 @@ Because Tiramisu exposes standard `.mkv` files on a standard filesystem, any pla
 
 Tiramisu includes a built-in sync engine that runs on a schedule and keeps your library up to date without any manual intervention.
 
-Every day, the engine queries **TMDB** (The Movie Database) for the latest releases, trending titles, and popular movies. For each title it finds, it searches **Prowlarr** (with Torrentio fallback) for the best available torrent (preferring 4K Dolby Vision, falling back to 1080p). If a good torrent is found, it registers it in GoStorm and creates the corresponding virtual `.mkv` file in the library.
+Every day, the engine queries **TMDB** (The Movie Database) for the latest releases, trending titles, and popular movies. For each title it finds, it searches **Prowlarr** (with Torrentio fallback) for the best available torrent (preferring 4K Dolby Vision, falling back to 1080p). If a good torrent is found, it registers it in the engine and creates the corresponding virtual `.mkv` file in the library.
 
 The next time the media server scans, it finds a new file, downloads the poster and description, and the film appears in your library ready to play.
 
@@ -218,7 +220,7 @@ The full guide covers persistent state in `/state`, updates, mount propagation a
 
 ## Sign-in and Tokens
 
-<p align="center"><img src="docs/screenshots/ui-access-light-v2.png" alt="Control Panel, Access section: sign-in required, four named tokens, two for MCP and two for the API, with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, MCP and API tokens, browser sessions (sample data)</sub></p>
+<p align="center"><img src="docs/screenshots/ui-access-light-v3.png" alt="Control Panel, Access section: sign-in required, four named tokens, two for MCP and two for the API, with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, MCP and API tokens, browser sessions (sample data)</sub></p>
 
 Out of the box, anyone who can reach `:9080` on your network can use the Control Panel, the Dashboard and the APIs. Turn on sign-in in **Control Panel → Access** to require a password for all of them: the Control Panel, the Dashboard, every `/api/*` endpoint, `/metrics` and the MCP server.
 
@@ -227,7 +229,7 @@ Out of the box, anyone who can reach `:9080` on your network can use the Control
 - **Create the tokens first.** Tokens can be created while sign-in is still off: configure your clients, then turn it on, and nothing stops working.
 - **Plex and Jellyfin keep working.** Their playback webhooks stay open, so the media server needs no changes.
 - **Keys stay on the server.** Your Plex/Jellyfin token and your TMDB and Prowlarr API keys are write-only: the Control Panel shows whether each one is set, never its value.
-- **The engine API is private.** GoStorm's API on `:8090` listens on the Tiramisu host only, so no other device can manage torrents behind sign-in's back.
+- **One door.** The engine runs in-process and has no HTTP port of its own: torrents are managed only through `:9080`, behind sign-in.
 
 ```bash
 # An MCP client (Claude Code) with an MCP token
@@ -244,7 +246,7 @@ curl -H "Authorization: Bearer tmr_..." http://<host>:9080/api/health
 
 Every endpoint is documented inside Tiramisu too: **Reference → API** in the side menu (`/api-docs`) lists the stable API with parameters, a ready-to-copy `curl` for your own address and sample responses, and puts the MCP server address first.
 
-<p align="center"><img src="docs/screenshots/ui-api-light.png" alt="Reference, API page: the MCP server box with its address and client config, then the endpoints grouped by area, one of them open with its parameters, request and response" width="720"><br><sub><b>Reference → API</b>: the MCP server and the HTTP endpoints, documented in the app</sub></p>
+<p align="center"><img src="docs/screenshots/ui-api-light-v3.png" alt="Reference, API page: the MCP server box with its address and client config, then the endpoints grouped by area, one of them open with its parameters, request and response" width="720"><br><sub><b>Reference → API</b>: the MCP server and the HTTP endpoints, documented in the app</sub></p>
 
 Sign-in is meant for your home network, with Tiramisu's own HTTPS or a reverse proxy in front of it; see [Sign-in and API tokens](docs/api.md#sign-in-and-api-tokens) and [HTTPS](docs/api.md#https) for the details: rate limits, reverse proxies, certificates and what happens if the state database cannot be read.
 
@@ -288,7 +290,7 @@ Not directly. Tiramisu has its own built-in sync engine that talks to TMDB, Prow
 Tiramisu is a general-purpose BitTorrent engine and streaming filesystem. It does not host, index, or distribute any copyrighted content itself; what you do with it is your responsibility, same as with any BitTorrent client.
 
 **Can I put Tiramisu on the internet?**
-Not directly. Turn on sign-in and HTTPS (Control Panel → Access), or put a reverse proxy with HTTPS in front of `:9080`; for access from outside your home a VPN (WireGuard, Tailscale) is safer than an open port. Never publish `:8090`: it listens on the host only by default, and it has no authentication.
+Not directly. Turn on sign-in and HTTPS (Control Panel → Access), or put a reverse proxy with HTTPS in front of `:9080`; for access from outside your home a VPN (WireGuard, Tailscale) is safer than an open port.
 
 **Is my data private?**
 Everything runs on your own hardware. No account, no third-party API key is required for the core engine to work (TMDB, Prowlarr, and Plex/Jellyfin integrations are optional and use your own credentials).
@@ -311,7 +313,7 @@ Tiramisu is free and open source. If it is useful to you, you can support its de
 
 ## Acknowledgements
 
-Tiramisu builds on [TorrServer](https://github.com/YouROK/TorrServer) and [anacrolix/torrent](https://github.com/anacrolix/torrent); both are embedded as patched forks.
+Tiramisu builds on [anacrolix/torrent](https://github.com/anacrolix/torrent), embedded as a patched fork. Its engine began as a fork of [TorrServer](https://github.com/YouROK/TorrServer); since v1.13.0 Tentacle, Tiramisu's own engine, has replaced it.
 
 The optional peer country and network view uses the DB-IP Lite databases: [IP geolocation by DB-IP](https://db-ip.com), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 

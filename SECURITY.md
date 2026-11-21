@@ -20,6 +20,6 @@ Dashboard, APIs, MCP) is optional and off by default; turn it on in **Control Pa
 before exposing the port beyond your LAN, together with HTTPS: Tiramisu can serve it itself
 (**Access → HTTPS**, with a local CA you trust on each device or your own certificate), or a
 reverse proxy can. With HTTPS on, the Plex/Jellyfin webhooks and calls from the host itself stay
-on plain HTTP by design. The GoStorm API on `:8090` has no authentication and listens on
-`127.0.0.1` only. Do not expose either port to the internet directly: use a VPN or a reverse
-proxy.
+on plain HTTP by design. The engine runs in-process and opens no HTTP port of its own (the
+`:8090` API of earlier versions is gone since v1.13.0). Do not expose `:9080` to the internet
+directly: use a VPN or a reverse proxy.

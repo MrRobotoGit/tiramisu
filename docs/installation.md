@@ -50,12 +50,11 @@ The configuration lives in `/state/STATE/tiramisu.db`: no config file is require
 
 | Path | Holds |
 |------|-------|
-| `/state/settings.json` | GoStorm settings: peer port, cache size, connection limit (with `StoreSettingsInJson` off they live in `tiramisu.db` instead) |
-| `/state/STATE/` | The configuration and its history (`tiramisu.db`, with `config.last.json` as a copy), the GoStorm torrent list, inode map and sync caches |
+| `/state/STATE/` | The configuration and its history (`tiramisu.db`, with `config.last.json` as a copy), the torrent list and the Tentacle settings (peer port, cache size, connection limit), inode map and sync caches |
 | `/state/logs/` | Log files the Control Panel tails |
 | `/state/blocklist` | The downloaded IP blocklist |
 
-Up to v1.11.17 the torrent list was in `/state/config.db` (BBolt). The first start of a newer version imports it into `tiramisu.db` and renames it `config.db.migrated-<date>`; that file can be deleted once the new version runs well.
+Upgrading to v1.13.0 keeps everything: the same `tiramisu.db`, library and stubs. A `/state/settings.json` from an older install is imported on the first start and renamed `settings.json.migrated-<date>`. Up to v1.11.17 the torrent list was in `/state/config.db` (BBolt), and later versions up to v1.12 import it on their first start. v1.13.0 no longer reads it: if a `config.db` was never imported, the start stops and says so. Run `mrrobotogit/tiramisu:v1.12.03` once with the same volumes, then the new image. A `config.db` left behind after an import is ignored and can be deleted.
 
 Mount a host directory there and everything survives `docker rm`. Without that volume the peer port, the torrent list and every other setting are discarded when the container is removed, and the next `docker run` starts from the defaults; the container prints a warning on startup when it detects this. `/state` is the default, so `TIRAMISU_ROOT_PATH` only needs setting to move the whole directory elsewhere, and `TIRAMISU_STATE_DIR` / `TIRAMISU_LOG_DIR` default to `STATE/` and `logs/` underneath it.
 
