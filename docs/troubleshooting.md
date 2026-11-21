@@ -59,9 +59,10 @@ If you are routing BitTorrent traffic through WireGuard, enable NAT-PMP to resto
 Without an open inbound port, peers cannot initiate connections: the engine
 relies solely on outbound ones.
 
-**If you are not using a VPN, forward the peer port on your router.** Since
-v1.13.0 Tiramisu no longer asks the router for a mapping over UPnP: the only
-automatic mapping is NAT-PMP, when it is turned on. Without a forward the port
+**If you are not using a VPN, make sure the peer port is open on your router.**
+The engine asks the router for a mapping over UPnP at start (unless
+`DisableUPNP` is set, or Tiramisu's NAT-PMP manages the port). If your router
+has UPnP turned off, forward the port yourself. Without a mapping the port
 simply stays closed and peer counts stay low; nothing is logged as an error.
 
 1. Pin the port. In the Control Panel, set **Tentacle → Listen Port** to a
