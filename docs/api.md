@@ -363,7 +363,7 @@ versions (Control Panel, `POST /api/tentacle/settings` with `set` or `def`, a re
 the peer port NAT-PMP sets and the defaults written at start-up do not.
 `StoreSettingsInJson`, and `PeersListenPort` while NAT-PMP is on, are
 never compared, and a save or a restore keeps their current value: with NAT-PMP the
-peer port is the one the VPN forwards, not the one in the form. A restore applies at once, with no restart.
+peer port is the one the VPN forwards, not the one in the form. A restore applies at once: timeout, retrackers, read-ahead, Responsive and Shield apply live, other keys reconnect the BitTorrent client (playback in progress stops), and disk warmup and the save path wait for a restart (the answer then has `"restart": true`).
 Changes to the disconnect timeout, retrackers mode, Responsive mode, Adaptive
 Shield and read-ahead apply live; any other change reconnects the BitTorrent client, and playback
 in progress stops.

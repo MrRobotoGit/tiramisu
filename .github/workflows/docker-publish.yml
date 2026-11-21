@@ -231,8 +231,15 @@ jobs:
             docker ps --filter name=tiramisu-bbolt --filter status=running -q | grep -q . || break
             sleep 1
           done
+          running=$(docker inspect -f '{{.State.Running}}' tiramisu-bbolt)
+          code=$(docker inspect -f '{{.State.ExitCode}}' tiramisu-bbolt)
           logs=$(docker logs tiramisu-bbolt 2>&1 || true)
           docker rm -f tiramisu-bbolt >/dev/null 2>&1 || true
+          if [ "$running" = "true" ] || [ "$code" = "0" ]; then
+            echo "::error::the container did not stop with an error (running=$running, exit=$code)"
+            echo "$logs" | tail -n 50
+            exit 1
+          fi
           echo "$logs" | grep -q 'config.db (BBolt) was never imported' || {
             echo "::error::the start did not stop on an unimported config.db"
             echo "$logs" | tail -n 50
