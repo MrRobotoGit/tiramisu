@@ -132,15 +132,14 @@ jobs:
             exit 1
           }
 
-      # The engine runs in-process: its health is the "gostorm" key of /api/health
-      # (name kept for compatibility).
+      # The engine runs in-process: its health is the "tentacle" key of /api/health.
       - name: Check the Control Panel and Tentacle health
         run: |
           set -eu
           curl -fsS --max-time 10 http://127.0.0.1:9080/control >/dev/null
           ok=false
           for _ in $(seq 1 30); do
-            if curl -fsS --max-time 5 http://127.0.0.1:9080/api/health | jq -e '.gostorm.ok == true' >/dev/null 2>&1; then
+            if curl -fsS --max-time 5 http://127.0.0.1:9080/api/health | jq -e '.tentacle.ok == true' >/dev/null 2>&1; then
               ok=true; break
             fi
             sleep 1
