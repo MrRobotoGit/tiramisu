@@ -32,7 +32,7 @@
 
 Tiramisu turns torrents into ordinary, seekable `.mkv` files on a FUSE virtual filesystem. Plex, Jellyfin, Infuse or any player reads them like files on a local disk, while every byte is fetched live from the BitTorrent swarm. Nothing is downloaded in advance, there are no temporary copies and no storage quota.
 
-The BitTorrent engine runs in the same process as the filesystem, so data flows from peers through RAM to the media server with no HTTP proxy in between. The result is 4K HDR Dolby Vision playback that starts in under a second from the warmup cache (2–4 s on a cold swarm) and seeks instantly, on hardware as small as a Raspberry Pi 4.
+Underneath is **Tentacle**, Tiramisu's own native torrent engine, built around FUSE rather than bolted onto it. A normal client downloads a file and hands it over when it is done; Tentacle starts from a player opening a file that does not exist yet. Every read becomes the plan for which pieces to fetch next, so the swarm ends up racing to stay a few seconds ahead of the scene you are watching, while data flows from peers through RAM to the media server with no HTTP proxy in between. The result is 4K HDR Dolby Vision playback that starts in under a second from the warmup cache (2–4 s on a cold swarm) and seeks instantly, on hardware as small as a Raspberry Pi 4.
 
 ---
 
@@ -74,7 +74,7 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 - **Library API and MCP server.** Add or remove titles over HTTP, or let an AI agent (Hermes, OpenClaw, Claude Code) search and file releases with your own scoring profile.
 - **Optional sign-in.** One user and a password for the Control Panel, the Dashboard and every API, plus named tokens: MCP tokens for AI agents, API tokens for apps and scripts built on Tiramisu. Keys and tokens in the config are write-only.
 - **VPN friendly.** NAT-PMP port mapping for WireGuard and an optional IP blocklist, loaded before the engine starts when a cached copy exists.
-- **One binary, one port.** Tentacle, Tiramisu's own streaming engine, runs in-process on top of a patched fork of [anacrolix/torrent](https://github.com/anacrolix/torrent) inside the single `tiramisu` binary. The Control Panel, Dashboard, APIs and MCP server all share `:9080`.
+- **One binary, one port.** Tentacle runs in-process inside the single `tiramisu` binary. The Control Panel, Dashboard, APIs and MCP server all share `:9080`.
 
 ---
 
