@@ -428,6 +428,11 @@ scripts, and for checking what is happening without opening the web UI.
 curl -s http://127.0.0.1:9080/api/torrents | \
   jq '.[] | {title: .title[:50], speed_mbs, peers, status}'
 
+# How full each torrent's piece cache in RAM is (v1.13.0: cache_filled and
+# cache_capacity, in bytes; the Tentacle station in Live Swarm draws this ratio)
+curl -s http://127.0.0.1:9080/api/torrents | \
+  jq '.[] | {title: .title[:50], cache_pct: (100 * .cache_filled / .cache_capacity | floor)}'
+
 # Read the Tentacle settings
 curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"action":"get"}' http://127.0.0.1:9080/api/tentacle/settings | jq

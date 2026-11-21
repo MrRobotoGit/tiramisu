@@ -279,9 +279,10 @@ One graph from left to right: **peers → torrents → Tentacle (piece cache) �
 
 - **Peers**: seeders, leechers, uTP and half-open connections; newcomers pulse in, departures fade out; banned peers are marked with a cross.
 - **Torrents**: pipe width follows the download speed; a torrent that is downloading pulses, an idle one stays still.
-- **FUSE**: the pipe between Tentacle and FUSE works as a level meter of the read-ahead buffer (active / stale).
+- **Tentacle and FUSE**: two stations the pipe runs through. The arc inside each is a reading: for Tentacle how full the playing torrent's piece cache is, for FUSE the read-ahead hit rate (hover for the value).
+- **FUSE buffer**: the pipe between the two stations works as a level meter of the read-ahead buffer (active / stale).
 - **Clients**: the device that is watching, from Plex or Jellyfin sessions (`Apple TV · Plex`), or the SMB client address when the player reads the share directly.
-- **Adaptive Shield**: a hash failure travels down the affected pipe; in STRICT the live pipes turn orange with a clean-streak ring on the Tentacle node, and the colour drains toward the clients when FAST mode returns.
+- **Adaptive Shield**: a hash failure travels down the affected pipe; in STRICT the live pipes turn orange, the Tentacle station fills orange and a ring around it counts the clean streak, and the colour drains toward the clients when FAST mode returns.
 
 ### Status Grid
 
