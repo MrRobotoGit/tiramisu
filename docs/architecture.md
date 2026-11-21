@@ -340,3 +340,21 @@ detail behind those two.
 | Peers opened by a Plex/Jellyfin library scan | ~6 in total |
 | Inode shard count | 32 (collision-protected) |
 | Warmup cache capacity | ~400 films at 80 MB each (32 GB) |
+
+### Tentacle vs GoStorm (simulator)
+
+Measured on the same machine, on the same simulated swarms, against the last GoStorm build (v1.12) and Tentacle v1.13.0.
+
+| Test | GoStorm | Tentacle | |
+|---|---|---|---|
+| Read from cache, latency p95 | 302 µs | **128 µs** | 2.4× faster |
+| Read from cache, throughput | 3,758 MiB/s | **8,227 MiB/s** | 2.2× more |
+| Cold read, latency p95 | 4.1 ms | **3.9 ms** | on par |
+| Cold read, throughput | 353 MiB/s | **369 MiB/s** | +5% |
+| Multi-file torrent, reads stuck over 15 s | 2–6 per run | **0** | no stalls |
+| Sustained download, fast swarm (2 MB / 16 MB pieces) | 34.0 / 33.5 MB/s | 33.6 / **33.7 MB/s** | on par, swarm-bound |
+| Sustained download, mixed swarm (2 MB / 16 MB pieces) | 34.0 / 34.1 MB/s | 33.8 / **34.3 MB/s** | on par, swarm-bound |
+| Binary size (arm64) | 54 MB | **39 MB** | −28% |
+| Go dependencies | 95 | **77** | −18 |
+
+*Read benchmarks: the full chain from engine to FUSE pipe, 6 rounds each. Download: 256 MB sequential read, 5 alternating runs per chain, medians. With a fast swarm both engines saturate what the swarm delivers.*
