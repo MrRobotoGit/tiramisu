@@ -16,7 +16,7 @@ type OpenTarget struct {
 }
 
 // TorrentFile is one resident torrent file in the engine's sorted order.
-// Index is 1-based, matching the ID GoStorm assigns.
+// Index is 1-based, matching the ID Tentacle assigns.
 type TorrentFile struct {
 	Index  int
 	Path   string

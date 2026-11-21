@@ -5,12 +5,6 @@ Copyright (C) 2026 Matteo Rancilio
 
 This project includes the third-party components listed below. Each one is licensed under its own terms, and its license text is kept next to the code.
 
-## internal/gostorm
-
-- License: GNU General Public License v3.0 (GPL-3.0), the same license as Tiramisu (`LICENSE.md`)
-- Copyright (c) YouROK and the TorrServer contributors
-- Derived from TorrServer MatriX, `github.com/YouROK/TorrServer`: its server core, renamed GoStorm and heavily modified in-tree (bloat removed, streaming, storage and API changes).
-
 ## internal/anacrolix-torrent
 
 - License: Mozilla Public License 2.0 (MPL-2.0)

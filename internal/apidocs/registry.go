@@ -118,7 +118,7 @@ var Groups = []Group{
 		},
 		{
 			Method: "GET", Path: "/api/library/diagnostics", Summary: "Read-only consistency check of the library against the engine",
-			Desc: "Compares the torrents GoStorm holds with what the library references (stubs under movies/ and tv/, tv_episodes, audio " +
+			Desc: "Compares the torrents Tentacle holds with what the library references (stubs under movies/ and tv/, tv_episodes, audio " +
 				"projections) and with the inode map. Each check has a count and up to 20 samples: orphan_torrents (with " +
 				"older_than_30_days), missing_torrents, stubs_without_hash, tv_stubs_unregistered, tv_registry_without_stub, " +
 				"inode_ghosts, stale_metadata_failures, stuck_audio. It changes nothing; one run at a time. Torrents added in " +
@@ -240,22 +240,22 @@ var Groups = []Group{
 	}},
 	{ID: "status", Name: "Status & metrics", Desc: "Read-only: what the engine is doing.", Endpoints: []Endpoint{
 		{
-			Method: "GET", Path: "/api/health", Summary: "Engine, FUSE, VPN, media servers and system load",
-			Desc: "A snapshot refreshed every 5 s, always 200: a down service shows ok false. Right after start every field is " +
+			Method: "GET", Path: "/api/health", Summary: "Tentacle, FUSE, VPN, media servers and system load",
+			Desc: "A snapshot refreshed every 2.5 s, always 200: a down service shows ok false. Right after start every field is " +
 				"empty until the first refresh. media_servers is null when none is configured; cache_hit_rate_pct is null " +
 				"unless something is streaming. download_mbps and upload_mbps are megabits per second.",
 			Example: "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/health",
 			Response: "{\n  \"timestamp\": \"2026-11-17T20:01:05.12+01:00\",\n  \"uptime\": \"3h12m5s\",\n  \"cpu_pct\": 14.2,\n  \"ram_pct\": 48.1,\n" +
-				"  \"gostorm\": {\"ok\": true, \"latency_ms\": 2},\n  \"fuse\": {\"ok\": true, \"latency_ms\": 0},\n  \"vpn\": {\"ok\": true, \"latency_ms\": 0},\n" +
+				"  \"tentacle\": {\"ok\": true, \"latency_ms\": 2},\n  \"fuse\": {\"ok\": true, \"latency_ms\": 0},\n  \"vpn\": {\"ok\": true, \"latency_ms\": 0},\n" +
 				"  \"natpmp\": {\"ok\": true, \"latency_ms\": 0},\n  \"media_servers\": [{\"product\": \"Plex\", \"ok\": true, \"latency_ms\": 12}],\n" +
 				"  \"total_torrents\": 3,\n  \"active_count\": 1,\n  \"download_mbps\": 38.4,\n  \"upload_mbps\": 1.2,\n  \"cache_hit_rate_pct\": null,\n  …\n}",
 			OK: 200,
 		},
 		{
 			Method: "GET", Path: "/api/torrents", Summary: "Torrents in memory with speed and peers",
-			Desc: "Refreshed every 5 s. status is idle, downloading (above 0.01 MiB/s) or streaming (active but not " +
+			Desc: "Refreshed every 2.5 s. status is idle, downloading (above 0.01 MiB/s) or streaming (active but not " +
 				"downloading); speed_mbs and up_mbs are MiB/s; each entry of peer_rates carries kbps (download) and up_kbps (upload) in KiB/s. title is the engine's name; clean_title is filled only while a media " +
-				"server plays it. An unreachable engine answers [].",
+				"server plays it. cache_filled and cache_capacity are the bytes the piece cache in RAM holds for the torrent and its size. An unreachable engine answers [].",
 			Example: "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/torrents",
 			Response: "[\n  {\n    \"hash\": \"e7f8…\",\n    \"title\": \"Dummy.Bunny.2024.2160p.DV.mkv\",\n    \"clean_title\": \"\",\n    \"speed_mbs\": 4.8,\n    \"up_mbs\": 0.15,\n    \"peers\": 31,\n    \"seeders\": 22,\n" +
 				"    \"size\": 61203886080,\n    \"bytes_read\": 1073741824,\n    \"is_priority\": true,\n    \"status\": \"downloading\",\n    \"is_4k\": true,\n    \"is_dv\": true\n  }\n]",
@@ -284,7 +284,7 @@ var Groups = []Group{
 			OK: 200,
 		},
 	}},
-	{ID: "config", Name: "Configuration", Desc: "The configuration and the GoStorm Engine settings, stored in tiramisu.db as versions. Secrets are write-only. Error bodies are plain text.", Endpoints: []Endpoint{
+	{ID: "config", Name: "Configuration", Desc: "The configuration and the Tentacle settings, stored in tiramisu.db as versions. Secrets are write-only. Error bodies are plain text.", Endpoints: []Endpoint{
 		{
 			Method: "GET", Path: "/api/config", Summary: "Current configuration, secrets left empty",
 			Desc: "The values in effect, environment overrides included. The secrets (Plex token, TMDB and Prowlarr keys) come " +
@@ -355,15 +355,35 @@ var Groups = []Group{
 			Errors:   []Status{{400, "the body is not {\"id\": N}"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version"}, {500, "the configuration could not be saved"}},
 		},
 		{
-			Method: "GET", Path: "/api/gostorm/history", Summary: "Engine settings versions, newest first",
-			Desc: "The last 50 manual saves of the GoStorm Engine settings (Control Panel, POST /api/gostorm/settings set or def, " +
+			Method: "POST", Path: "/api/tentacle/settings", Summary: "Read, change or reset the Tentacle settings",
+			Desc: "action get answers with the settings document in use (field names as keys, keys Tentacle does not interpret " +
+				"included). action set saves sets: only the keys it names change, the others keep their values; unknown keys " +
+				"are ignored and values out of range are clamped (ReaderReadAHead 5-100; ConnectionsLimit, CacheSize and " +
+				"TorrentDisconnectTimeout at 0 or below take 25, 128 MiB and 30). action def puts the defaults back. set and def " +
+				"answer 200 with an empty body and are recorded in the history unless nothing changed. TorrentDisconnectTimeout, " +
+				"RetrackersMode, ResponsiveMode, AdaptiveShield and ReaderReadAHead apply live; any other change reconnects the " +
+				"BitTorrent client, so playback in progress stops. UseDisk and TorrentsSavePath take effect at the next start. " +
+				"While NAT-PMP is on it owns PeersListenPort: set and def keep the forwarded port. Open to API tokens.",
+			ParamsIn: "body",
+			Params: []Param{{Name: "action", Type: "string", Required: true, Desc: "get, set or def"},
+				{Name: "sets", Type: "object", Desc: "set only: the keys to change, e.g. {\"ConnectionsLimit\": 30}"}},
+			Example: "curl -X POST -H 'Authorization: Bearer tmr_…' \\\n" +
+				"  -H 'Content-Type: application/json' \\\n  -d '{\"action\":\"set\",\"sets\":{\"ConnectionsLimit\":30}}' {{ORIGIN}}/api/tentacle/settings",
+			Response: "(get) {\"CacheSize\": 134217728, \"ReaderReadAHead\": 75, \"ConnectionsLimit\": 25, \"ResponsiveMode\": true, …}\n(set, def) empty body",
+			OK:       200,
+			Errors: []Status{{400, "bad JSON, sets missing or not an object, or an unknown action"}, {405, "not POST"},
+				{500, "a value of the wrong type, or the settings could not be stored or applied (a failed apply stays saved and the next save retries it)"}},
+		},
+		{
+			Method: "GET", Path: "/api/tentacle/history", Summary: "Tentacle settings versions, newest first",
+			Desc: "The last 50 manual saves of the Tentacle settings (Control Panel, POST /api/tentacle/settings set or def, " +
 				"a restore), each with source and actor and the keys it changed against the version before; kind is \"engine\". " +
 				"Automatic changes are not versions: the NAT-PMP peer port, defaults written at start-up. StoreSettingsInJson, and " +
 				"PeersListenPort while NAT-PMP is on, are never compared. The first entry is the settings when the history started " +
 				"(note \"baseline\"). current says the settings in use match the newest version. Same access rule as the configuration history.",
 			ParamsIn: "query",
 			Params:   []Param{{Name: "limit", Type: "int", Desc: "how many versions, 1-50 (default 50)"}},
-			Example:  "curl {{ORIGIN}}/api/gostorm/history?limit=5",
+			Example:  "curl {{ORIGIN}}/api/tentacle/history?limit=5",
 			Response: "[\n  {\"id\": 3, \"created_at\": 1795560000, \"source\": \"ui\", \"actor\": \"admin\", \"note\": \"\",\n" +
 				"   \"changes\": [{\"key\": \"ConnectionsLimit\", \"from\": \"26\", \"to\": \"25\"}],\n" +
 				"   \"restart\": false, \"current\": true, \"kind\": \"engine\"}\n]",
@@ -371,27 +391,28 @@ var Groups = []Group{
 			Errors: []Status{{403, "sign-in on and no Control Panel session"}},
 		},
 		{
-			Method: "GET", Path: "/api/gostorm/history/{id}/restore", Summary: "What restoring Engine settings would change",
-			Desc:     "The changes POST /api/gostorm/rollback would make for id, against the settings in use, without applying anything.",
-			Example:  "curl {{ORIGIN}}/api/gostorm/history/2/restore",
+			Method: "GET", Path: "/api/tentacle/history/{id}/restore", Summary: "What restoring Tentacle settings would change",
+			Desc:     "The changes POST /api/tentacle/rollback would make for id, against the settings in use, without applying anything.",
+			Example:  "curl {{ORIGIN}}/api/tentacle/history/2/restore",
 			Response: "{\"id\": 2, \"changed\": true, \"changes\": [{\"key\": \"ConnectionsLimit\", \"from\": \"25\", \"to\": \"26\"}], \"restart\": false}",
 			OK:       200,
 			Errors:   []Status{{400, "id is not a number"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version"}},
 		},
 		{
-			Method: "POST", Path: "/api/gostorm/rollback", Summary: "Restore saved Engine settings",
-			Desc: "Puts version id in use like an Engine save: GoStorm reconnects its BitTorrent client, so playback in progress " +
-				"stops. It is recorded as a new version (source rollback, note \"rollback to #id\") unless it equals the settings " +
-				"in use. StoreSettingsInJson, and the peer port while NAT-PMP is on, keep their current value. No restart is needed.",
+			Method: "POST", Path: "/api/tentacle/rollback", Summary: "Restore saved Tentacle settings",
+			Desc: "Puts version id in use like a Tentacle save: keys read on use (timeout, retrackers, responsive mode, shield, " +
+				"read-ahead) apply live; any other change reconnects the BitTorrent client, so playback in progress stops. It is " +
+				"recorded as a new version (source rollback, note \"rollback to #id\") unless it equals the settings in use. " +
+				"changed is true only when a key the engine interprets changed. The peer port while NAT-PMP is on keeps its current value. restart is true when UseDisk or TorrentsSavePath changed: they take effect at the next start.",
 			ParamsIn: "body",
 			Params:   []Param{{Name: "id", Type: "int", Required: true, Desc: "the version to restore"}},
-			Example:  "curl -X POST -H 'Content-Type: application/json' -d '{\"id\":2}' {{ORIGIN}}/api/gostorm/rollback",
+			Example:  "curl -X POST -H 'Content-Type: application/json' -d '{\"id\":2}' {{ORIGIN}}/api/tentacle/rollback",
 			Response: "{\"changed\": true, \"changes\": [{\"key\": \"ConnectionsLimit\", \"from\": \"25\", \"to\": \"26\"}], \"restart\": false}",
 			OK:       200,
 			Errors:   []Status{{400, "the body is not {\"id\": N}"}, {403, "sign-in on and no Control Panel session"}, {404, "no such version"}, {500, "the settings could not be applied or recorded"}},
 		},
 		{
-			Method: "POST", Path: "/api/restart", Summary: "Restart the engine",
+			Method: "POST", Path: "/api/restart", Summary: "Restart Tiramisu",
 			Desc: "Answers, then shuts down gracefully and exits with code 75: systemd restarts it on any exit, the Docker " +
 				"image on this code. Started by hand, it just exits.",
 			Example:  "curl -X POST -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/restart",

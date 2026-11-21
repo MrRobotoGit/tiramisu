@@ -92,10 +92,13 @@ type desiredPeerRequests struct {
 // readerCursors maps each piece holding a reader position to the chunk at that position. Call
 // with the client lock held: it guards the readers' positions.
 func (t *Torrent) readerCursors() map[pieceIndex]RequestIndex {
-	if len(t.readers) == 0 || !t.haveInfo() {
+	if (len(t.readers) == 0 && len(t.streamCursors) == 0) || !t.haveInfo() {
 		return nil
 	}
-	m := make(map[pieceIndex]RequestIndex, len(t.readers))
+	m := make(map[pieceIndex]RequestIndex, len(t.readers)+len(t.streamCursors))
+	for piece, ri := range t.streamCursors {
+		m[piece] = ri
+	}
 	for r := range t.readers {
 		abs := r.offset + r.pos
 		if abs < 0 || abs >= t.length() {
@@ -242,6 +245,9 @@ func (p *Peer) getDesiredRequestState() (desired desiredRequestState) {
 				return false
 			}
 			if !p.peerHasPiece(pieceIndex) {
+				return false
+			}
+			if t.pieces[pieceIndex].exclusion != nil && !p.exclusionAllows(pieceIndex) {
 				return false
 			}
 			if len(requestHeap.requestIndexes) >= candidateLimit && len(stealCandidates) >= candidateLimit {

@@ -7,20 +7,32 @@ import (
 	"sync"
 )
 
-// EngineHistoryDeps is what the Engine (GoStorm) settings history needs from GoStorm.
+// EngineHistoryDeps is what the Tentacle settings history needs from the engine.
 type EngineHistoryDeps struct {
 	Actor   func(*http.Request) (source, actor string)
 	Allowed func(*http.Request) bool // as HistoryDeps.Allowed
 	Logf    func(string, ...any)
-	Ignored func() []string                            // keys that are not manual settings
-	Current func() []byte                              // the settings in use, as JSON
-	Restore func(doc []byte, actor, note string) error // puts a version in use and records it
+	Ignored func() []string // keys that are not manual settings
+	Current func() []byte   // the settings in use, as JSON
+	// Restore puts a version in use and records it; changed are the keys the engine took.
+	Restore func(doc []byte, actor, note string) (changed []string, err error)
+	// NeedsRestart reports a key that takes effect only at the next start (UseDisk, TorrentsSavePath).
+	NeedsRestart func(key string) bool
+}
+
+func (d EngineHistoryDeps) restart(ch []Change) bool {
+	for _, c := range ch {
+		if d.NeedsRestart != nil && d.NeedsRestart(c.Key) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d EngineHistoryDeps) guard(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if d.Allowed != nil && !d.Allowed(r) {
-			http.Error(w, "the Engine settings history is for the Control Panel, signed in", http.StatusForbidden)
+			http.Error(w, "the Tentacle settings history is for the Control Panel, signed in", http.StatusForbidden)
 			return
 		}
 		h(w, r)
@@ -67,8 +79,9 @@ func (b *Boot) EngineHistory(limit int, ignored []string, current []byte) ([]Ent
 	return out, nil
 }
 
-// RegisterEngineHistory mounts /api/gostorm/history, /api/gostorm/history/{id}/restore and
-// /api/gostorm/rollback. Engine settings apply live: no restart, but the client reconnects.
+// RegisterEngineHistory mounts /api/tentacle/history, /api/tentacle/history/{id}/restore and
+// /api/tentacle/rollback, and the same under /api/gostorm (undocumented aliases). Most engine
+// settings apply live or reconnect the client; UseDisk and TorrentsSavePath wait for a restart.
 func (b *Boot) RegisterEngineHistory(mux *http.ServeMux, d EngineHistoryDeps) {
 	var mu sync.Mutex
 	version := func(w http.ResponseWriter, id int64) ([]byte, bool) {
@@ -83,7 +96,7 @@ func (b *Boot) RegisterEngineHistory(mux *http.ServeMux, d EngineHistoryDeps) {
 		}
 		return v.JSON, true
 	}
-	mux.HandleFunc("GET /api/gostorm/history", d.guard(func(w http.ResponseWriter, r *http.Request) {
+	history := d.guard(func(w http.ResponseWriter, r *http.Request) {
 		limit := KeepVersions
 		if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n < limit {
 			limit = n
@@ -93,9 +106,12 @@ func (b *Boot) RegisterEngineHistory(mux *http.ServeMux, d EngineHistoryDeps) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		for i := range h {
+			h[i].Restart = d.restart(h[i].Changes)
+		}
 		writeJSON(w, 200, h)
-	}))
-	mux.HandleFunc("GET /api/gostorm/history/{id}/restore", d.guard(func(w http.ResponseWriter, r *http.Request) {
+	})
+	preview := d.guard(func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
 			http.Error(w, "id must be a number", 400)
@@ -106,9 +122,9 @@ func (b *Boot) RegisterEngineHistory(mux *http.ServeMux, d EngineHistoryDeps) {
 			return
 		}
 		ch := diffIgnoring(d.Current(), doc, d.Ignored())
-		writeJSON(w, 200, map[string]any{"id": id, "changed": len(ch) > 0, "changes": ch, "restart": false})
-	}))
-	mux.HandleFunc("POST /api/gostorm/rollback", d.guard(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"id": id, "changed": len(ch) > 0, "changes": ch, "restart": d.restart(ch)})
+	})
+	rollback := d.guard(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID int64 `json:"id"`
 		}
@@ -128,13 +144,21 @@ func (b *Boot) RegisterEngineHistory(mux *http.ServeMux, d EngineHistoryDeps) {
 			return
 		}
 		_, actor := d.Actor(r)
-		if err := d.Restore(doc, actor, "rollback to #"+strconv.FormatInt(req.ID, 10)); err != nil {
+		changed, err := d.Restore(doc, actor, "rollback to #"+strconv.FormatInt(req.ID, 10))
+		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		if d.Logf != nil {
-			d.Logf("[GoStorm] Engine settings restored to version #%d", req.ID)
+			d.Logf("[Tentacle] settings restored to version #%d (changed %v)", req.ID, changed)
 		}
-		writeJSON(w, 200, map[string]any{"changed": len(ch) > 0, "changes": ch, "restart": false})
-	}))
+		// A difference in a key the engine does not interpret changes nothing (plan 2c).
+		writeJSON(w, 200, map[string]any{"changed": len(changed) > 0, "changes": ch, "restart": d.restart(ch)})
+	})
+	mux.HandleFunc("GET /api/tentacle/history", history)
+	mux.HandleFunc("GET /api/tentacle/history/{id}/restore", preview)
+	mux.HandleFunc("POST /api/tentacle/rollback", rollback)
+	mux.HandleFunc("GET /api/gostorm/history", history)
+	mux.HandleFunc("GET /api/gostorm/history/{id}/restore", preview)
+	mux.HandleFunc("POST /api/gostorm/rollback", rollback)
 }

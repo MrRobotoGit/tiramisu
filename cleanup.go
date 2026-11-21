@@ -7,9 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"tiramisu/internal/bridge"
 	"tiramisu/internal/cache"
-	"tiramisu/internal/gostorm/native"
-	"tiramisu/internal/gostorm/torr"
 	"tiramisu/internal/preload"
 )
 
@@ -31,7 +30,7 @@ type CleanupManager struct {
 	// External components to clean (V238 Audit 1.A)
 	peerPreloader *preload.PeerPreloader
 	metaCache     *cache.LRUCache
-	nativeBridge  *native.NativeClient
+	nativeBridge  *bridge.NativeClient
 
 	// Configuration
 	deletedHashTTL  time.Duration
@@ -54,7 +53,7 @@ type offsetEntry struct {
 }
 
 // NewCleanupManager creates a new cleanup manager with references to components
-func NewCleanupManager(logger *log.Logger, pp *preload.PeerPreloader, mc *cache.LRUCache, nb *native.NativeClient) *CleanupManager {
+func NewCleanupManager(logger *log.Logger, pp *preload.PeerPreloader, mc *cache.LRUCache, nb *bridge.NativeClient) *CleanupManager {
 	return &CleanupManager{
 		deletedHashes:   make(map[string]time.Time),
 		fileOffsets:     make(map[string]*offsetEntry),
@@ -189,15 +188,10 @@ func (cm *CleanupManager) runCleanup() {
 		}
 
 		// Secondary: virtual paths for active torrents (served by FUSE, not on disk).
-		// ListActiveTorrent() returns only in-memory torrents — no BoltDB deserialization.
-		// ListTorrent() would unmarshal all ~3000+ DB entries every cleanup cycle → OOM.
-		torrents := torr.ListActiveTorrent()
-		for _, t := range torrents {
-			if t == nil {
-				continue
-			}
+		// Only in-memory torrents: listing the DB rows every cycle would cost thousands of reads.
+		for _, t := range eng.ListHydrated() {
 			for _, f := range t.Files() {
-				validFiles[filepath.Join(physicalSourcePath, f.Path())] = true
+				validFiles[filepath.Join(physicalSourcePath, f.Path)] = true
 			}
 		}
 
@@ -269,12 +263,12 @@ func (cm *CleanupManager) runCleanup() {
 
 			if now.Sub(lastActivity) > 15*time.Minute {
 				// V238 Audit 1.B: Ensure Priority is OFF before deleting zombie registry entry
-				// V273: PeekTorrent instead of GetTorrent — cleanup is read-only monitoring,
-				// must NOT reactivate dormant torrents (same pattern as cache.go fix).
+				// V273: a RAM lookup — cleanup is read-only monitoring and must not reactivate
+				// dormant torrents.
 				if ps.Hash != "" {
-					if t := torr.PeekTorrent(ps.Hash); t != nil && t.Torrent != nil && t.IsPriority.Load() {
+					if t := eng.Get(ps.Hash); t != nil && t.IsPriority.Load() {
 						t.IsPriority.Store(false)
-						t.SetAggressiveMode(false, 0)
+						cm.nativeBridge.SetAggressive(ps.Hash, false, 0)
 						cm.logger.Printf("[V273] Force Priority OFF for zombie torrent: %s", ps.Hash[:8])
 					}
 				}

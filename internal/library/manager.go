@@ -44,6 +44,8 @@ type Config struct {
 	GoStormURL string
 	GoStorm    GoStorm
 	Registry   EpisodeRegistry
+	// ReadRange reads a torrent file in-process (cue splitting): the bridge's ReadRange.
+	ReadRange func(ctx context.Context, hash string, index int, off int64, p []byte) (int, error)
 	// InvalidatePath, when set, drops the FUSE layer's cached state for a removed stub.
 	InvalidatePath func(string)
 	// Blacklist, when set, records a removed release the way the FUSE unlink handler
@@ -307,7 +309,7 @@ func (m *Manager) removeTorrent(ctx context.Context, hash string) error {
 	return removeErr
 }
 
-// Add registers the torrent with GoStorm, waits for its file list, and writes the stub
+// Add registers the torrent with Tentacle, waits for its file list, and writes the stub
 // files the FUSE layer serves. On any failure after the torrent was added it is removed
 // again, so a failed call leaves nothing hydrated.
 func (m *Manager) Add(ctx context.Context, req AddRequest) (*AddResponse, error) {
@@ -382,7 +384,7 @@ func (m *Manager) Add(ctx context.Context, req AddRequest) (*AddResponse, error)
 		// An interrupted request may still have been taken, and the engine saves it;
 		// dropTorrentIfUnused spares a torrent another stub already uses.
 		dropped[requestedHash] = true
-		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)
+		return nil, errf(http.StatusBadGateway, "Tentacle rejected the torrent: %v", err)
 	}
 	// The filename builders slice the hash, so a malformed answer must stop here.
 	hash = strings.ToLower(strings.TrimSpace(addedHash))
@@ -390,7 +392,7 @@ func (m *Manager) Add(ctx context.Context, req AddRequest) (*AddResponse, error)
 		// The torrent is hydrated under the hash we asked for; drop it rather than
 		// leaving it running with no stub pointing at it.
 		dropped[requestedHash] = true
-		return nil, errf(http.StatusBadGateway, "gostorm returned a malformed info hash %q", addedHash)
+		return nil, errf(http.StatusBadGateway, "Tentacle returned a malformed info hash %q", addedHash)
 	}
 	// A base32 magnet comes back in hex: everything from here on is keyed on the
 	// spelling the engine reported, so the lock has to cover it too, or a cleanup

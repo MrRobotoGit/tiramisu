@@ -21,10 +21,11 @@ import (
 
 	"tiramisu/internal/catalog"
 	"tiramisu/internal/catalog/mediaserver"
+	"tiramisu/internal/engine"
 	"tiramisu/internal/monitor/logtail"
 )
 
-const speedHistorySize = 60
+const speedHistorySize = 120
 const shieldEventWindow = 10 * time.Minute
 
 // ShieldEvent represents an AdaptiveShield log event.
@@ -55,7 +56,8 @@ type HealthStatus struct {
 	DiskUsedPct  float64             `json:"disk_used_pct"`
 	DiskFreeGB   float64             `json:"disk_free_gb"`
 	DiskTotalGB  float64             `json:"disk_total_gb"`
-	GoStorm      ServiceStatus       `json:"gostorm"`
+	Tentacle     ServiceStatus       `json:"tentacle"`
+	GoStorm      ServiceStatus       `json:"gostorm"` // alias of tentacle for existing clients
 	FUSE         ServiceStatus       `json:"fuse"`
 	VPN          ServiceStatus       `json:"vpn"`
 	NATPMP       ServiceStatus       `json:"natpmp"`
@@ -125,7 +127,10 @@ type TorrentInfo struct {
 	Size       int64   `json:"size"`
 	BytesRead  int64   `json:"bytes_read"`
 	IsPriority bool    `json:"is_priority"`
-	Status     string  `json:"status"`
+	// Piece cache in RAM: bytes held and its size (the Tentacle node's gauge).
+	CacheFilled   int64  `json:"cache_filled,omitempty"`
+	CacheCapacity int64  `json:"cache_capacity,omitempty"`
+	Status        string `json:"status"`
 	// HalfOpen and Pending are peers still connecting / queued: the swarm view draws them dashed.
 	HalfOpen int `json:"half_open"`
 	Pending  int `json:"pending"`
@@ -150,9 +155,16 @@ const (
 	publicIPTTL      = 60 * time.Second
 )
 
+// Engine is the in-process torrent engine; engine.API satisfies it.
+type Engine interface {
+	Up() bool
+	ListStreaming() []*engine.Torrent
+	Drop(hash string) bool
+}
+
 // Collector polls system services on a ticker.
 type Collector struct {
-	gostormURL   string
+	eng          Engine
 	metricsURL   string
 	profilingURL string
 	fusePath     string // FUSE mount point (for mount status check)
@@ -188,9 +200,9 @@ type Collector struct {
 }
 
 // New creates a Collector.
-func New(gostormURL, fusePath, sourcePath, vpnIface, plexURL, plexToken string, natpmpPort, metricsPort int, logsDir string) *Collector {
+func New(eng Engine, fusePath, sourcePath, vpnIface, plexURL, plexToken string, natpmpPort, metricsPort int, logsDir string) *Collector {
 	return &Collector{
-		gostormURL:   gostormURL,
+		eng:          eng,
 		metricsURL:   fmt.Sprintf("http://127.0.0.1:%d/metrics", metricsPort),
 		profilingURL: fmt.Sprintf("http://127.0.0.1:%d/metrics/profiling", metricsPort),
 		fusePath:     fusePath,
@@ -206,9 +218,18 @@ func New(gostormURL, fusePath, sourcePath, vpnIface, plexURL, plexToken string, 
 	}
 }
 
+// DropTorrent drops a torrent from memory (the dashboard's kill-stream).
+func (c *Collector) DropTorrent(hash string) error {
+	if c.eng == nil || !c.eng.Up() {
+		return fmt.Errorf("engine not connected")
+	}
+	c.eng.Drop(hash)
+	return nil
+}
+
 // Run starts the collection loop. Blocks until stop is closed.
 func (c *Collector) Run(stop <-chan struct{}) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(2500 * time.Millisecond)
 	defer ticker.Stop()
 	c.collect()
 	for {
@@ -317,12 +338,9 @@ func (c *Collector) PlexURL() string { return c.plexURL }
 // PlexToken returns the configured Plex token (for server-side proxy use only).
 func (c *Collector) PlexToken() string { return c.plexToken }
 
-// GostormURL returns the GoStorm API base URL.
-func (c *Collector) GostormURL() string { return c.gostormURL }
-
 // Known limit: each fetch below has its own 3s timeout, but collect() itself has no shared
 // cycle-wide deadline - if multiple endpoints degrade at once (e.g. a VPN/network blip affecting
-// GoStorm+Plex+metrics simultaneously), one collect() call can still take up to ~20s in the worst
+// Tentacle+Plex+metrics simultaneously), one collect() call can still take up to ~20s in the worst
 // case (down from ~45-90s pre-timeout-fix, but not a hard per-cycle ceiling). Fully bounding this
 // would need either a shared context.WithTimeout wrapping the whole cycle, or running the
 // independent fetches concurrently - out of scope for now, revisit if staleness becomes a problem
@@ -343,7 +361,8 @@ func (c *Collector) collect() {
 	s.RAMPct, s.RAMUsedGB, s.RAMTotalGB = readRAM()
 	s.DiskUsedPct, s.DiskFreeGB, s.DiskTotalGB = diskUsage("/")
 
-	s.GoStorm = c.checkHTTP(c.gostormURL, "/echo", 3*time.Second)
+	s.Tentacle = c.checkEngine()
+	s.GoStorm = s.Tentacle
 	s.FUSE = c.checkFUSE()
 	s.VPN = c.checkVPN()
 	s.NATPMP = c.checkNATPMP()
@@ -352,7 +371,7 @@ func (c *Collector) collect() {
 	// FUSE buffer from /metrics
 	c.fetchFUSEBuffer(&s)
 
-	// Torrents from GoStorm + enrich with Plex sessions and badges
+	// Torrents from Tentacle + enrich with Plex sessions and badges
 	torrents := c.fetchTorrents()
 	c.enrichTorrents(torrents)
 	var totalPeers, totalSeeders, activeCount int
@@ -393,43 +412,52 @@ func (c *Collector) collect() {
 	c.mu.Unlock()
 }
 
-func (c *Collector) fetchTorrents() []TorrentInfo {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.gostormURL+"/torrents",
-		strings.NewReader(`{"action":"active"}`))
-	if err != nil {
-		return nil
+// checkEngine is the "Engine" lamp: in-process, up when the BT client is connected.
+func (c *Collector) checkEngine() ServiceStatus {
+	if c.eng == nil {
+		return ServiceStatus{OK: false, Message: "not configured"}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := catalog.Do(ctx, c.httpClient, req)
-	if err != nil {
-		return nil
+	if !c.eng.Up() {
+		return ServiceStatus{OK: false, Message: "engine not connected"}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil
-	}
-	data, _ := io.ReadAll(resp.Body)
+	return ServiceStatus{OK: true}
+}
 
-	var raw []struct {
-		Hash             string     `json:"hash"`
-		Title            string     `json:"title"`
-		DownloadSpeed    float64    `json:"download_speed"`
-		UploadSpeed      float64    `json:"upload_speed"`
-		ActivePeers      int        `json:"active_peers"`
-		ConnectedSeeders int        `json:"connected_seeders"`
-		HalfOpenPeers    int        `json:"half_open_peers"`
-		PendingPeers     int        `json:"pending_peers"`
-		TorrentSize      int64      `json:"torrent_size"`
-		BytesRead        int64      `json:"bytes_read"`
-		IsPriority       bool       `json:"is_priority"`
-		StatString       string     `json:"stat_string"`
-		PeerRates        []PeerRate `json:"peer_rates"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
+// rawTorrent is the part of a torrent status the dashboard reads.
+type rawTorrent struct {
+	Hash             string     `json:"hash"`
+	Title            string     `json:"title"`
+	DownloadSpeed    float64    `json:"download_speed"`
+	UploadSpeed      float64    `json:"upload_speed"`
+	ActivePeers      int        `json:"active_peers"`
+	ConnectedSeeders int        `json:"connected_seeders"`
+	HalfOpenPeers    int        `json:"half_open_peers"`
+	PendingPeers     int        `json:"pending_peers"`
+	TorrentSize      int64      `json:"torrent_size"`
+	BytesRead        int64      `json:"bytes_read"`
+	IsPriority       bool       `json:"is_priority"`
+	CacheFilled      int64      `json:"cache_filled"`
+	CacheCapacity    int64      `json:"cache_capacity"`
+	StatString       string     `json:"stat_string"`
+	PeerRates        []PeerRate `json:"peer_rates"`
+}
+
+func (c *Collector) fetchTorrents() []TorrentInfo {
+	if c.eng == nil {
 		return nil
 	}
+	var raw []rawTorrent
+	for _, t := range c.eng.ListStreaming() {
+		st := t.Status()
+		raw = append(raw, rawTorrent{Hash: st.Hash, Title: st.Title, DownloadSpeed: st.DownloadSpeed,
+			UploadSpeed: st.UploadSpeed, ActivePeers: st.ActivePeers, ConnectedSeeders: st.ConnectedSeeders,
+			HalfOpenPeers: st.HalfOpenPeers, PendingPeers: st.PendingPeers, TorrentSize: st.TorrentSize,
+			BytesRead: st.BytesRead, IsPriority: st.IsPriority, CacheFilled: st.PreloadedBytes, CacheCapacity: st.CacheCapacity, StatString: st.StatString, PeerRates: st.PeerRates})
+	}
+	return torrentInfos(raw)
+}
+
+func torrentInfos(raw []rawTorrent) []TorrentInfo {
 
 	out := make([]TorrentInfo, 0, len(raw))
 	for _, r := range raw {
@@ -445,19 +473,20 @@ func (c *Collector) fetchTorrents() []TorrentInfo {
 			}
 		}
 		out = append(out, TorrentInfo{
-			Hash:       r.Hash,
-			Title:      r.Title,
-			SpeedMBs:   speedMB,
-			UpMBs:      sentMBs(r.PeerRates),
-			Peers:      r.ActivePeers,
-			Seeders:    r.ConnectedSeeders,
-			Size:       r.TorrentSize,
-			BytesRead:  r.BytesRead,
-			IsPriority: r.IsPriority,
-			Status:     status,
-			HalfOpen:   r.HalfOpenPeers,
-			Pending:    r.PendingPeers,
-			PeerRates:  r.PeerRates,
+			Hash:        r.Hash,
+			Title:       r.Title,
+			SpeedMBs:    speedMB,
+			UpMBs:       sentMBs(r.PeerRates),
+			Peers:       r.ActivePeers,
+			Seeders:     r.ConnectedSeeders,
+			Size:        r.TorrentSize,
+			BytesRead:   r.BytesRead,
+			IsPriority:  r.IsPriority,
+			CacheFilled: r.CacheFilled, CacheCapacity: r.CacheCapacity,
+			Status:    status,
+			HalfOpen:  r.HalfOpenPeers,
+			Pending:   r.PendingPeers,
+			PeerRates: r.PeerRates,
 		})
 	}
 	return out
@@ -606,24 +635,6 @@ func readRAM() (pct, usedGB, totalGB float64) {
 	usedGB = float64(memTotal-memAvail) / 1024 / 1024
 	pct = usedGB / totalGB * 100
 	return
-}
-
-func (c *Collector) checkHTTP(url, path string, timeout time.Duration) ServiceStatus {
-	if url == "" {
-		return ServiceStatus{OK: false, Message: "not configured"}
-	}
-	start := time.Now()
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(url + path)
-	if err != nil {
-		return ServiceStatus{OK: false, Message: err.Error()}
-	}
-	defer resp.Body.Close()
-	latency := int(time.Since(start).Milliseconds())
-	if resp.StatusCode < 500 {
-		return ServiceStatus{OK: true, Latency: latency}
-	}
-	return ServiceStatus{OK: false, Latency: latency, Message: resp.Status}
 }
 
 func (c *Collector) checkFUSE() ServiceStatus {
@@ -1083,19 +1094,10 @@ func hostOf(rawURL string) string {
 	return u.Host
 }
 
-// PeerRate is one connected peer as GoStorm reports it: anonymous id, KB/s, seeder.
-type PeerRate struct {
-	ID     string  `json:"id"`
-	KBps   float64 `json:"kbps"`
-	UpKBps float64 `json:"up_kbps,omitempty"` // what we upload to this peer
-	Seed   bool    `json:"seed"`
-	UTP    bool    `json:"utp,omitempty"`
-	CC     string  `json:"cc,omitempty"`
-	ASN    uint    `json:"asn,omitempty"`
-	Org    string  `json:"org,omitempty"` // network owner, e.g. "Hetzner Online GmbH"
-}
+// PeerRate is one connected peer as the engine reports it: anonymous id, KB/s, seeder.
+type PeerRate = engine.PeerRate
 
-// sentMBs is the piece data sent to the listed peers, in MiB/s. GoStorm's upload_speed counts
+// sentMBs is the piece data sent to the listed peers, in MiB/s. Tentacle's upload_speed counts
 // every byte on the wire, requests and HAVEs included, which would show upload while we only
 // download.
 func sentMBs(peers []PeerRate) float64 {

@@ -5,18 +5,23 @@ import "database/sql"
 // Light reads for the library consistency check, on the read pool: none of them takes
 // the writer or reads a torrent's metainfo.
 
-// TorrentRef is a GoStorm torrent without its spec or metainfo.
+// TorrentRef is a Tentacle torrent without its spec or metainfo.
 type TorrentRef struct {
 	Hash      string
 	Title     string
-	Timestamp int64
+	Timestamp int64 // added
 	Size      int64
+	LastUsed  int64 // last activation by the new engine (schema 17), 0 when never
 }
 
+// LastActivity is the later of added and last used: a torrent played only under the new
+// engine keeps its old "added" timestamp.
+func (t TorrentRef) LastActivity() int64 { return max(t.Timestamp, t.LastUsed) }
+
 func (d *DB) ListGoStormTorrentRefs() ([]TorrentRef, error) {
-	return scanAll(d.reader(), `SELECT hash, title, timestamp, size FROM gostorm_torrents`, func(r *sql.Rows) (TorrentRef, error) {
+	return scanAll(d.reader(), `SELECT hash, title, timestamp, size, last_used_at FROM gostorm_torrents`, func(r *sql.Rows) (TorrentRef, error) {
 		var t TorrentRef
-		return t, r.Scan(&t.Hash, &t.Title, &t.Timestamp, &t.Size)
+		return t, r.Scan(&t.Hash, &t.Title, &t.Timestamp, &t.Size, &t.LastUsed)
 	})
 }
 

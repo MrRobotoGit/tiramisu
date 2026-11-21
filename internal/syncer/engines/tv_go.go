@@ -99,6 +99,7 @@ type TVSyncStats struct {
 // TVEngineConfig holds config for the TV engine.
 type TVEngineConfig struct {
 	GoStormURL      string
+	Torrents        Backend // the engine (stub URLs still use GoStormURL)
 	TMDBAPIKey      string
 	TorrentioURL    string
 	PlexURL         string
@@ -172,7 +173,7 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 	blFile := filepath.Join(cfg.StateDir, "blacklist.json")
 
 	e := &TVGoEngine{
-		gostorm:          NewGoStormClient(cfg.GoStormURL),
+		gostorm:          NewGoStormClient(cfg.Torrents, cfg.GoStormURL),
 		tmdb:             tmdb.NewClient(cfg.TMDBAPIKey),
 		torrentio:        torrentio.NewClient(cfg.TorrentioURL, torrentioOptions),
 		prowlarr:         newProwlarrClient(cfg.ProwlarrCfg),
@@ -206,7 +207,7 @@ func NewTVGoEngine(cfg TVEngineConfig, db *metadb.DB) *TVGoEngine {
 }
 
 // removeStub deletes a stub file/dir, invalidates its FUSE cache state, and removes the
-// underlying torrent from GoStorm. hash may be empty (e.g. for a plain directory); a
+// underlying torrent from Tentacle. hash may be empty (e.g. for a plain directory); a
 // failed release doesn't undo the stub deletion.
 func (e *TVGoEngine) removeStub(ctx context.Context, path, hash string) {
 	// Stub first, torrent last: see MovieGoEngine.removeStub. The release keeps a pack
@@ -335,7 +336,7 @@ func (e *TVGoEngine) Run(ctx context.Context) error {
 		e.saveRegistry()
 	}
 	// B6.1: rehydrate before cleanup — if an MKV file exists on disk but its
-	// torrent is missing from GoStorm, restore it first. cleanupOrphanedFiles
+	// torrent is missing from Tentacle, restore it first. cleanupOrphanedFiles
 	// runs after so it cannot delete a file that rehydrate still needs.
 	e.rehydrateMissingTorrents(ctx)
 	e.cleanupOrphanedFiles(ctx)
@@ -432,7 +433,7 @@ func (e *TVGoEngine) populateRegistryFromExisting() {
 		// Try to read full hash from file content first
 		fullHash := e.readHashFromMKV(path)
 		if fullHash == "" {
-			// Fallback: resolve via GoStorm lookup
+			// Fallback: resolve via Tentacle lookup
 			if !tsLoaded {
 				torrents, _ = e.gostorm.ListTorrentRefs(context.Background())
 				tsLoaded = true

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"path"
 	"sort"
 	"strconv"
@@ -380,63 +379,54 @@ func matchCueSheet(sheets []*cue.Sheet, files []FileStat, imagePath string) (*cu
 	return match, &match.Files[0], true
 }
 
-// sourceReader reads a torrent file through GoStorm's stream endpoint with ranged
-// requests: pieces download on demand, so a boundary costs a few pieces, not the
-// album. The size lets a short answer be told apart from the end of the file.
+// sourceReader reads a torrent file by ranges: pieces download on demand, so a boundary
+// costs a few pieces, not the album. The size tells a short answer from the end of file.
 func (m *Manager) sourceReader(ctx context.Context, hash string, index int, size int64) io.ReaderAt {
-	return &rangeReader{ctx: ctx, url: m.streamURL(hash, index), size: size}
+	return &engineReader{ctx: ctx, read: m.cfg.ReadRange, hash: hash, index: index, size: size}
 }
 
-type rangeReader struct {
-	ctx  context.Context
-	url  string
-	size int64
+// engineReader reads through Config.ReadRange, each range bounded by rangeTimeout.
+type engineReader struct {
+	ctx   context.Context
+	read  func(ctx context.Context, hash string, index int, off int64, p []byte) (int, error)
+	hash  string
+	index int
+	size  int64
 }
 
 // errRangeShort marks a range the torrent delivered only in part: retryable, unlike
 // a boundary search that exhausted its probes.
 var errRangeShort = errors.New("range read: fewer bytes than the file still holds")
 
-var rangeClient = &http.Client{Timeout: 2 * time.Minute}
+const rangeTimeout = 2 * time.Minute
 
-func (r *rangeReader) ReadAt(p []byte, off int64) (int, error) {
+func (r *engineReader) ReadAt(p []byte, off int64) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 	if off >= r.size {
 		return 0, io.EOF
 	}
-	req, err := http.NewRequestWithContext(r.ctx, http.MethodGet, r.url, nil)
+	if r.read == nil {
+		return 0, errors.New("range read: no engine reader configured")
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, rangeTimeout)
+	defer cancel()
+	n, err := r.read(ctx, r.hash, r.index, off, p)
 	if err != nil {
-		return 0, err
+		return n, fmt.Errorf("range read %d+%d: %w", off, len(p), err)
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", off, off+int64(len(p))-1))
-	resp, err := rangeClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusPartialContent:
-	case http.StatusRequestedRangeNotSatisfiable:
-		// The range starts inside the file, so the engine refusing it is a
-		// temporary answer, not the end of the file.
-		return 0, fmt.Errorf("range read %d+%d: status %d", off, len(p), resp.StatusCode)
-	default:
-		return 0, fmt.Errorf("range read %d+%d: status %d", off, len(p), resp.StatusCode)
-	}
-	n, err := io.ReadFull(resp.Body, p)
-	switch {
-	case err == nil:
+	return shortOrEOF(n, len(p), off, r.size)
+}
+
+// shortOrEOF judges a read of n < want bytes: a stop before the end of the file is a swarm
+// that went away (retryable); only one that reaches the end is the end.
+func shortOrEOF(n, want int, off, size int64) (int, error) {
+	if n == want {
 		return n, nil
-	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
-		// A read that stops before the end of the file is a swarm that went away;
-		// only one that reaches the end is the end.
-		if off+int64(n) < r.size {
-			return n, fmt.Errorf("%w: %d of %d bytes at %d of %d", errRangeShort, n, len(p), off, r.size)
-		}
-		return n, io.EOF
-	default:
-		return n, err
 	}
+	if off+int64(n) < size {
+		return n, fmt.Errorf("%w: %d of %d bytes at %d of %d", errRangeShort, n, want, off, size)
+	}
+	return n, io.EOF
 }

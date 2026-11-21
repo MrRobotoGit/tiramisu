@@ -97,6 +97,7 @@ type BlacklistData struct {
 // MovieEngineConfig holds config for the movie engine.
 type MovieEngineConfig struct {
 	GoStormURL      string
+	Torrents        Backend // the engine (stub URLs still use GoStormURL)
 	TMDBAPIKey      string
 	TorrentioURL    string
 	PlexURL         string
@@ -176,7 +177,7 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 	logger := log.New(io.MultiWriter(os.Stdout, logFile), "[MovieSync] ", log.LstdFlags)
 
 	e := &MovieGoEngine{
-		gostorm:   NewGoStormClient(cfg.GoStormURL),
+		gostorm:   NewGoStormClient(cfg.Torrents, cfg.GoStormURL),
 		tmdb:      tmdb.NewClient(cfg.TMDBAPIKey),
 		torrentio: torrentio.NewClient(cfg.TorrentioURL, torrentioOptions),
 		prowlarr:  newProwlarrClient(cfg.ProwlarrCfg),

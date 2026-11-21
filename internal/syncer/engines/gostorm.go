@@ -1,41 +1,37 @@
 package engines
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"mime/multipart"
-	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
-	"tiramisu/internal/catalog"
 	"tiramisu/internal/library"
 )
 
-// GoStormClient handles HTTP operations with the GoStorm engine.
-type GoStormClient struct {
-	baseURL    string
-	httpClient *http.Client
+// Backend is the engine side of GoStormClient: the in-process engine in production
+// (EngineBackend); tests fake the old JSON API with enginestest.HTTP.
+type Backend interface {
+	Add(ctx context.Context, link, title string) (hash string, confirmed bool, err error)
+	AddTorrentFile(ctx context.Context, data []byte, title string) (string, error)
+	// Info waits until the torrent's files are known or ctx ends.
+	Info(ctx context.Context, hash string) (*TorrentStats, error)
+	Remove(ctx context.Context, hash string) error
+	Refs(ctx context.Context) ([]TorrentRef, error)
+	Hydrated(ctx context.Context) ([]string, error)
 }
 
-// NewGoStormClient creates a client for GoStorm API operations.
-func NewGoStormClient(baseURL string) *GoStormClient {
-	return &GoStormClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        10,
-				MaxIdleConnsPerHost: 5,
-				IdleConnTimeout:     30 * time.Second,
-			},
-		},
-	}
+// GoStormClient is the torrent API of the syncs and the library.
+type GoStormClient struct {
+	b       Backend
+	baseURL string // stub URL prefix only (gostorm_url): nothing listens there (design V8)
+}
+
+// NewGoStormClient wraps b; stubBase prefixes the stub URLs the syncs write.
+func NewGoStormClient(b Backend, stubBase string) *GoStormClient {
+	return &GoStormClient{b: b, baseURL: strings.TrimRight(stubBase, "/")}
 }
 
 // TorrentStats and FileStat live in internal/library: the same shapes are returned by
@@ -48,231 +44,83 @@ type TorrentRef = library.TorrentRef
 
 type FileStat = library.FileStat
 
-// AddTorrent adds a magnet URL to GoStorm via POST /torrents {"action":"add"}
-// and returns its hash. It hides whether the engine
-// echoed the hash back; callers that must not mistake an unacknowledged add for a
-// statement about the swarm should use AddTorrentConfirmed.
+var magnetHash = regexp.MustCompile(`xt=urn:btih:([a-fA-F0-9]{32,40})`)
+
+// AddTorrent adds a magnet and returns its hash. Callers that must not mistake an
+// unacknowledged add for a statement about the swarm use AddTorrentConfirmed.
 func (c *GoStormClient) AddTorrent(ctx context.Context, magnet, title string) (string, error) {
 	hash, _, err := c.AddTorrentConfirmed(ctx, magnet, title)
 	return hash, err
 }
 
-// AddTorrentConfirmed reports confirmed=false when the engine answered 2xx without
-// echoing a hash: the torrent may never have been taken, so its later silence says
-// nothing about the release.
+// AddTorrentConfirmed reports confirmed=false when the engine took the add without naming
+// the hash: the torrent may never have been taken, so its silence says nothing.
 func (c *GoStormClient) AddTorrentConfirmed(ctx context.Context, magnet, title string) (string, bool, error) {
-	m := regexp.MustCompile(`xt=urn:btih:([a-fA-F0-9]{32,40})`)
-	match := m.FindStringSubmatch(magnet)
+	match := magnetHash.FindStringSubmatch(magnet)
 	if len(match) < 2 {
 		return "", false, fmt.Errorf("cannot extract hash from magnet")
 	}
-	hash := strings.ToLower(match[1])
-
-	body := map[string]interface{}{
-		"action":     "add",
-		"link":       magnet,
-		"title":      title,
-		"save_to_db": true,
-	}
-	data, err := json.Marshal(body)
+	hash, confirmed, err := c.b.Add(ctx, magnet, title)
 	if err != nil {
 		return "", false, err
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/torrents", bytes.NewReader(data))
-	if err != nil {
-		return "", false, err
+	if hash == "" {
+		return strings.ToLower(match[1]), false, nil
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", false, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", false, fmt.Errorf("gostorm error %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 120)]))
-	}
-
-	// Response contains the torrent object with hash
-	var result struct {
-		Hash string `json:"hash"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.Hash != "" {
-		return strings.ToLower(result.Hash), true, nil
-	}
-
-	// 2xx with nothing usable in the body: the hash is the one we sent, not one the
-	// engine acknowledged.
-	return hash, false, nil
+	return strings.ToLower(hash), confirmed, nil
 }
 
-// UploadTorrent hands GoStorm a release's .torrent (POST /torrent/upload, saved to its
-// DB): the metadata is known at once and the file's own trackers are kept for every
-// later wake. Returns the torrent's hash.
+// UploadTorrent hands the engine a release's .torrent (saved to its DB): the metadata is
+// known at once and the file's own trackers are kept for every later wake.
 func (c *GoStormClient) UploadTorrent(ctx context.Context, data []byte, title string) (string, error) {
-	var body bytes.Buffer
-	w := multipart.NewWriter(&body)
-	_ = w.WriteField("save", "true")
-	if title != "" {
-		_ = w.WriteField("title", title)
-	}
-	part, err := w.CreateFormFile("file", "release.torrent")
+	hash, err := c.b.AddTorrentFile(ctx, data, title)
 	if err != nil {
 		return "", err
 	}
-	if _, err := part.Write(data); err != nil {
-		return "", err
-	}
-	if err := w.Close(); err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/torrent/upload", &body)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", w.FormDataContentType())
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 120))
-		return "", fmt.Errorf("gostorm upload %d: %s", resp.StatusCode, msg)
-	}
-	var result struct {
-		Hash string `json:"hash"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.Hash == "" {
-		return "", fmt.Errorf("gostorm upload: no hash in the answer")
-	}
-	return strings.ToLower(result.Hash), nil
+	return strings.ToLower(hash), nil
 }
 
-// GetTorrentInfo polls GoStorm until file_stats appear.
+// GetTorrentInfo waits up to maxWait seconds for the torrent's files.
 func (c *GoStormClient) GetTorrentInfo(ctx context.Context, hash string, maxWait int) (*TorrentStats, error) {
-	sleepSeq := []int{1, 2, 3, 3, 3, 5}
-	deadline := time.Now().Add(time.Duration(maxWait) * time.Second)
-	attempt := 0
-
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		info, err := c.getTorrent(ctx, hash)
-		if err == nil && len(info.FileStats) > 0 {
-			return info, nil
-		}
-
-		sleep := 3
-		if attempt < len(sleepSeq) {
-			sleep = sleepSeq[attempt]
-		}
-		time.Sleep(time.Duration(sleep) * time.Second)
-		attempt++
+	wctx, cancel := context.WithTimeout(ctx, time.Duration(maxWait)*time.Second)
+	defer cancel()
+	info, err := c.b.Info(wctx, hash)
+	if err == nil && len(info.FileStats) > 0 {
+		return info, nil
 	}
-
-	return nil, fmt.Errorf("metadata timeout for %s… (waited %ds)", hash[:8], maxWait)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	short := hash
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return nil, fmt.Errorf("metadata timeout for %s… (waited %ds)", short, maxWait)
 }
 
-// RemoveTorrent removes a torrent from GoStorm.
+// RemoveTorrent removes a torrent and its DB row.
 func (c *GoStormClient) RemoveTorrent(ctx context.Context, hash string) error {
-	body := map[string]string{"action": "rem", "hash": hash}
-	return c.postTorrents(ctx, body)
+	return c.b.Remove(ctx, hash)
 }
 
 // ListTorrentRefs returns the hash and title of every torrent the engine holds, stored or
-// active. It is the light listing: the full one builds every torrent's status (seconds of
-// CPU and megabytes of JSON on a large library) for callers that need only the hashes.
+// active, without building any torrent's status.
 func (c *GoStormClient) ListTorrentRefs(ctx context.Context) ([]TorrentRef, error) {
-	data, err := c.doTorrents(ctx, map[string]string{"action": "hashes"}, true)
-	if err != nil {
-		return nil, err
-	}
-	var refs []TorrentRef
-	if err := json.Unmarshal(data, &refs); err != nil {
-		return nil, err
-	}
-	return refs, nil
+	return c.b.Refs(ctx)
 }
 
 // ActiveHashes returns the torrents hydrated in memory: a sync re-using a stored torrent
 // has it here before its stub exists.
 func (c *GoStormClient) ActiveHashes(ctx context.Context) ([]string, error) {
-	data, err := c.doTorrents(ctx, map[string]string{"action": "active"}, true)
+	hs, err := c.b.Hydrated(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var refs []TorrentRef
-	if err := json.Unmarshal(data, &refs); err != nil {
-		return nil, err
-	}
-	out := make([]string, 0, len(refs))
-	for _, r := range refs {
-		out = append(out, strings.ToLower(r.Hash))
+	out := make([]string, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, strings.ToLower(h))
 	}
 	return out, nil
-}
-
-func (c *GoStormClient) getTorrent(ctx context.Context, hash string) (*TorrentStats, error) {
-	body := map[string]string{"action": "get", "hash": hash}
-	data, err := c.doTorrents(ctx, body, false)
-	if err != nil {
-		return nil, err
-	}
-
-	var info TorrentStats
-	if err := json.Unmarshal(data, &info); err != nil {
-		return nil, err
-	}
-	return &info, nil
-}
-
-// doTorrents posts a JSON action body to GoStorm's /torrents endpoint. retry controls
-// whether transient failures are retried (catalog.Do) - true for ListTorrents (a standalone
-// read with no other retry mechanism around it), false for getTorrent (already wrapped in
-// GetTorrentInfo's own outer polling/backoff loop - stacking catalog.Do's retry inside it
-// would waste that loop's time budget for no benefit) and for mutations (add/rem), so a
-// mutation that already succeeded server-side is never silently duplicated by a retry.
-func (c *GoStormClient) doTorrents(ctx context.Context, body map[string]string, retry bool) ([]byte, error) {
-	data, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/torrents", bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	var resp *http.Response
-	if retry {
-		resp, err = catalog.Do(ctx, c.httpClient, req)
-	} else {
-		resp, err = c.httpClient.Do(req)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("gostorm /torrents: status %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
-}
-
-func (c *GoStormClient) postTorrents(ctx context.Context, body map[string]string) error {
-	_, err := c.doTorrents(ctx, body, false)
-	return err
 }
 
 // TitleFromFilename extracts a clean display title from an MKV filename.

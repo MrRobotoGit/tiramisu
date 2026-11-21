@@ -14,17 +14,17 @@ import (
 	"sync"
 	"time"
 
-	"tiramisu/internal/gostorm/native"
+	"tiramisu/internal/bridge"
 	"tiramisu/internal/library"
 	"tiramisu/internal/vfs"
 )
 
-// TorrentRemover handles automatic torrent removal from GoStorm
+// TorrentRemover handles automatic torrent removal from Tentacle
 // Extracts hash directly from .mkv file content and handles blacklisting
-// TorrentRemover handles automatic torrent removal from GoStorm
+// TorrentRemover handles automatic torrent removal from Tentacle
 // Extracts hash directly from .mkv file content and handles blacklisting
 type TorrentRemover struct {
-	nativeBridge *native.NativeClient // V160: Native Bridge
+	nativeBridge *bridge.NativeClient // V160: Native Bridge
 	logger       *log.Logger
 	hashPattern  *regexp.Regexp // Still useful for fallback
 	// release is the library's single release point (ReleaseIfUnused), set once it exists.
@@ -38,7 +38,7 @@ func (tr *TorrentRemover) SetRelease(fn func(ctx context.Context, hash string) (
 }
 
 // NewTorrentRemover creates a new torrent remover
-func NewTorrentRemover(nativeBridge *native.NativeClient, logger *log.Logger) *TorrentRemover {
+func NewTorrentRemover(nativeBridge *bridge.NativeClient, logger *log.Logger) *TorrentRemover {
 	return &TorrentRemover{
 		nativeBridge: nativeBridge,
 		logger:       logger,
@@ -260,7 +260,7 @@ func (tr *TorrentRemover) findFullHashBySuffix(suffix string) (string, string, e
 	return "", "", nil
 }
 
-// removeTorrent calls GoStorm API to remove a torrent
+// removeTorrent calls the Tentacle API to remove a torrent
 func (tr *TorrentRemover) removeTorrent(hash string) (bool, error) {
 	// Unlinking a video stub must not take a torrent an audio projection is still
 	// projected from: audio lives in the registry, not as a file under the video

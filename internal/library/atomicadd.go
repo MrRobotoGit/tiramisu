@@ -138,7 +138,7 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 		if !preexisting {
 			m.dropTorrent(ctx, lockKey)
 		}
-		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)
+		return nil, errf(http.StatusBadGateway, "Tentacle rejected the torrent: %v", err)
 	}
 	engineHash := strings.ToLower(strings.TrimSpace(addedHash))
 	if !reInfoHash.MatchString(engineHash) {
@@ -147,7 +147,7 @@ func (m *Manager) AddAudio(ctx context.Context, req AddRequest) (*AudioAddRespon
 			// hash it assigned, and the request's own spelling may be base32.
 			m.dropTorrent(ctx, canonicalHashKey(hash))
 		}
-		return nil, errf(http.StatusBadGateway, "gostorm returned a malformed info hash %q", addedHash)
+		return nil, errf(http.StatusBadGateway, "Tentacle returned a malformed info hash %q", addedHash)
 	}
 	if engineKey := canonicalHashKey(engineHash); engineKey != lockKey {
 		defer m.lockHash(engineKey)()

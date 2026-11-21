@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// GoStorm's torrent list and settings, formerly in BBolt (config.db). The metainfo has its
+// Tentacle's torrent list and settings, formerly in BBolt (config.db). The metainfo has its
 // own column so that listing never reads it.
 const gostormSchema = `
 CREATE TABLE IF NOT EXISTS gostorm_torrents (
@@ -49,7 +49,7 @@ func (d *DB) execGoStormSchema() error {
 		return err
 	}
 	_, _ = d.db.Exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (15, 'add gostorm_torrents and gostorm_kv')`)
-	return nil
+	return d.execGoStormLastUsedSchema()
 }
 
 func torrentArgs(t GoStormTorrent) []any {

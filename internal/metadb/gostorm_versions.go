@@ -5,7 +5,7 @@ import (
 	"errors"
 )
 
-// GoStorm (Engine) settings, one JSON document per manual save. Append-only, like
+// Tentacle settings, one JSON document per manual save. Append-only, like
 // config_versions; the settings in use are BTsets, not the newest row.
 const gostormVersionsSchema = `
 CREATE TABLE IF NOT EXISTS gostorm_settings_versions (

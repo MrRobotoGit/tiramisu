@@ -74,44 +74,74 @@
 .stream .spd .n { font-family: var(--mono); font-size: 14px; font-weight: 500; }
 
 /* Piece map: the file in one line, and the pieces around the playhead when open. */
-.pm { padding: 0 24px 14px; display: flex; flex-direction: column; gap: 10px; }
+.pm { padding: 0 24px 14px; display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 28px; }
+.pm[data-open="1"] { grid-template-columns: minmax(0, 1fr) 128px; }
+.pm-main { position: relative; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pm-main > :not(.pm-zoom) { position: relative; z-index: 1; }
 .pm-line { display: flex; align-items: center; gap: 12px; cursor: pointer; }
-.pm-ov { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--well); box-shadow: inset 0 0 0 1px var(--hair); }
-.pm-ov i { position: absolute; top: 0; height: 6px; border-radius: 3px; }
-.pm-ov .pl { background: var(--hair2); left: 0; transition: width .9s linear; }
-.pm-ov .win { top: -4px; height: 14px; border-radius: 3px; box-shadow: inset 0 0 0 1px var(--ink); transition: left .9s linear, width .9s linear; }
-.pm-zoom { display: block; width: 100%; height: 30px; margin: -10px 0; overflow: visible; }
-.pm-zoom line { stroke: var(--hair2); stroke-width: 1; }
-.pm-ov .ph { top: -5px; height: 16px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; transition: left .9s linear; }
+.pm-ov { position: relative; flex: 1; height: 14px; }
+.pm-ov::before { content: ""; position: absolute; left: 0; right: 0; top: 6px; height: 2px; background: var(--hair); }
+.pm-ov i { position: absolute; }
+.pm-ov .pl { left: 0; top: 6px; height: 2px; background: var(--hair2); transition: width .9s linear; }
+.pm-ov .run { top: 4px; height: 6px; min-width: 3px; background: var(--ink); transition: left .9s linear, width .9s linear; }
+.pm-ov .win { top: 4px; height: 6px; transition: left .9s linear, width .9s linear; }
+.pm-ov .ph { top: 0; height: 14px; width: 2px; margin-left: -1px; background: var(--ink); transition: left .9s linear; }
+/* The lens: one light wedge from the window on the file line down to the strip. */
+.pm-zoom { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
+.pm-zoom polygon { fill: var(--well); stroke: none; }
 .pm-ah { font-family: var(--mono); font-size: 12px; white-space: nowrap; min-width: 92px; text-align: right; }
 .pm-ah.warn { color: var(--accent-ink); }
+.pm[data-open="1"] .pm-ah { display: none; }
 .pm-chev { flex: 0 0 26px; width: 26px; height: 26px; display: grid; place-items: center; color: var(--ink); }
 .pm-chev svg { width: 16px; height: 16px; transition: transform .25s ease; }
 .pm-line[aria-expanded="true"] .pm-chev svg { transform: rotate(180deg); }
 .pm-line:hover .pm-chev { color: var(--ink2); }
-.pm-track { position: relative; padding-bottom: 16px; }
-.pm-cells { position: relative; height: 14px; overflow: hidden; }
+.pm-track { position: relative; margin-top: 4px; }
+/* One clip for labels (top), cells, deadline underlines and the frontier tick (bottom). */
+.pm-cells { position: relative; height: 56px; overflow: hidden; }
 .pm-tape { position: absolute; inset: 0; will-change: transform; }
-.pc { position: absolute; top: 0; height: 14px; border-radius: 2px; box-shadow: inset 0 0 0 1px var(--hair2); transition: background-color .4s, box-shadow .4s, opacity .5s; }
+.pc { position: absolute; top: 20px; height: 14px; box-shadow: inset 0 0 0 1px var(--hair); transition: background-color .4s, box-shadow .4s, opacity .5s; }
+:root[data-theme="dark"] .pc { box-shadow: inset 0 0 0 1px var(--hair2); }
 .pc.enter { opacity: 0; }
 .pc.r { background: var(--ink); box-shadow: none; }
 .pc.b { background: var(--hair2); box-shadow: none; }
 .pc.e { background: var(--well); box-shadow: inset 0 0 0 1px var(--hair); }
-.pc.d { box-shadow: inset 0 0 0 1px var(--sig-yellow); background: var(--well); }
-.pc.p { background: var(--well); }
+.pc.p, .pc.d { box-shadow: inset 0 0 0 1.25px var(--ink); }
+.pc.d::before { content: ""; position: absolute; left: 0; right: 0; bottom: -6px; height: 3px; background: var(--sig-yellow); }
+.pm.stall .pc.d::before { background: var(--accent); }
 .pc.x { box-shadow: inset 0 0 0 1px var(--accent); }
 .pc.x::after { content: "✕"; position: absolute; inset: 0; display: grid; place-items: center; color: var(--accent); font-size: 9px; }
-.pc .f { position: absolute; left: 1px; right: 1px; bottom: 1px; height: 0; border-radius: 1px; opacity: .85; background: var(--ink2); transition: height .9s linear; }
-.pc.d .f { background: var(--sig-yellow); }
-.pm-head { position: absolute; top: -4px; height: 22px; width: 2px; margin-left: -1px; background: var(--ink); border-radius: 1px; z-index: 1; }
+.pc .f { position: absolute; left: 0; right: 0; bottom: 0; height: 0; background: var(--ink); transition: height .9s linear; }
+.pm-lab { position: absolute; top: 0; font-size: 12px; line-height: 16px; color: var(--ink2); white-space: nowrap; }
+.pm-lab.rd { color: var(--ink); }
+.pm-lab.w { color: var(--accent-ink); }
+.pm-tk, .pm-now { position: absolute; top: 42px; font-family: var(--mono); font-size: 10px; line-height: 12px; color: var(--ink3); white-space: nowrap; transform: translateX(-50%); }
+.pm-head { position: absolute; top: 17px; height: 24px; width: 1.5px; margin-left: -.75px; background: var(--ink); z-index: 1; }
 .pm-head.wait { background: var(--accent); }
-.pm-ticks span { position: absolute; top: 18px; font-family: var(--mono); font-size: 10px; color: var(--ink3); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .pm *, .pm *::after { transition: none !important; } }
-.pm-foot { font-size: 11px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pm-foot { font-family: var(--mono); font-size: 11px; color: var(--ink3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Seconds ahead and their trend over the last 2 min, beside the strip. */
+.pm-side { display: flex; flex-direction: column; align-items: flex-start; padding-top: 2px; }
+.pm-big { font-size: 40px; line-height: 1; font-weight: 300; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pm-side .lbl { font-size: 13px; color: var(--ink2); margin-top: 6px; }
+.pm-side .sub { font-size: 11px; color: var(--ink3); }
+.pm-spark { display: block; width: 120px; height: 34px; margin: 14px 0 8px; overflow: visible; }
+.pm-spark polyline { fill: none; stroke: var(--ink); stroke-width: 1.25; stroke-linejoin: round; stroke-linecap: round; }
+.pm-spark circle { fill: var(--ink); }
+.pm.stall .pm-big { color: var(--accent); }
+.pm.stall .pm-spark circle { fill: var(--accent); }
 @media (max-width: 560px) {
   .pm { padding: 0 16px 14px; }
-  .pm-ticks span { font-size: 9px; }
+  .pm[data-open="1"] { grid-template-columns: minmax(0, 1fr); }
+  /* No room at the right: number and sparkline go above the file line. */
+  .pm-side { order: -1; flex-direction: row; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .pm-big { font-size: 28px; }
+  .pm-side .lbl { margin-top: 0; }
+  .pm-spark { width: auto; flex: 1; min-width: 60px; height: 22px; margin: 0; align-self: center; }
+  .pm-tk, .pm-now { font-size: 9px; }
+  .pm-lab { font-size: 11px; }
   .pm-ah { min-width: 0; }
+  .pm-foot { white-space: normal; }
 }
 
 .job { display: flex; align-items: center; gap: 12px; padding: 13px 24px; border-top: 1px solid var(--hair); }
@@ -208,7 +238,7 @@
       <a href="/control#streaming"><span class="num">01</span>Streaming &amp; FUSE</a>
       <a href="/control#network"><span class="num">02</span>Network &amp; VPN</a>
       <a href="/control#sources"><span class="num">03</span>Sources &amp; Media</a>
-      <a href="/control#engine"><span class="num">04</span>Engine</a>
+      <a href="/control#engine"><span class="num">04</span>Tentacle</a>
       <a href="/control#release"><span class="num">05</span>Release Selection</a>
       <a href="/control#scheduler"><span class="num">06</span>Scheduler</a>
       <a href="/control#access"><span class="num">07</span>Access</a>
@@ -219,7 +249,7 @@
       <a href="/api-docs"><span class="num">{}</span>API</a>
     </nav>
     <div class="rail-foot">
-      <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Engine online</span></div>
+      <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Tentacle online</span></div>
       <span class="mono faint small" id="rail-version">—</span>
       <a class="row" id="rail-update" hidden href="https://github.com/MrRobotoGit/tiramisu/releases/latest" target="_blank" rel="noopener"><span class="chip-tag">Update</span><span class="txt small"></span></a>
       <hr>
@@ -240,7 +270,7 @@
     <header class="topbar">
       <button type="button" class="btn sm menu-btn" onclick="TiramisuUI.toggleRail(true)" aria-label="Open navigation">≡</button>
       <span class="crumb hide-sm">Monitor &nbsp;/&nbsp; Overview</span>
-      <span class="scope hide-sm" style="margin-left:16px"><span class="lamp run" id="live-lamp"></span><span class="small faint" id="live-txt">Live · refresh 5 s</span></span>
+      <span class="scope hide-sm" style="margin-left:16px"><span class="lamp run" id="live-lamp"></span><span class="small faint" id="live-txt">Live · refresh 2.5 s</span></span>
       <span class="spacer"></span>
       <form class="search hide-sm" action="/control" method="get" role="search">
         <div class="input"><svg width="13" height="13" viewBox="0 0 13 13" aria-hidden="true" style="flex:0 0 13px"><circle cx="5.5" cy="5.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".6"/><path d="M9 9l3.2 3.2" stroke="currentColor" stroke-width="1.3" opacity=".6"/></svg><input type="search" name="q" placeholder="Find a setting…" autocomplete="off" aria-label="Find a setting"><span class="kbd">⌘K</span></div>
@@ -255,7 +285,7 @@
       <div class="dash">
         <!-- Services -->
         <div class="strip full" id="p-status" aria-label="Services">
-          <div class="cell"><span class="label">GoStorm</span><div class="v" id="v-gostorm"><span class="lamp off"></span><span>—</span></div><div class="sub">api :8090</div></div>
+          <div class="cell"><span class="label">Tentacle</span><div class="v" id="v-tentacle"><span class="lamp off"></span><span>—</span></div><div class="sub">in-process</div></div>
           <div class="cell"><span class="label">FUSE</span><div class="v" id="v-fuse"><span class="lamp off"></span><span>—</span></div><div class="sub" id="sub-fuse">&nbsp;</div></div>
           <div class="cell"><span class="label">VPN</span><div class="v" id="v-vpn"><span class="lamp off"></span><span>—</span></div><div class="sub" id="sub-vpn">&nbsp;</div></div>
           <div class="cell"><span class="label">NAT-PMP</span><div class="v" id="v-natpmp"><span class="lamp off"></span><span>—</span></div><div class="sub" id="sub-natpmp">&nbsp;</div></div>
@@ -385,7 +415,7 @@ function svc(key, st) {
   let label, sub = '\u00a0';
   if (st.ok) {
     label = st.latency_ms + ' ms';
-    if (key === 'gostorm') label = 'Online';
+    if (key === 'tentacle') label = 'Online';
     if (key === 'fuse') { label = 'Mounted'; sub = st.message || sub; }
     if (key === 'vpn') { label = st.latency_ms ? 'Connected · ' + st.latency_ms + ' ms' : 'Connected'; sub = st.message || sub; }
     if (key === 'natpmp' && st.message) label = st.message.charAt(0).toUpperCase() + st.message.slice(1);
@@ -539,9 +569,10 @@ function renderStreams(torrents) {
 // /api/pieces answers only for a stream a player is reading. The strip runs from the read position
 // to the download frontier; one cell holds `bucket` pieces. Nodes persist between polls so cells
 // slide, fill and fade instead of being redrawn.
-const pmData = new Map(), pmOpen = new Set();
+const pmData = new Map(), pmOpen = new Set(), pmHist = new Map();
 let pmDur = new Map();
 const pmReduce = matchMedia('(prefers-reduced-motion: reduce)');
+const PM_HIST_MS = 120000, PM_STALL_S = 10, PM_STALL_MB = 16;
 async function pmFetch(h) {
   try {
     const r = await fetch('/api/pieces?hash=' + encodeURIComponent(h));
@@ -557,21 +588,49 @@ async function loadPieceMaps(torrents) {
   } catch (_) { }
   await Promise.all(hashes.filter(h => !pmOpen.has(h)).map(pmFetch));
   [...pmData.keys()].forEach(h => { if (!hashes.includes(h)) pmData.delete(h); });
+  [...pmHist.keys()].forEach(h => { if (!hashes.includes(h)) pmHist.delete(h); });
   drawPieceMaps();
 }
 function pmRate(m) { const d = pmDur.get(m.hash); return d ? m.file_size / d : 0; }
-function pmAheadText(m, waiting) {
-  const bps = pmRate(m);
-  if (waiting) return bps ? '0 s ahead' : '0 MB ahead';
-  if (bps) { const s = m.ahead_bytes / bps; return s >= 600 ? '10+ min ahead' : `${Math.round(s)} s ahead`; }
-  return `${Math.round(m.ahead_bytes / 1048576)} MB ahead`;
+// What is ready ahead of the player: seconds when the bitrate is known, else MB. `stall` is the
+// warning condition shared by the head, the number, the sparkline and the deadline underlines.
+function pmAhead(m) {
+  const bps = pmRate(m), waiting = m.first_gap === m.play;
+  const v = waiting ? 0 : bps ? m.ahead_bytes / bps : m.ahead_bytes / 1048576;
+  const stall = waiting || (!m.done_ahead && v < (bps ? PM_STALL_S : PM_STALL_MB));
+  const txt = bps ? (v >= 600 ? '10+ min' : `${Math.round(v)} s`) : `${Math.round(v)} MB`;
+  return { bps, waiting, v: Math.min(v, 600), txt, stall, unit: bps ? 's' : 'MB' };
+}
+function pmFmtT(s) { s = Math.round(s); return s >= 60 ? `+${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `+${s} s`; }
+// Client-side history of the value above, one sample per poll, for the sparkline.
+function pmRecord(m, a) {
+  let h = pmHist.get(m.hash);
+  if (!h) pmHist.set(m.hash, h = { seen: null, unit: a.unit, pts: [] });
+  if (h.seen === m) return;
+  h.seen = m;
+  if (h.unit !== a.unit) { h.unit = a.unit; h.pts = []; }
+  const now = Date.now();
+  h.pts.push([now, a.v]);
+  while (h.pts.length && now - h.pts[0][0] > PM_HIST_MS) h.pts.shift();
+}
+function pmSpark(el, m) {
+  const svg = el.querySelector('.pm-spark'), h = pmHist.get(m.hash);
+  if (!svg || !h || !h.pts.length) return;
+  const W = svg.clientWidth || 120, H = svg.clientHeight || 34, now = Date.now();
+  const top = Math.max(h.unit === 's' ? 30 : 32, ...h.pts.map(p => p[1]));
+  const xy = h.pts.map(([t, v]) => [W - (now - t) / PM_HIST_MS * W, H - 1 - v / top * (H - 2)]);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.querySelector('polyline').setAttribute('points', xy.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' '));
+  const [ex, ey] = xy[xy.length - 1], c = svg.querySelector('circle');
+  c.setAttribute('cx', ex.toFixed(1)); c.setAttribute('cy', ey.toFixed(1));
 }
 const pmPct = v => (Math.max(0, Math.min(1, v)) * 100).toFixed(2) + '%';
 function pmSkeleton(el, open) {
-  el.innerHTML = `<div class="pm-line" role="button" tabindex="0" aria-expanded="${open}" title="Pieces from the player's read position to the download frontier">
-      <div class="pm-ov"><i class="pl"></i><i class="win"></i><i class="ph"></i></div>
+  el.innerHTML = `<div class="pm-main"><div class="pm-line" role="button" tabindex="0" aria-expanded="${open}" title="Pieces from the player's read position to the download frontier">
+      <div class="pm-ov"><i class="pl"></i><i class="win"></i><i class="run"></i><i class="ph"></i></div>
       <span class="pm-ah" title="Video ready after the player's last read, up to the first missing piece"></span><span class="pm-chev" aria-hidden="true"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg></span></div>` +
-    (open ? `<svg class="pm-zoom" aria-hidden="true"><line/><line/></svg><div class="pm-track"><div class="pm-cells"></div><i class="pm-head"></i><div class="pm-ticks"></div></div><div class="pm-foot"></div>` : '');
+    (open ? `<svg class="pm-zoom" aria-hidden="true"><polygon/></svg><div class="pm-track"><div class="pm-cells"></div><i class="pm-head"></i><span class="pm-now">now</span></div><div class="pm-foot"></div></div>
+      <div class="pm-side" title="Video ready after the player's last read, up to the first missing piece"><span class="pm-big"></span><span class="lbl">ahead</span><svg class="pm-spark" aria-hidden="true"><polyline/><circle r="2.5"/></svg><span class="sub">last 2 min</span></div>` : '</div>');
   el.dataset.open = open ? '1' : '';
 }
 function drawPieceMaps() {
@@ -581,26 +640,42 @@ function drawPieceMaps() {
     el.hidden = false;
     const open = pmOpen.has(m.hash);
     if (!el.firstElementChild || (el.dataset.open === '1') !== open) pmSkeleton(el, open);
+    const a = pmAhead(m);
+    pmRecord(m, a);
+    el.classList.toggle('stall', a.stall);
     const pl = m.piece_len, bucket = m.bucket || 1, fileStart = m.file_first * pl, size = m.file_size;
     const first = m.cells[0].i, endPiece = m.cells[m.cells.length - 1].i + bucket;
     const w0 = (first * pl - fileStart) / size, w1 = Math.min(1, (endPiece * pl - fileStart) / size);
-    const waiting = m.first_gap === m.play;
-    const ov = el.querySelector('.pm-ov');
-    ov.querySelector('.pl').style.width = pmPct(m.player_off / size);
-    ov.querySelector('.ph').style.left = pmPct(m.player_off / size);
+    const ov = el.querySelector('.pm-ov'), p0 = m.player_off / size;
+    ov.querySelector('.pl').style.width = pmPct(p0);
+    ov.querySelector('.ph').style.left = pmPct(p0);
+    // Thick segment: playhead to download frontier.
+    const run = ov.querySelector('.run'), p1 = m.done_ahead ? 1 : (m.player_off + m.ahead_bytes) / size;
+    run.style.left = pmPct(p0);
+    run.style.width = pmPct(p1 - p0);
     const win = ov.querySelector('.win');
     win.style.left = `calc(${pmPct((w0 + w1) / 2)} - max(6px, ${pmPct((w1 - w0) / 2)}))`;
     win.style.width = `max(12px, ${pmPct(w1 - w0)})`;
     const ah = el.querySelector('.pm-ah');
-    ah.textContent = pmAheadText(m, waiting);
-    ah.classList.toggle('warn', waiting);
-    if (open) pmCells(el, m, waiting);
+    ah.textContent = a.txt + ' ahead';
+    ah.classList.toggle('warn', a.stall);
+    if (open) {
+      el.querySelector('.pm-big').textContent = a.txt;
+      pmSpark(el, m);
+      pmCells(el, m);
+    }
   });
 }
-function pmCells(el, m, waiting) {
+let pmMeasure;
+function pmTextW(s, px) {
+  pmMeasure = pmMeasure || document.createElement('canvas').getContext('2d');
+  pmMeasure.font = `${px}px ${getComputedStyle(document.body).fontFamily}`;
+  return pmMeasure.measureText(s).width;
+}
+function pmCells(el, m) {
   // The playhead holds still; the tape of cells scrolls under it. Each cell sits at its piece
   // index on the tape, so only the tape's offset changes between polls.
-  const clip = el.querySelector('.pm-cells'), bucket = m.bucket || 1;
+  const clip = el.querySelector('.pm-cells'), bucket = m.bucket || 1, a = pmAhead(m);
   let tape = clip.firstElementChild;
   if (!tape) { tape = document.createElement('div'); tape.className = 'pm-tape'; clip.appendChild(tape); }
   const W = clip.clientWidth, sp = W < 500 ? 1 : 2, pitch = (W + sp) / 32, cw = pitch - sp;
@@ -612,58 +687,84 @@ function pmCells(el, m, waiting) {
   tape.dataset.play = play;
   const now = Date.now();
   const failed = (lastShield || []).filter(e => e.type === 'corruption' && e.hash === m.hash && e.piece && now - e.t < 60000).map(e => e.piece);
-  const tip = { r: 'ready', b: 'played · in memory', e: 'played · evicted', d: 'downloading · deadline set', p: 'partly here', m: 'not requested', x: 'hash failed · re-downloading' };
-  const old = new Map([...tape.children].map(n => [n.dataset.i, n])), keep = new Set();
+  const tip = { r: 'ready', b: 'played · in memory', e: 'played · evicted', d: 'arriving · deadline set', p: 'arriving', m: 'not requested', x: 'hash failed · re-downloading' };
+  const old = new Map([...tape.querySelectorAll('.pc')].map(n => [n.dataset.i, n])), keep = new Set();
+  const states = [];
   m.cells.forEach(c => {
     const key = String(c.i);
     keep.add(key);
     const st = c.s !== 'r' && c.s !== 'b' && failed.some(p => p >= c.i && p < c.i + bucket) ? 'x' : c.s;
+    states.push([c.i, st]);
     let n = old.get(key);
     if (!n) { n = document.createElement('div'); n.dataset.i = key; n.className = 'pc' + (jump ? '' : ' enter'); n.innerHTML = '<i class="f"></i>'; tape.appendChild(n); }
     n.classList.remove('r', 'b', 'e', 'd', 'p', 'm', 'x');
     n.classList.add(st);
     n.style.left = (pos(c.i) * pitch) + 'px';
     n.style.width = cw + 'px';
-    n.firstElementChild.style.height = (st === 'p' || st === 'd') && c.pct ? `calc(${c.pct}% - 2px)` : '0';
+    // Arriving cells fill from the bottom with the share of bytes already here.
+    n.firstElementChild.style.height = (st === 'p' || st === 'd') && c.pct ? c.pct + '%' : '0';
     n.title = `${bucket > 1 ? `pieces ${c.i}–${c.i + bucket - 1}` : `piece ${c.i}`} · ${tip[st]}${c.pct ? ' · ' + c.pct + ' %' : ''}`;
   });
   old.forEach((n, k) => { if (!keep.has(k)) n.remove(); });
   // Playhead fixed two cells in; the tape is moved by pmTick so the read position lands under it.
   const headX = 2 * pitch;
-  const bps = pmRate(m);
+  pmLabels(el, tape, m, a, states, { pos, pitch, headX, W, play, bucket });
   const st = pmMotion.get(el) || {};
   st.tape = tape; st.headX = headX; st.pitch = pitch; st.bucket = bucket; st.target = play;
   // Expected playback speed in pieces per second: the file's average bitrate when known.
-  st.rate = bps ? bps / m.piece_len : (st.rate || 0);
+  st.rate = a.bps ? a.bps / m.piece_len : (st.rate || 0);
   if (jump || st.disp === undefined || pmReduce.matches) st.disp = play;
   pmMotion.set(el, st);
   pmTick.start();
   requestAnimationFrame(() => tape.querySelectorAll('.pc.enter').forEach(n => n.classList.remove('enter')));
   const head = el.querySelector('.pm-head');
   head.style.left = headX + 'px';
-  head.classList.toggle('wait', waiting);
-  const cell = tape.firstElementChild;
-  // Time ticks every 10 s of video from the playhead, when the bitrate is known.
-  const ticks = el.querySelector('.pm-ticks');
-  ticks.innerHTML = '';
-  if (cell && bps) {
-    const perCell = bucket * m.piece_len / bps;
-    const x0 = headX, maxX = W - 24;
-    // Labels at least 56 px apart: the step grows with the time each cell holds.
-    const step = [10, 20, 30, 60, 120, 300].find(v => v / perCell * pitch >= 56) || 600;
-    for (let t = 0, j = 0; j < 8; t += step, j++) {
-      const x = x0 + t / perCell * pitch;
-      if (x > maxX) break;
+  head.classList.toggle('wait', a.waiting);
+  el.querySelector('.pm-now').style.left = headX + 'px';
+  const pieceMB = Math.round(m.piece_len / 1048576 * 10) / 10;
+  const gap = m.done_ahead ? 'downloaded to the end' : m.first_gap < 0 ? 'no gap in sight' : a.waiting ? `player needs piece ${m.first_gap}` : `frontier at piece ${m.first_gap}`;
+  el.querySelector('.pm-foot').textContent = `${gap} · cell = ${bucket > 1 ? bucket + ' × ' : ''}${pieceMB} MB · underline = deadline`;
+  pmZoom(el);
+}
+// Direct labels over the data, in tape coordinates so they scroll with the cells: the ready run
+// from the playhead, the arriving cells (or where the player will wait), the cells not requested,
+// and the time at the frontier under the strip.
+function pmLabels(el, tape, m, a, states, g) {
+  let box = tape.querySelector('.pm-labs');
+  if (!box) { box = document.createElement('div'); box.className = 'pm-labs'; tape.appendChild(box); }
+  box.innerHTML = '';
+  const px = g.W < 500 ? 11 : 12, shift = g.headX - g.pos(g.play) * g.pitch; // tape → screen now
+  const cellX = i => g.pos(i) * g.pitch;
+  let minX = -Infinity;
+  const add = (txt, x, cls) => {
+    x = Math.max(x, minX);
+    const w = pmTextW(txt, px);
+    if (x + shift + w > g.W) return false;
+    const s = document.createElement('span');
+    s.className = 'pm-lab ' + cls; s.textContent = txt; s.style.left = x + 'px';
+    box.appendChild(s);
+    minX = x + w + 14;
+    return true;
+  };
+  const playX = g.pos(g.play) * g.pitch;
+  if (!a.waiting) add('ready · ' + a.txt, playX + 3, 'rd');
+  const k = states.findIndex(([i, s]) => i + g.bucket > m.play && s !== 'r' && s !== 'b' && s !== 'e');
+  let k2 = k;
+  if (k >= 0 && states[k][1] !== 'm') {
+    add(a.stall ? 'player waits here' : 'arriving', Math.max(cellX(states[k][0]), playX + 3), a.stall ? 'w' : '');
+    while (k2 < states.length && states[k2][1] !== 'm') k2++;
+  } else if (a.waiting) add('player waits here', playX + 3, 'w');
+  if (k2 >= 0 && k2 < states.length) add('not requested', Math.max(cellX(states[k2][0]), playX + 3), '');
+  // The frontier's time, only where it clears "now".
+  if (a.bps && !a.waiting && m.first_gap >= 0) {
+    const txt = pmFmtT(a.v), w = pmTextW(txt, 10) + 4;
+    const x = Math.max(cellX(m.first_gap), playX + 16 + w / 2);
+    if (x + shift + w / 2 <= g.W) {
       const s = document.createElement('span');
-      s.textContent = !t ? 'now' : t >= 60 ? `+${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}` : `+${t} s`;
-      s.style.left = x + 'px';
-      ticks.appendChild(s);
+      s.className = 'pm-tk'; s.textContent = txt; s.style.left = x + 'px';
+      box.appendChild(s);
     }
   }
-  const pieceMB = Math.round(m.piece_len / 1048576 * 10) / 10;
-  const gap = m.done_ahead ? 'fully downloaded to the end' : m.first_gap < 0 ? 'no gap in sight' : waiting ? `the player's next read needs piece ${m.first_gap}` : `download frontier at piece ${m.first_gap}`;
-  el.querySelector('.pm-foot').textContent = `${gap} · ${bucket > 1 ? bucket + ' × ' : ''}${pieceMB} MB per cell · solid ready · yellow deadline · outline not requested`;
-  pmZoom(el);
 }
 // Smooth scrolling. Polls arrive once a second and players read in bursts, so the tape is not
 // moved to each sample: it advances at the playback rate and eases toward the sampled position,
@@ -692,20 +793,18 @@ const pmTick = (() => {
 })();
 document.addEventListener('visibilitychange', () => { if (!document.hidden && pmMotion.size) pmTick.start(); });
 
-// The two lines that magnify the bracket on the file line into the row of cells below it.
+// The lens: a wedge from the window's span on the file line to the strip below it.
 function pmZoom(el) {
   const z = el.querySelector('.pm-zoom'), w = el.querySelector('.pm-ov .win'), c = el.querySelector('.pm-cells');
   if (!z || !w || !c) return;
-  const zr = z.getBoundingClientRect(), wr = w.getBoundingClientRect(), r0 = c.getBoundingClientRect();
+  const zr = z.getBoundingClientRect(), wr = w.getBoundingClientRect(), cr = c.getBoundingClientRect();
   if (!zr.width) return;
-  const cr = r0;
   z.setAttribute('viewBox', `0 0 ${zr.width} ${zr.height}`);
-  const [a, b] = z.querySelectorAll('line'), y0 = wr.bottom - zr.top, y1 = cr.top - zr.top;
-  Object.entries({ x1: wr.left - zr.left, y1: y0, x2: cr.left - zr.left, y2: y1 }).forEach(([k, v]) => a.setAttribute(k, v));
-  Object.entries({ x1: wr.right - zr.left, y1: y0, x2: cr.right - zr.left, y2: y1 }).forEach(([k, v]) => b.setAttribute(k, v));
+  const y0 = (wr.top + wr.bottom) / 2 - zr.top, y1 = cr.top + 18 - zr.top, l = cr.left - zr.left, r = cr.right - zr.left;
+  z.querySelector('polygon').setAttribute('points', `${wr.left - zr.left},${y0} ${wr.right - zr.left},${y0} ${r},${y1} ${l},${y1}`);
 }
-window.addEventListener('resize', () => document.querySelectorAll('[data-pm]').forEach(el => { const m = pmData.get(el.dataset.pm); if (m && pmOpen.has(m.hash)) pmCells(el, m, m.first_gap === m.play); }));
-// An open strip follows the playhead every second; closed ones ride the 5 s dashboard refresh.
+window.addEventListener('resize', () => document.querySelectorAll('[data-pm]').forEach(el => { const m = pmData.get(el.dataset.pm); if (m && pmOpen.has(m.hash)) { pmSpark(el, m); pmCells(el, m); } }));
+// An open strip follows the playhead every second; closed ones ride the 2.5 s dashboard refresh.
 let pmBusy = false;
 setInterval(async () => {
   if (pmBusy || document.hidden || !pmOpen.size) return;
@@ -719,7 +818,7 @@ setInterval(async () => {
 document.addEventListener('click', e => {
   const line = e.target.closest('.pm-line');
   if (!line) return;
-  const h = line.parentElement.dataset.pm;
+  const h = line.closest('[data-pm]').dataset.pm;
   pmOpen.has(h) ? pmOpen.delete(h) : pmOpen.add(h);
   drawPieceMaps();
 });
@@ -770,10 +869,10 @@ async function load() {
     ipk.textContent = h.ip_blocklist_ips ?? 0;
     ipk.title = `${h.ip_blocklist_ips ?? 0} distinct addresses, ${h.ip_blocklist_rejections ?? 0} rejections`;
 
-    ['gostorm', 'fuse', 'vpn', 'natpmp'].forEach(k => svc(k, h[k]));
+    ['tentacle', 'fuse', 'vpn', 'natpmp'].forEach(k => svc(k, h[k]));
     mediaServers(h.media_servers);
-    setLamp($('rail-lamp'), h.gostorm && h.gostorm.ok ? 'run' : 'err pulse');
-    $('rail-state').textContent = h.gostorm && h.gostorm.ok ? 'Engine online' : 'Engine unreachable';
+    setLamp($('rail-lamp'), h.tentacle && h.tentacle.ok ? 'run' : 'err pulse');
+    $('rail-state').textContent = h.tentacle && h.tentacle.ok ? 'Tentacle online' : 'Tentacle unreachable';
 
     drawChart(lastHistory);
     drawShieldTimeline(lastShield, lastHistory);
@@ -784,7 +883,7 @@ async function load() {
   } catch (e) { ok = false; console.error('Dashboard update failed:', e); }
   setLamp($('live-lamp'), ok ? 'run' : 'err');
   $('live-lamp-m').className = 'lamp mob-only ' + (ok ? 'run' : 'err');
-  $('live-txt').textContent = ok ? 'Live · refresh 5 s' : 'Monitor unreachable';
+  $('live-txt').textContent = ok ? 'Live · refresh 2.5 s' : 'Monitor unreachable';
 
   // Scheduler
   try {
@@ -1083,7 +1182,7 @@ TiramisuUI.checkUpdate().then(() => {
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); document.querySelector('.search input')?.focus(); }
 });
-setInterval(load, 5000);
+setInterval(load, 2500);
 setInterval(loadLogs, 15000);
 setInterval(() => TiramisuUI.checkUpdate(), 300000);
 </script>

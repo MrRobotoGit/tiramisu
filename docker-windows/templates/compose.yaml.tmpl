@@ -27,7 +27,7 @@ services:
       - "${PLEX_HOST_PORT}:32400"
       - "${JELLYFIN_HOST_PORT}:8096"
 
-      # Tiramisu (the GoStorm API on :8090 listens inside the container only)
+      # Tiramisu (dashboard, Control Panel and APIs; the engine has no port of its own)
       - "${METRICS_HOST_PORT}:${TIRAMISU_METRICS_PORT}"
 
     environment:

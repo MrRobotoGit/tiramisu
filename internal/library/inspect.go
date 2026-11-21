@@ -21,7 +21,7 @@ type InspectRequest struct {
 }
 
 // InspectFile is one source file as the engine sees it. source_path is what a
-// caller selects by; file_index is GoStorm's own resolved state.
+// caller selects by; file_index is Tentacle's own resolved state.
 type InspectFile struct {
 	SourcePath string `json:"source_path"`
 	FileIndex  int    `json:"file_index"`
@@ -87,7 +87,7 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 		if !preexisting {
 			m.dropTorrent(ctx, lockKey)
 		}
-		return nil, errf(http.StatusBadGateway, "gostorm rejected the torrent: %v", err)
+		return nil, errf(http.StatusBadGateway, "Tentacle rejected the torrent: %v", err)
 	}
 	engineHash := strings.ToLower(strings.TrimSpace(addedHash))
 	if !reInfoHash.MatchString(engineHash) {
@@ -95,7 +95,7 @@ func (m *Manager) Inspect(ctx context.Context, req InspectRequest) (*InspectResp
 		if !preexisting {
 			m.dropTorrent(ctx, lockKey)
 		}
-		return nil, errf(http.StatusBadGateway, "gostorm returned a malformed info hash %q", addedHash)
+		return nil, errf(http.StatusBadGateway, "Tentacle returned a malformed info hash %q", addedHash)
 	}
 	// A base32 magnet comes back in hex, and everything from here is keyed on the
 	// spelling the engine reported, so the lock has to cover it too.

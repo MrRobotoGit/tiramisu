@@ -10,8 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"tiramisu/internal/gostorm/settings"
 )
 
 // FileSize is the per-file head cache cap. Set at init from config, default 64 MB.
@@ -173,24 +171,16 @@ type DiskWarmupCache struct {
 	writeCh      chan warmupWrite
 }
 
-// InitDiskWarmup creates the global warmup cache if UseDisk is enabled.
 var logf = log.New(os.Stdout, "[DiskWarmup] ", log.LstdFlags)
 
-func InitDiskWarmup(quotaGB int64) {
+// InitDiskWarmup creates the global warmup cache in dir when useDisk is set (the engine
+// settings UseDisk and TorrentsSavePath, read once at start).
+func InitDiskWarmup(quotaGB int64, useDisk bool, dir string) {
 	diskQuotaGB = quotaGB
 	FileSize = 64 * 1024 * 1024 // default, overridden by config
-	for i := 0; i < 15; i++ {
-		if settings.BTsets != nil {
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	if settings.BTsets == nil || !settings.BTsets.UseDisk {
+	if !useDisk {
 		return
 	}
-
-	dir := settings.BTsets.TorrentsSavePath
 	if dir == "" || dir == "/" {
 		return
 	}

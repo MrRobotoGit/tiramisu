@@ -116,7 +116,7 @@ func tailFile(path string, n int) []string {
 	return all
 }
 
-// KillStream forwards a drop request to GoStorm for the given torrent hash.
+// KillStream drops the given torrent from memory.
 func (h *Handler) KillStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {
@@ -130,20 +130,12 @@ func (h *Handler) KillStream(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"status":"error","message":"missing hash"}`))
 		return
 	}
-	body := fmt.Sprintf(`{"action":"drop","hash":%q}`, hash)
-	resp, err := http.Post(h.collector.GostormURL()+"/torrents", "application/json", strings.NewReader(body))
-	if err != nil {
+	if err := h.collector.DropTorrent(hash); err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintf(w, `{"status":"error","message":%q}`, err.Error())
 		return
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		w.Write([]byte(`{"status":"ok"}`))
-	} else {
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, `{"status":"error","message":"gostorm returned %s"}`, resp.Status)
-	}
+	w.Write([]byte(`{"status":"ok"}`))
 }
 
 // PlexThumb proxies a Plex thumbnail through tiramisu.

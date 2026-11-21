@@ -14,7 +14,7 @@
     const res = await native(input, init);
     if (res.status === 401) {
       const url = new URL(input instanceof Request ? input.url : String(input), location.href);
-      // Only our own middleware answers with this realm; GoStorm's Basic Auth 401 must not loop to /login.
+      // Only our own middleware answers with this realm; any other 401 must not loop to /login.
       const ours = (res.headers.get('WWW-Authenticate') || '').includes('realm="tiramisu"');
       if (ours && url.origin === location.origin && !url.pathname.startsWith('/api/auth/')) toLogin();
     }

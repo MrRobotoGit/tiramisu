@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"tiramisu/internal/config"
-	"tiramisu/internal/gostorm/settings"
-	"tiramisu/internal/gostorm/torr"
 
 	natpmp "github.com/jackpal/go-nat-pmp"
 )
@@ -19,10 +17,16 @@ import (
 // Global atomic variable to track current external port for metrics (V229)
 var CurrentNatPort int64
 
-// natpmpLoop runs the NAT-PMP port forwarding loop as a sidecar goroutine.
+// Port is the engine's peer listen port setting (enginehost.PeerPort in production).
+type Port interface {
+	Port() int
+	SetPort(port int) error
+}
+
+// NatpmpLoop runs the NAT-PMP port forwarding loop as a sidecar goroutine.
 // It requests a port mapping from the gateway, sets up iptables rules, and
-// updates GoStorm's PeersListenPort when the external port changes.
-func NatpmpLoop(stopChan <-chan struct{}, cfg config.NatPMPConfig, logger *log.Logger) {
+// updates the engine's PeersListenPort when the external port changes.
+func NatpmpLoop(stopChan <-chan struct{}, cfg config.NatPMPConfig, logger *log.Logger, port Port) {
 	if !cfg.Enabled {
 		return
 	}
@@ -47,13 +51,13 @@ func NatpmpLoop(stopChan <-chan struct{}, cfg config.NatPMPConfig, logger *log.L
 	logger.Printf("[NatPMP] Starting — gateway=%s interface=%s localPort=%d lifetime=%ds refresh=%ds",
 		cfg.Gateway, cfg.VPNInterface, cfg.LocalPort, cfg.Lifetime, cfg.Refresh)
 
-	// Initialize from current GoStorm port to avoid unnecessary SetSettings on startup
+	// Initialize from the current engine port to avoid an unnecessary reconnect on startup
 	currentExternalPort := 0
 	iptablesReady := false // Ensure iptables rules are created on first successful mapping
-	if settings.BTsets != nil && settings.BTsets.PeersListenPort > 0 {
-		currentExternalPort = settings.BTsets.PeersListenPort
+	if p := port.Port(); p > 0 {
+		currentExternalPort = p
 		atomic.StoreInt64(&CurrentNatPort, int64(currentExternalPort))
-		logger.Printf("[NatPMP] Initialized with current GoStorm port: %d", currentExternalPort)
+		logger.Printf("[NatPMP] Initialized with current engine port: %d", currentExternalPort)
 	}
 
 	for {
@@ -113,11 +117,8 @@ func NatpmpLoop(stopChan <-chan struct{}, cfg config.NatPMPConfig, logger *log.L
 			setupIptablesRedirect(cfg.VPNInterface, cfg.LocalPort, externalPort, logger)
 			iptablesReady = true
 
-			// Update GoStorm port
-			updateGoStormPort(externalPort, currentExternalPort, logger)
-
-			currentExternalPort = externalPort
-			atomic.StoreInt64(&CurrentNatPort, int64(externalPort)) // V229: Expose for metrics
+			currentExternalPort = adoptPort(port, externalPort, currentExternalPort, logger)
+			atomic.StoreInt64(&CurrentNatPort, int64(currentExternalPort)) // V229: Expose for metrics
 		} else if !iptablesReady && externalPort > 0 {
 			// First successful mapping after restart — port unchanged but iptables rules are gone
 			logger.Printf("[NatPMP] Restoring iptables rules for port %d (post-restart)", externalPort)
@@ -187,23 +188,17 @@ func setupIptablesRedirect(iface string, fromPort, toPort int, logger *log.Logge
 	}
 }
 
-// updateGoStormPort updates GoStorm's PeersListenPort via direct Go call.
-func updateGoStormPort(newPort, oldPort int, logger *log.Logger) {
-	currentSets := settings.BTsets
-	if currentSets == nil {
-		logger.Printf("[NatPMP] WARNING: BTsets is nil, cannot update port")
-		return
+// adoptPort stores the new peer port (the settings reconnect the client) and returns the port
+// now current: the old one if the update failed, so the next cycle retries it.
+func adoptPort(port Port, newPort, oldPort int, logger *log.Logger) int {
+	if port.Port() == newPort {
+		return newPort
 	}
-
-	if currentSets.PeersListenPort == newPort {
-		return
+	logger.Printf("[NatPMP] engine port updating: %d → %d", oldPort, newPort)
+	if err := port.SetPort(newPort); err != nil {
+		logger.Printf("[NatPMP] WARNING: engine port update %d → %d: %v", oldPort, newPort, err)
+		return oldPort
 	}
-
-	// Copy current settings and update port
-	newSets := *currentSets
-	newSets.PeersListenPort = newPort
-
-	logger.Printf("[NatPMP] GoStorm port updating: %d → %d", oldPort, newPort)
-	torr.SetSettings(&newSets)
-	logger.Printf("[NatPMP] GoStorm port updated: %d → %d (reconnect complete)", oldPort, newPort)
+	logger.Printf("[NatPMP] engine port updated: %d → %d (reconnect complete)", oldPort, newPort)
+	return newPort
 }

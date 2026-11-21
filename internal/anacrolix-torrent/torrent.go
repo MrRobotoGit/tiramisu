@@ -150,6 +150,10 @@ type Torrent struct {
 	// input to the deadline-first piece ordering in request-strategy. Guarded by t.cl's lock.
 	pieceDeadlines map[int]int64
 
+	// streamCursors are read positions of consumers without a Reader (SetStreamCursors), by
+	// piece, merged into readerCursors. Guarded by t.cl's lock.
+	streamCursors map[pieceIndex]RequestIndex
+
 	// peerSampleRunning guards against spawning more than one peerSampleWatchdog per torrent.
 	peerSampleRunning atomic.Bool
 
@@ -249,6 +253,8 @@ type Torrent struct {
 	sourcesLogger log.Logger
 
 	smartBanCache smartBanCache
+	// Pieces with an exclusion set, so bans can release them without scanning every piece.
+	excludedPieces map[pieceIndex]struct{}
 
 	// Large allocations reused between request state updates.
 	requestPieceStates []request_strategy.PieceRequestOrderState
@@ -3013,6 +3019,7 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 			c._stats.incrementPiecesDirtiedGood()
 		}
 		t.clearPieceTouchers(piece)
+		t.clearExclusion(piece)
 		hasDirty := p.hasDirtyChunks()
 		t.cl.unlock()
 		if hasDirty {
@@ -3039,6 +3046,8 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 				// Y u do dis peer?!
 				c.stats().incrementPiecesDirtiedBad()
 			}
+
+			t.excludeDirtiers(piece)
 
 			bannableTouchers := make([]*Peer, 0, len(p.dirtiers))
 			for c := range p.dirtiers {
@@ -3096,22 +3105,22 @@ func (t *Torrent) pieceHashed(piece pieceIndex, passed bool, hashIoErr error) {
 
 			// V304: Threshold-based eviction — ban any peer whose IP accumulates >= 3 bad
 			// pieces, counted per IP (not per connection) so reconnects don't reset the tally.
-			// LoadOrStore ensures each IP is banned and logged only once.
+			// LoadOrStore ensures each IP is banned and logged only once. Only a sole dirtier is
+			// charged: a shared failure does not say who corrupted it (#39).
 			const badPeerThreshold int64 = 3
-			for _, c := range bannableTouchers {
-				ip := c.remoteIp()
-				if ip == nil {
-					continue
-				}
-				ipStr := ip.String()
-				if n := v304AddCorrupt(ipStr); n >= badPeerThreshold {
-					if _, alreadyBanned := v304BannedIPs.LoadOrStore(ipStr, struct{}{}); !alreadyBanned {
-						t.logger.Levelf(log.Warning,
-							"[AdaptiveShield] evicting peer %v: %d corrupt pieces (threshold %d) — ban applied",
-							ipStr, n, badPeerThreshold)
-						c.ban()
-						if v304OnBan != nil {
-							go v304OnBan(ipStr) // goroutine: no IO under cl lock
+			if len(bannableTouchers) == 1 {
+				c := bannableTouchers[0]
+				if ip := c.remoteIp(); ip != nil {
+					ipStr := ip.String()
+					if n := v304AddCorrupt(ipStr); n >= badPeerThreshold {
+						if _, alreadyBanned := v304BannedIPs.LoadOrStore(ipStr, struct{}{}); !alreadyBanned {
+							t.logger.Levelf(log.Warning,
+								"[AdaptiveShield] evicting peer %v: %d corrupt pieces (threshold %d) — ban applied",
+								ipStr, n, badPeerThreshold)
+							c.ban()
+							if v304OnBan != nil {
+								go v304OnBan(ipStr) // goroutine: no IO under cl lock
+							}
 						}
 					}
 				}

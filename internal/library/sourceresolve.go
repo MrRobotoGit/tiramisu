@@ -47,7 +47,7 @@ func matchEntry(files []FileStat, sourcePath string) (*FileStat, error) {
 // checkEntry rejects an index that cannot address exactly one file: the stream
 // lookup stops at the first hit, so a shared index would serve the wrong file.
 func checkEntry(files []FileStat, match *FileStat, sourcePath string) error {
-	// GoStorm indexes are 1-based; a non-positive one is a malformed answer.
+	// Tentacle indexes are 1-based; a non-positive one is a malformed answer.
 	if match.ID <= 0 {
 		return fmt.Errorf("file %q has non-positive index %d: %w", sourcePath, match.ID, ErrSourceAmbiguous)
 	}

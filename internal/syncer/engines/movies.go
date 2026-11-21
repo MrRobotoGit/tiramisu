@@ -21,6 +21,7 @@ type MoviesSyncer struct {
 // MoviesSyncerConfig holds config for the Go movie engine.
 type MoviesSyncerConfig struct {
 	GoStormURL      string
+	Torrents        Backend // the engine (stub URLs still use GoStormURL)
 	TMDBAPIKey      string
 	TorrentioURL    string
 	PlexURL         string
@@ -65,6 +66,7 @@ func NewMoviesSyncer(cfg MoviesSyncerConfig) *MoviesSyncer {
 
 	engineCfg := MovieEngineConfig{
 		GoStormURL:      cfg.GoStormURL,
+		Torrents:        cfg.Torrents,
 		TMDBAPIKey:      cfg.TMDBAPIKey,
 		TorrentioURL:    cfg.TorrentioURL,
 		PlexURL:         cfg.PlexURL,

@@ -98,7 +98,7 @@ func (m *Manager) Diagnose(ctx context.Context) (*Diagnosis, error) {
 		}
 	}
 
-	orphans := Check{ID: "orphan_torrents", Desc: "torrents in GoStorm that no stub (movies/, tv/), episode or audio projection references; added in the last 10 minutes are left out"}
+	orphans := Check{ID: "orphan_torrents", Desc: "torrents in Tentacle that no stub (movies/, tv/), episode or audio projection references; added in the last 10 minutes are left out"}
 	month := time.Now().Add(-30 * 24 * time.Hour).Unix()
 	removableBefore := start.Add(-orphanDefaultMinDays * 24 * time.Hour).Unix()
 	for _, t := range snap.orphans(start.Add(-10 * time.Minute)) { // an add in flight has its torrent before its stub
@@ -112,7 +112,7 @@ func (m *Manager) Diagnose(ctx context.Context) (*Diagnosis, error) {
 		}
 	}
 
-	missing := Check{ID: "missing_torrents", Desc: "stubs, episodes and committed audio whose torrent is not in GoStorm"}
+	missing := Check{ID: "missing_torrents", Desc: "stubs, episodes and committed audio whose torrent is not in Tentacle"}
 	seen := map[string]bool{}
 	miss := func(hash, path string) {
 		if hash = diagHash(hash); hash == "" || engine[hash] || seen[path] {
@@ -167,7 +167,7 @@ func (m *Manager) Diagnose(ctx context.Context) (*Diagnosis, error) {
 		}
 	}
 
-	staleFail := Check{ID: "stale_metadata_failures", Desc: "metadata failure rows for torrents no longer in GoStorm"}
+	staleFail := Check{ID: "stale_metadata_failures", Desc: "metadata failure rows for torrents no longer in Tentacle"}
 	for _, h := range failures {
 		if !engine[diagHash(h)] {
 			staleFail.add(h)
@@ -259,17 +259,17 @@ func (m *Manager) snapshotRefs(ctx context.Context, db DiagnosticsDB) (*refSnaps
 	return snap, nil
 }
 
-// orphans are the unreferenced torrents added before cutoff, oldest first.
+// orphans are the unreferenced torrents not added nor used since cutoff, oldest first.
 func (s *refSnapshot) orphans(cutoff time.Time) []metadb.TorrentRef {
 	var out []metadb.TorrentRef
 	for _, t := range s.torrents {
-		if !s.referenced[diagHash(t.Hash)] && t.Timestamp <= cutoff.Unix() {
+		if !s.referenced[diagHash(t.Hash)] && t.LastActivity() <= cutoff.Unix() {
 			out = append(out, t)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Timestamp != out[j].Timestamp {
-			return out[i].Timestamp < out[j].Timestamp
+		if a, b := out[i].LastActivity(), out[j].LastActivity(); a != b {
+			return a < b
 		}
 		return out[i].Hash < out[j].Hash
 	})

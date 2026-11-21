@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"tiramisu/internal/gostorm/torr"
+	"tiramisu/internal/engine"
 )
 
 const (
@@ -28,7 +28,8 @@ var (
 	lastAnnounceHash string
 )
 
-func Start(ctx context.Context) {
+// Start samples the engine's hydrated torrents every 5s until ctx ends.
+func Start(ctx context.Context, e *engine.Engine) {
 	log.Printf("[Tuner] Discovery boost starting... (Stats: 5s)")
 	ticker := time.NewTicker(sampleInterval)
 	defer ticker.Stop()
@@ -36,16 +37,16 @@ func Start(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			runCycle()
+			runCycle(e)
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func runCycle() {
-	active := pickActive(torr.ListActiveTorrent())
-	if active == nil || active.Torrent == nil {
+func runCycle(e *engine.Engine) {
+	active := pickActive(e.ListHydrated())
+	if active == nil {
 		return
 	}
 
@@ -54,23 +55,15 @@ func runCycle() {
 		return
 	}
 
-	size := active.Size
-	if size == 0 {
-		size = active.Torrent.Length()
-	}
+	size := active.Size()
 	fileSizeGB := float64(size) / (1024 * 1024 * 1024)
 	speedMBs := st.DownloadSpeed / (1024 * 1024)
 
-	private := false
-	if info := active.Torrent.Info(); info != nil && info.Private != nil {
-		private = *info.Private
-	}
-
-	if !shouldBoost(st.ConnectedSeeders, speedMBs, st.LoadedSize, size, private, active.IsPriority.Load()) {
+	if !shouldBoost(st.ConnectedSeeders, speedMBs, st.LoadedSize, size, active.Private(), active.IsPriority.Load()) {
 		return
 	}
 
-	hash := active.Hash().String()
+	hash := active.Hash()
 	if hash != lastAnnounceHash {
 		lastAnnounceHash = hash
 		lastAnnounceAt = time.Time{}
@@ -81,7 +74,7 @@ func runCycle() {
 		return
 	}
 	lastAnnounceAt = now
-	active.Torrent.AnnounceTracked(func(peers, errs, total int, failures []string) {
+	active.AnnounceTracked(func(peers, errs, total int, failures []string) {
 		log.Printf("[Tuner] DiscoveryBoost: announce completed peers=%d errs=%d total=%d failures=%s",
 			peers, errs, total, summarizeFailures(failures))
 	})
@@ -89,12 +82,12 @@ func runCycle() {
 		st.ConnectedSeeders, speedMBs, fileSizeGB*weakSwarmRatio)
 }
 
-func pickActive(active []*torr.Torrent) *torr.Torrent {
+func pickActive(active []*engine.Torrent) *engine.Torrent {
 	if len(active) == 0 {
 		return nil
 	}
 	if len(active) > 1 {
-		var priority []*torr.Torrent
+		var priority []*engine.Torrent
 		for _, t := range active {
 			if t.IsPriority.Load() {
 				priority = append(priority, t)
@@ -106,7 +99,7 @@ func pickActive(active []*torr.Torrent) *torr.Torrent {
 		active = priority
 	}
 	for _, t := range active {
-		if t.Torrent != nil {
+		if t.Hydrated() {
 			return t
 		}
 	}

@@ -9,7 +9,7 @@ import (
 )
 
 // releaseMagnet prepares the release a sync picked: when it came from Prowlarr, its
-// .torrent is fetched and handed to GoStorm (metadata at once, the indexer's trackers
+// .torrent is fetched and handed to Tentacle (metadata at once, the indexer's trackers
 // kept, a logged-in indexer's passkey included) and the magnet carries those trackers
 // too. Any failure falls back to the magnet a hash alone gives, as before.
 func releaseMagnet(ctx context.Context, pr *prowlarr.Client, gs *GoStormClient, hash, title, downloadURL string, logf func(string, ...any)) string {

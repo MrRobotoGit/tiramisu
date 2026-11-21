@@ -48,6 +48,9 @@ type Piece struct {
 	// Connections that have written data to this piece since its last check.
 	// This can include connections that have closed.
 	dirtiers map[*Peer]struct{}
+
+	// Set after a failed hash check: who may request the piece (piece_exclusion.go).
+	exclusion *pieceExclusion
 }
 
 func (p *Piece) String() string {

@@ -6,6 +6,12 @@
 (function () {
   const NS = 'http://www.w3.org/2000/svg';
   const DEFAULT_CLEAN_S = 30;     // engine minimum; the strict log line states the real one
+  const STATION_R = 18, GAUGE_R = 9; // pipe stations (Tentacle, FUSE) and their inner gauge
+  // Clockwise arc from 12 o'clock covering frac of the circle.
+  const arcD = (c, r, frac) => {
+    const f = Math.min(0.999, frac), a = -Math.PI / 2 + 2 * Math.PI * f;
+    return `M${c[0]} ${c[1] - r} A${r} ${r} 0 ${f > 0.5 ? 1 : 0} 1 ${c[0] + r * Math.cos(a)} ${c[1] + r * Math.sin(a)}`;
+  };
   const WAVE_MS = 12000;          // how long a corruption wave stays on screen
   const DRAIN_MS = 10000;         // how long the tint takes to leave after a restore
   const MAX_PEERS = 48, MAX_PENDING = 8;
@@ -173,7 +179,7 @@
     const sh = shieldState(d.shield, Date.now());
     return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (d.health || {}).v304_banned_peers,
       // Readings that move on every poll: a change shows in the next frame, it is not a change of shape.
-      speeds ? (d.health || {}).cache_hit_rate_pct : '', speeds ? Math.round((d.health || {}).fuse_active_pct || 0) : '',
+      speeds ? (d.health || {}).cache_hit_rate_pct : '', speeds ? act.map(x => x.cache_capacity ? Math.round(100 * x.cache_filled / x.cache_capacity) : '').join(',') : '', speeds ? Math.round((d.health || {}).fuse_active_pct || 0) : '',
       speeds ? Math.round((d.health || {}).fuse_stale_pct || 0) : '', transport && transport.utp, clients && JSON.stringify([...clients].map(([k, c]) => [k, c.label, c.state, c.state === 'paused' ? c.pos : 0])), reducedMotion(),
       focusKey, recent.length && recent[0].started_at,
       scan && scan.active ? [scan.label, scan.files_per_min, scan.files_read,
@@ -437,8 +443,8 @@
     const dx = fuseP[0] - cacheP[0], dy = fuseP[1] - cacheP[1];
     const len = Math.hypot(dx, dy) || 1, ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
     // The tube is one piece of pipe from node to node, like every other pipe: its ends run under
-    // the boxes. The dots stay clear of the boxes (and of GoStorm's ring in STRICT).
-    const inA = sh.mode === 'strict' ? 25 : 18, inB = 18;
+    // the stations. The dots stay clear of the stations (and of Tentacle's ring in STRICT).
+    const inA = sh.mode === 'strict' ? STATION_R + 13 : STATION_R + 7, inB = STATION_R + 7;
     const t0 = [cacheP[0] + ux * inA, cacheP[1] + uy * inA];
     el('path', { d: `M${cacheP[0]} ${cacheP[1]} L${fuseP[0]} ${fuseP[1]}`, class: 'sw-gauge-rim', 'stroke-width': tubeW + 2 }, gauge);
     el('path', { d: `M${cacheP[0]} ${cacheP[1]} L${fuseP[0]} ${fuseP[1]}`, class: 'sw-gauge-free', 'stroke-width': tubeW }, gauge);
@@ -465,7 +471,7 @@
       const steady = c + 0.5 <= level - 1;
       const near = !steady && c + 0.5 <= level + 1;
       rows.forEach(r => {
-        const along = c * step + step / 2;
+        const along = (inner - cols * step) / 2 + c * step + step / 2; // the leftover split at both ends
         const pos = { cx: t0[0] + ux * along + nx * r, cy: t0[1] + uy * along + ny * r, r: 1.6 };
         if (steady) { el('circle', { ...pos, class: cls }, gauge); return; }
         if (!near || fill < 0.01) { el('circle', { ...pos, class: 'sw-dot off' }, gauge); return; }
@@ -594,7 +600,7 @@
       const g = moreG = el('g', { class: 'sw-more' }, nodeLayer);
       const label = `+${hidden.length} more${vertical ? '' : ' torrent' + (hidden.length > 1 ? 's' : '')}`;
       if (vertical) {
-        // A pill in the free space left of GoStorm, clear of the torrent labels.
+        // A pill in the free space left of Tentacle, clear of the torrent labels.
         const p = P(F.cache, 0.14), w = 64;
         el('rect', { x: p[0] - w / 2, y: p[1] - 10, width: w, height: 20, rx: 10, class: 'sw-more-ring' }, g);
         txt(g, p[0], p[1] + 4, label, 'sw-sub', 'middle');
@@ -670,22 +676,34 @@
 
     // Cache and FUSE nodes.
     const strict = sh.mode === 'strict';
-    [[cacheP, 'GoStorm', strict ? `STRICT · ${vertical ? "" : "clean "}${sh.cleanS}/${sh.need} s` : sh.mode === 'recover' ? 'FAST · restored'
-      : sh.wave !== undefined ? 'FAST kept' : 'FAST · piece cache'],
-    [fuseP, 'raCache', `${Math.round(h.fuse_budget_mb || 0)} MB · hit ${h.cache_hit_rate_pct == null ? '—' : Math.round(h.cache_hit_rate_pct) + '%'}`]]
+    const lead = torrents.find(t => t.is_priority) || torrents[0];
+    const cacheFill = lead && lead.cache_capacity > 0 ? Math.min(1, lead.cache_filled / lead.cache_capacity) : null;
+    const hitRate = h.cache_hit_rate_pct == null ? null : Math.min(1, h.cache_hit_rate_pct / 100);
+    [[cacheP, 'Tentacle', strict ? `STRICT · ${vertical ? "" : "clean "}${sh.cleanS}/${sh.need} s` : sh.mode === 'recover' ? 'FAST · restored'
+      : sh.wave !== undefined ? 'FAST kept' : cacheFill == null ? 'FAST · piece cache' : `FAST · piece cache ${Math.round(cacheFill * 100)}%`],
+    [fuseP, 'FUSE', `${Math.round(h.fuse_budget_mb || 0)} MB · hit ${h.cache_hit_rate_pct == null ? '—' : Math.round(h.cache_hit_rate_pct) + '%'}`]]
       .forEach(([p, name, sub], i) => {
+        // A station on the pipe: a ring the flow runs through, with a gauge of its own reading
+        // (Tentacle: the playing torrent's piece cache fill; FUSE: the read-ahead hit rate).
+        const red = i === 0 && strict ? ' strict' : '';
         if (i === 0 && (strict || sh.mode === 'recover')) {
-          el('circle', { cx: p[0], cy: p[1], r: 19, class: 'sw-ring' }, nodeLayer);
-          const frac = strict ? sh.clean : 1, a = -Math.PI / 2 + 2 * Math.PI * Math.min(0.999, frac);
-          if (frac > 0) el('path', { d: `M${p[0]} ${p[1] - 19} A19 19 0 ${frac > 0.5 ? 1 : 0} 1 ${p[0] + 19 * Math.cos(a)} ${p[1] + 19 * Math.sin(a)}`, class: strict ? 'sw-ring-arc strict' : 'sw-ring-arc' }, nodeLayer);
+          el('circle', { cx: p[0], cy: p[1], r: STATION_R + 6, class: 'sw-ring' }, nodeLayer);
+          const frac = strict ? sh.clean : 1;
+          if (frac > 0) el('path', { d: arcD(p, STATION_R + 6, frac), class: strict ? 'sw-ring-arc strict' : 'sw-ring-arc' }, nodeLayer);
         }
-        el('rect', { x: p[0] - 10, y: p[1] - 10, width: 20, height: 20, rx: 4, class: i === 0 && strict ? 'sw-box strict' : 'sw-box' }, nodeLayer);
+        const st = el('circle', { cx: p[0], cy: p[1], r: STATION_R, class: 'sw-station' + red }, nodeLayer);
+        const g = i === 0 ? cacheFill : hitRate;
+        el('title', {}, st).textContent = i === 0
+          ? (g == null ? 'Tentacle piece cache' : `Tentacle piece cache ${Math.round(g * 100)}% full`)
+          : (g == null ? 'FUSE read-ahead' : `FUSE read-ahead hit rate ${Math.round(g * 100)}%`);
+        el('circle', { cx: p[0], cy: p[1], r: GAUGE_R, class: 'sw-meter-track' + red }, nodeLayer);
+        if (g > 0) el('path', { d: arcD(p, GAUGE_R, g), class: 'sw-meter' + red }, nodeLayer);
         if (vertical) {
-          txt(nodeLayer, p[0] + 26, p[1] - 1, name, 'sw-name');
-          txt(nodeLayer, p[0] + 26, p[1] + 11, sub, i === 0 && strict ? 'sw-sub accent' : 'sw-sub');
+          txt(nodeLayer, p[0] + 30, p[1] - 1, name, 'sw-name');
+          txt(nodeLayer, p[0] + 30, p[1] + 11, sub, i === 0 && strict ? 'sw-sub accent' : 'sw-sub');
         } else {
-          txt(nodeLayer, p[0] - 24, p[1] - 40, name, 'sw-name');
-          txt(nodeLayer, p[0] - 24, p[1] - 28, sub, i === 0 && strict ? 'sw-sub accent' : 'sw-sub');
+          txt(nodeLayer, p[0] - 24, p[1] - 44, name, 'sw-name');
+          txt(nodeLayer, p[0] - 24, p[1] - 32, sub, i === 0 && strict ? 'sw-sub accent' : 'sw-sub');
         }
       });
 
@@ -787,7 +805,7 @@
   // With no active torrent, the peer connections no torrent accounts for (/metrics peer_conns_*)
   // run a stadium track around the cache → FUSE pipe. When a stream starts they leave in a queue
   // for the spots the graph draws its peers at; when the last one ends they come back. The track
-  // sits under the graph, the dots above it, in layers of their own so the 5 s redraws do not
+  // sits under the graph, the dots above it, in layers of their own so the 2.5 s redraws do not
   // restart them.
   const ORBIT_MAX = 16, TURN_MS = 36000, TO_GRAPH_MS = 600, TO_RING_MS = 800, FRAME_MS = 33;
   const orbit = { back: null, front: null, svgB: null, svgF: null, dots: [], geo: null, mode: 'off', t0: 0, epoch: performance.now(),
@@ -837,7 +855,7 @@
     orbit.label.textContent = n ? `${n} peer connection${n === 1 ? '' : 's'} · no torrent active` : '';
     placeLabel();
   }
-  // Phone: the track is centred on the pipe and crosses the GoStorm / raCache labels, so the dots
+  // Phone: the track is centred on the pipe and crosses the Tentacle / FUSE labels, so the dots
   // run under the graph, where the labels' panel halo masks them. Desktop: above the graph.
   const dotLayer = () => orbit.geo && orbit.geo.vertical ? orbit.svgB : orbit.svgF;
   // Centred under the track, but never past the svg's edges (narrow phones).
@@ -975,10 +993,10 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) orbitStart(); });
 
-  // Polls come every 5 s. When one changes speeds alone, the graph eases from what is on screen
+  // Polls come every 2.5 s. When one changes speeds alone, the graph eases from what is on screen
   // to it over TWEEN_MS, in cut redraws that keep every motion's phase; any change of shape
   // cross-fades as before. The data stay the engine's: only the steps between are drawn.
-  const TWEEN_MS = 2000, TWEEN_STEP_MS = 250;
+  const TWEEN_MS = 1000, TWEEN_STEP_MS = 250;
   let onScreen = null, tweenTimer = null;
   const lerp = (a, b, f) => (a == null || b == null) ? b : a + (b - a) * f;
   function mixSpeeds(from, to, f) {
@@ -1019,7 +1037,7 @@
       fetchMetrics().then(() => draw());
       fetchExtras().then(() => draw());
       // Inside a tween these redraws cut like its frames: a cross-fade would be cut off halfway.
-      setInterval(() => { if (!host.hidden) fetchMetrics().then(() => { draw(false, !!tweenTimer); orbitRecount(); }); }, 5000);
+      setInterval(() => { if (!host.hidden) fetchMetrics().then(() => { draw(false, !!tweenTimer); orbitRecount(); }); }, 2500);
       setInterval(() => { if (!host.hidden) fetchExtras().then(() => draw(false, !!tweenTimer)); }, 15000);
     },
     update(d) { easeTo(d); },

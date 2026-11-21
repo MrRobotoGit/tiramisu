@@ -1629,11 +1629,12 @@ func (t *Torrent) MergeSpec(spec *TorrentSpec) error {
 	for _, url := range spec.Webseeds {
 		t.addWebSeed(url)
 	}
+	// Spec peers (persisted addresses, magnet x.pe) are hints, not trusted: trust would exempt
+	// them from corruption bans and let a banned IP be dialed.
 	for _, peerAddr := range spec.PeerAddrs {
 		t.addPeer(PeerInfo{
-			Addr:    StringAddr(peerAddr),
-			Source:  PeerSourceDirect,
-			Trusted: true,
+			Addr:   StringAddr(peerAddr),
+			Source: PeerSourceDirect,
 		})
 	}
 	if spec.ChunkSize != 0 {
@@ -1756,6 +1757,7 @@ func (cl *Client) banPeerIP(ip net.IP) {
 	}
 	g.MakeMapIfNilAndSet(&cl.badPeerIPs, ipAddr, struct{}{})
 	for _, t := range cl.torrents {
+		t.releaseExclusions(ipAddr)
 		t.iterPeers(func(p *Peer) {
 			if p.remoteIp().Equal(ip) {
 				t.logger.Levelf(log.Warning, "dropping peer %v with banned ip %v", p, ip)

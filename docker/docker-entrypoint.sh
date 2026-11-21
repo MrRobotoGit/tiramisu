@@ -55,7 +55,7 @@ fi
 
 mkdir -p "$STATE_DIR" "$LOG_DIR"
 
-# GoStorm keeps settings.json (and a not yet imported config.db) in $ROOT_PATH, Tiramisu its state in
+# Tentacle keeps settings.json (and a not yet imported config.db) in $ROOT_PATH, Tiramisu its state in
 # $STATE_DIR. Unmounted, both vanish on "docker rm" and every setting silently
 # returns to its default, which is hard to attribute after the fact.
 for dir in "$ROOT_PATH" "$STATE_DIR"; do

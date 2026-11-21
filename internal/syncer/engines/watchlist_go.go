@@ -57,6 +57,7 @@ type WatchlistConfig struct {
 	AudioRegistry   library.AudioRegistry
 	Release         ReleaseFunc
 	GoStormURL      string
+	Torrents        Backend // the engine (stub URLs still use GoStormURL)
 	TMDBAPIKey      string
 	TorrentioURL    string
 	PlexURL         string
@@ -82,7 +83,7 @@ func NewWatchlistGoEngine(cfg WatchlistConfig) *WatchlistGoEngine {
 	logger := log.New(io.MultiWriter(os.Stdout, logFile), "[WatchlistSync] ", log.LstdFlags)
 
 	return &WatchlistGoEngine{
-		gostorm:    NewGoStormClient(cfg.GoStormURL),
+		gostorm:    NewGoStormClient(cfg.Torrents, cfg.GoStormURL),
 		tmdb:       tmdb.NewClient(cfg.TMDBAPIKey),
 		torrentio:  torrentio.NewClient(cfg.TorrentioURL, "sort=qualitysize|qualityfilter=480p,720p,scr,cam"),
 		prowlarr:   prowlarrClient,

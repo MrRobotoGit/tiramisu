@@ -85,7 +85,7 @@
       <a href="/control#streaming"><span class="num">01</span>Streaming &amp; FUSE</a>
       <a href="/control#network"><span class="num">02</span>Network &amp; VPN</a>
       <a href="/control#sources"><span class="num">03</span>Sources &amp; Media</a>
-      <a href="/control#engine"><span class="num">04</span>Engine</a>
+      <a href="/control#engine"><span class="num">04</span>Tentacle</a>
       <a href="/control#release"><span class="num">05</span>Release Selection</a>
       <a href="/control#scheduler"><span class="num">06</span>Scheduler</a>
       <a href="/control#access"><span class="num">07</span>Access</a>
@@ -96,7 +96,7 @@
       <a href="/api-docs" class="active"><span class="num">{}</span>API</a>
     </nav>
     <div class="rail-foot">
-      <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Engine online</span></div>
+      <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Tentacle online</span></div>
       <span class="mono faint small" id="rail-version">—</span>
       <a class="row" id="rail-update" hidden href="https://github.com/MrRobotoGit/tiramisu/releases/latest" target="_blank" rel="noopener"><span class="chip-tag">Update</span><span class="txt small"></span></a>
       <hr>
@@ -271,9 +271,9 @@ mcp_servers:
   fetch('/api/health').then(r => r.ok ? r.json() : null).then(h => {
     if (!h) return;
     TiramisuUI.setUptime(h.uptime);
-    const ok = h.gostorm && h.gostorm.ok;
+    const ok = h.tentacle && h.tentacle.ok;
     document.getElementById('rail-lamp').className = 'lamp ' + (ok ? 'run' : 'err pulse');
-    document.getElementById('rail-state').textContent = ok ? 'Engine online' : 'Engine unreachable';
+    document.getElementById('rail-state').textContent = ok ? 'Tentacle online' : 'Tentacle unreachable';
   }).catch(() => { }).finally(() => TiramisuUI.checkUpdate());
 })();
 </script>

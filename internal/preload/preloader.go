@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"tiramisu/internal/gostorm/native"
+	"tiramisu/internal/bridge"
 )
 
 // PreloadStrategy defines the preload size based on torrent download speed
@@ -31,11 +31,11 @@ const (
 	SpeedThresholdMedium = 4 * 1024 * 1024  // 4 MiB/s
 )
 
-// TorrentStats represents torrent statistics from GoStorm API
+// TorrentStats represents torrent statistics from the Tentacle API
 // PeerPreloader manages adaptive preload based on peer speed
 // PeerPreloader manages adaptive preload based on peer speed
 type PeerPreloader struct {
-	nativeBridge  *native.NativeClient // V160: Native Bridge
+	nativeBridge  *bridge.NativeClient // V160: Native Bridge
 	strategyCache map[string]*StrategyEntry
 	mu            sync.RWMutex
 	cacheTTL      time.Duration
@@ -50,7 +50,7 @@ type StrategyEntry struct {
 }
 
 // NewPeerPreloader creates a new peer-based preloader
-func NewPeerPreloader(nativeBridge *native.NativeClient) *PeerPreloader {
+func NewPeerPreloader(nativeBridge *bridge.NativeClient) *PeerPreloader {
 	return &PeerPreloader{
 		nativeBridge:  nativeBridge,
 		strategyCache: make(map[string]*StrategyEntry),

@@ -2,7 +2,7 @@ package library
 
 import "context"
 
-// FileStat is one file inside a torrent, as GoStorm reports it. ID is the 1-based
+// FileStat is one file inside a torrent, as Tentacle reports it. ID is the 1-based
 // index the stream URL addresses the file by.
 type FileStat struct {
 	ID     int    `json:"id"`
@@ -10,7 +10,7 @@ type FileStat struct {
 	Length int64  `json:"length"`
 }
 
-// TorrentStats is the torrent view GoStorm returns.
+// TorrentStats is the torrent view Tentacle returns.
 type TorrentStats struct {
 	Hash        string     `json:"hash"`
 	Title       string     `json:"title"`
@@ -26,7 +26,7 @@ type TorrentRef struct {
 	Title string `json:"title"`
 }
 
-// GoStorm is the engine API the library manager needs. *engines.GoStormClient
+// GoStorm is the Tentacle API the library manager needs. *engines.GoStormClient
 // implements it; tests substitute a fake.
 type GoStorm interface {
 	AddTorrent(ctx context.Context, magnet, title string) (string, error)

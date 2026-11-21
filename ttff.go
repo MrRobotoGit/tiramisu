@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"tiramisu/internal/gostorm/native"
+	"tiramisu/internal/bridge"
 	"tiramisu/internal/warmup"
 )
 
@@ -230,7 +230,12 @@ func ttffIsReal(tailOrDeep bool, bytesRead int64) bool {
 
 // sessionActivePeers reports the connections a release currently has. A var so the
 // verdict can be exercised without a live torrent.
-var sessionActivePeers = native.ActivePeers
+var sessionActivePeers = func(hash string) int {
+	if nativeBridge == nil {
+		return 0
+	}
+	return nativeBridge.ActivePeers(hash)
+}
 
 // reportSwarmVerdict turns one finished session into a verdict. It acquits on bytes
 // that came from the swarm, and condemns a release when a whole session, however long its
@@ -246,7 +251,7 @@ var sessionActivePeers = native.ActivePeers
 // Runs before the ttffIsReal filter below on purpose: a session that served nothing
 // is exactly what that filter drops, and exactly what this needs to see.
 func (s *TTFFSession) reportSwarmVerdict() {
-	if native.ReachabilityOutcome == nil || s.hash == "" {
+	if bridge.ReachabilityOutcome == nil || s.hash == "" {
 		return
 	}
 	// The swarm answered at some point in this session: that clears whatever the
@@ -254,7 +259,7 @@ func (s *TTFFSession) reportSwarmVerdict() {
 	// count only ever grows, and a release broken for a day by a tracker outage is
 	// reaped after it has already recovered.
 	if s.servedByNet.Load() {
-		native.ReachabilityOutcome(s.hash, true)
+		bridge.ReachabilityOutcome(s.hash, true)
 		return
 	}
 	// Deliberately not bytesRead: it counts what the player received, and the SSD
@@ -270,7 +275,7 @@ func (s *TTFFSession) reportSwarmVerdict() {
 	}
 	logger.Printf("[DeadSwarm] session of %s ended after %s with a failed read and nothing served",
 		filepath.Base(s.path), time.Since(time.Unix(0, s.openedAt.Load())).Round(time.Second))
-	native.ReachabilityOutcome(s.hash, false)
+	bridge.ReachabilityOutcome(s.hash, false)
 }
 
 // ttffActiveByHash reports whether a playback session is still open for a hash. The

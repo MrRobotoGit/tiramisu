@@ -269,7 +269,7 @@ type Config struct {
 	RootPath string `json:"-"` // V138: Root path for state/config (default: /home/pi)
 
 	// --- Core Tuning (JSON Mapped) ---
-	MasterConcurrencyLimit int    `json:"master_concurrency_limit"` // Global limit for concurrent HTTP requests to GoStorm
+	MasterConcurrencyLimit int    `json:"master_concurrency_limit"` // Global limit for concurrent HTTP requests to Tentacle
 	ReadAheadBudgetMB      int64  `json:"read_ahead_budget_mb"`     // Global budget for read-ahead in MB
 	MetadataCacheSizeMB    int64  `json:"metadata_cache_size_mb"`   // Size of metadata LRU cache in MB (V178)
 	FuseBlockSize          int    `json:"fuse_block_size_bytes"`
@@ -311,9 +311,8 @@ type Config struct {
 	MaxCacheEntries         int `json:"max_cache_entries"`
 
 	// --- Connectivity ---
-	GoStormBaseURL string `json:"gostorm_url"`
-	// GoStormListenIP opens :8090 beyond loopback: "all" or an IP. Empty = 127.0.0.1 (see GoStormBindIP).
-	GoStormListenIP  string `json:"gostorm_listen_ip,omitempty"`
+	// GoStormBaseURL is only the prefix of the stub URLs (design V8): nothing listens there.
+	GoStormBaseURL   string `json:"gostorm_url"`
 	ProxyListenPort  int    `json:"proxy_listen_port"`
 	MetricsPort      int    `json:"metrics_port"`
 	BlockListEnabled bool   `json:"blocklist_enabled"`

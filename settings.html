@@ -229,7 +229,7 @@
                 <a href="#streaming" data-sec="sec-streaming"><span class="num">01</span>Streaming &amp; FUSE<span class="dirty"></span></a>
                 <a href="#network" data-sec="sec-network"><span class="num">02</span>Network &amp; VPN<span class="dirty"></span></a>
                 <a href="#sources" data-sec="sec-sources"><span class="num">03</span>Sources &amp; Media<span class="dirty"></span></a>
-                <a href="#engine" data-sec="sec-engine"><span class="num">04</span>Engine<span class="dirty"></span></a>
+                <a href="#engine" data-sec="sec-engine"><span class="num">04</span>Tentacle<span class="dirty"></span></a>
                 <a href="#release" data-sec="sec-release"><span class="num">05</span>Release Selection<span class="dirty"></span></a>
                 <a href="#scheduler" data-sec="sec-scheduler"><span class="num">06</span>Scheduler<span class="dirty"></span></a>
                 <a href="#access" data-sec="sec-access"><span class="num">07</span>Access</a>
@@ -240,7 +240,7 @@
                 <a href="/api-docs"><span class="num">{}</span>API</a>
             </nav>
             <div class="rail-foot">
-                <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Engine online</span></div>
+                <div class="row"><span class="lamp run" id="rail-lamp"></span><span class="small" style="font-weight:500" id="rail-state">Tentacle online</span></div>
                 <span class="mono faint small" id="rail-version">—</span>
                 <a class="row" id="rail-update" hidden href="https://github.com/MrRobotoGit/tiramisu/releases/latest" target="_blank" rel="noopener"><span class="chip-tag">Update</span><span class="txt small"></span></a>
                 <hr>
@@ -298,7 +298,7 @@
                                         <div class="head"><label for="f-budget">FUSE Cache Budget</label><span class="val"><span data-for="read_ahead_budget_mb">256</span><small>MB</small></span></div>
                                         <div class="track"><span class="ticks"></span><input id="f-budget" type="range" name="read_ahead_budget_mb" min="128" max="512" step="32"></div>
                                         <div class="scale"><span>128</span><span>▾ recommended 256 MB</span><span>512</span></div>
-                                        <div class="hint">RAM for the raCache pre-read buffer.</div>
+                                        <div class="hint">RAM for the FUSE read-ahead buffer.</div>
                                     </div>
                                     <div style="display:flex;flex-direction:column;gap:20px">
                                         <div class="field"><label>Master Concurrency</label>
@@ -397,7 +397,7 @@
                             <div class="card-head"><span class="num">02.1</span><span class="label ink">NAT-PMP (WireGuard)</span><span class="chip-tag">Adv</span><span class="spacer"></span><span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span></div>
                             <div class="card-body">
                                 <div class="toggle-row" style="padding-top:0">
-                                    <div class="text"><div class="title">Enable NAT-PMP</div><div class="hint">Maps the peer port through the VPN gateway. When on, the GoStorm Listen Port is managed here.</div></div>
+                                    <div class="text"><div class="title">Enable NAT-PMP</div><div class="hint">Maps the peer port through the VPN gateway. When on, the engine Listen Port is managed here.</div></div>
                                     <label class="switch"><input type="checkbox" name="natpmp_enabled" data-nested="natpmp.enabled" onchange="updateNatPmpState()"><span class="slider"></span></label>
                                 </div>
                                 <div class="grid3">
@@ -433,8 +433,9 @@
                             <div class="card-head"><span class="num">02.2</span><span class="label ink">Connectivity &amp; Rescue</span><span class="chip-tag">Adv</span><span class="spacer"></span><span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span></div>
                             <div class="card-body">
                                 <div class="grid3">
-                                    <div class="field"><label>GoStorm URL</label>
+                                    <div class="field"><label>Stub URL prefix</label>
                                         <div class="input mono"><input type="text" name="gostorm_url"></div>
+                                        <div class="hint">Written into every stub as an identifier; nothing listens there. Changing it rewrites stubs.</div>
                                     </div>
                                     <div class="field"><label>Rescue Grace</label>
                                         <div class="input"><input type="number" name="rescue_grace_period_seconds"><span class="unit">s</span></div>
@@ -588,14 +589,14 @@
 
                 <!-- ================= 04 ENGINE ================= -->
                 <form id="gostorm-form" autocomplete="off">
-                    <section class="settings" id="sec-engine" data-title="Engine">
+                    <section class="settings" id="sec-engine" data-title="Tentacle">
                         <div class="page-intro">
                             <span class="label">Settings · 04</span>
                             <div class="row">
-                                <h1 class="h1">Engine</h1><span class="spacer"></span>
+                                <h1 class="h1">Tentacle</h1><span class="spacer"></span>
                                 <span class="scope"><span class="lamp"></span><span class="label">Applies live</span></span>
                             </div>
-                            <p>The embedded GoStorm torrent engine: piece cache, warmup on SSD, swarm limits and protocol behaviour.</p>
+                            <p>Tentacle, the embedded torrent engine: piece cache, warmup on SSD, swarm limits and protocol behaviour.</p>
                         </div>
 
                         <div class="card">
@@ -606,7 +607,7 @@
                                         <div class="head"><label for="f-cache">Cache Size</label><span class="val"><span data-for="cacheSize">128</span><small>MB</small></span></div>
                                         <div class="track"><span class="ticks"></span><input id="f-cache" type="range" name="cacheSize" min="64" max="256" step="16"></div>
                                         <div class="scale"><span>64</span><span>▾ recommended 128 MB</span><span>256</span></div>
-                                        <div class="hint">GoStorm piece buffer, feeds raCache. Below 96 MB playback buffers.</div>
+                                        <div class="hint">Tentacle piece buffer, feeds the FUSE read-ahead. Below 96 MB playback buffers.</div>
                                     </div>
                                     <div class="fader" data-rec="75">
                                         <div class="head"><label for="f-ra">Readahead Cache</label><span class="val"><span data-for="readerReadAHead">75</span><small>%</small></span></div>
@@ -895,7 +896,7 @@
                                 </div>
                                 <div class="job" style="padding:16px 0 0">
                                     <span class="lamp off"></span>
-                                    <span class="small faint">Music sync keeps its own schedule from config.json — not editable here, preserved on save.</span>
+                                    <span class="small faint">Music sync keeps its own schedule from the saved configuration — not editable here, preserved on save.</span>
                                 </div>
                             </div>
                         </div>
@@ -1011,7 +1012,7 @@
                             <h1 class="h1">History</h1><span class="spacer"></span>
                             <span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span>
                         </div>
-                        <p>Every saved change to the configuration and to the Engine settings, newest first. Restore an older version: it goes through the bar below like any other change. The last 50 versions of each are kept.</p>
+                        <p>Every saved change to the configuration and to the Tentacle settings, newest first. Restore an older version: it goes through the bar below like any other change. The last 50 versions of each are kept.</p>
                     </div>
 
                     <div class="card">
@@ -1020,7 +1021,7 @@
                                 <button type="button" data-f="all" class="active" aria-pressed="true">All</button>
                                 <button type="button" data-f="restart" aria-pressed="false">Restart</button>
                                 <button type="button" data-f="secret" aria-pressed="false">Secrets</button>
-                                <button type="button" data-f="engine" aria-pressed="false">Engine</button>
+                                <button type="button" data-f="engine" aria-pressed="false">Tentacle</button>
                             </div>
                         </div>
                         <div class="card-body flush">
@@ -1225,7 +1226,7 @@
             else if (headroom < 16) warn = `headroom too low (${headroom} MB), risk of stalls`;
             else if (pct > 75) warn = 'Readahead % above recommended (75%)';
             else if (pct < 50) warn = 'Readahead % too low (min 50%)';
-            else if (cacheSize > budget) warn = 'Cache Size exceeds Budget, wasted GoStorm RAM';
+            else if (cacheSize > budget) warn = 'Cache Size exceeds Budget, wasted Tentacle RAM';
             else if (budget >= cacheSize * 4) warn = 'Budget too large for Cache Size, wasted RAM';
             metric.className = 'readahead-metric' + (warn ? ' warn' : '');
             metric.textContent = warn ? `${base} · ${warn}` : base;
@@ -1234,7 +1235,7 @@
             const el = document.querySelector(`[name="${name}"]`);
             if (el) el.addEventListener('input', updateReadaheadCoupling);
         });
-        // Only run coupling after both Tiramisu and GoStorm have loaded real values
+        // Only run coupling after both Tiramisu and Tentacle have loaded real values
         let _couplingLoaded = 0;
         function markCouplingLoaded() { if (++_couplingLoaded >= 2) updateReadaheadCoupling(); }
 
@@ -1890,7 +1891,7 @@
 
         async function loadCore() {
             try {
-                const res = await fetch('/api/gostorm/settings', {
+                const res = await fetch('/api/tentacle/settings', {
                     method: 'POST',
                     body: JSON.stringify({ action: 'get' }),
                     headers: { 'Content-Type': 'application/json' }
@@ -1941,13 +1942,13 @@
                 const isUIOn = formData.has(formKey);
                 sets[k] = NEGATIVE_KEYS.includes(k) ? !isUIOn : isUIOn;
             });
-            const res = await fetch('/api/gostorm/settings', {
+            const res = await fetch('/api/tentacle/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'set', sets: sets })
             });
             if (res.ok) await loadCore();
-            return { ok: res.ok, message: res.ok ? '' : 'Engine: apply error' };
+            return { ok: res.ok, message: res.ok ? '' : 'Tentacle: apply error' };
         }
 
         // Enter in a field applies everything pending, like the old Save buttons did.
@@ -2145,7 +2146,7 @@
             const cfgRes = await fetch('/api/config');
             const data = await cfgRes.json();
 
-            // The card has no music row: keep its schedule, the backend rewrites the whole file.
+            // The card has no music row: keep its schedule, the backend rewrites the whole document.
             const musicSync = data.scheduler?.music_sync;
             data.scheduler = {
                 enabled: document.getElementById('sched-enabled').checked,
@@ -2199,7 +2200,7 @@
         const GROUPS = {
             tiramisu: { scope: 'restart', label: 'Tiramisu config' },
             release: { scope: 'restart', label: 'Release selection' },
-            core: { scope: 'live', label: 'Engine' },
+            core: { scope: 'live', label: 'Tentacle' },
             sched: { scope: 'restart', label: 'Scheduler' },
             https: { scope: 'restart', label: 'HTTPS' },
             restore: { scope: 'restart', label: 'Restore' },
@@ -2313,7 +2314,7 @@
             const effect = { 'sec-engine': 'engine settings apply live', 'sec-access': 'applies live',
                 'sec-release': 'used by the next sync', 'sec-scheduler': 'picked up within 1 minute' }[vis && vis.id] || 'takes effect after Restart';
             document.getElementById('cb-list').textContent = n ? changes.map(c => c.text).join('  ·  ')
-                : restartPending ? stamp + 'takes effect after Restart. Engine changes are already live.'
+                : restartPending ? stamp + 'takes effect after Restart. Tentacle changes are already live.'
                     : stamp + effect;
             const rc = document.getElementById('cb-restart');
             rc.hidden = !restartN;
@@ -2408,7 +2409,7 @@
         // =============================================================
         // 08 History: configuration versions and restore
         // =============================================================
-        const HIST_SOURCE = { ui: 'Control Panel', api: 'API token', internal: 'Engine', import: 'Import', cli: 'Command line', rollback: 'Restore', default: 'Defaults' };
+        const HIST_SOURCE = { ui: 'Control Panel', api: 'API token', internal: 'Tiramisu', import: 'Import', cli: 'Command line', rollback: 'Restore', default: 'Defaults' };
         let histEntries = [];
         let histOpen = null;      // version whose changes are shown
         let histRestore = null;   // version waiting in the change bar
@@ -2448,8 +2449,8 @@
 
         function histSummary(e) {
             if (e.baseline) return 'Oldest version kept';
-            if (e.note === 'baseline') return 'Engine settings when the history started';
-            if (e.note === 'defaults') return 'Default Engine settings';
+            if (e.note === 'baseline') return 'Tentacle settings when the history started';
+            if (e.note === 'defaults') return 'Default Tentacle settings';
             if (e.note) return e.note.replace(/^rollback to #/, 'Restored version ' + (e.kind === 'engine' ? 'E' : '#'));
             if (e.source === 'import') return e.changes.length ? `Imported, ${e.changes.length} setting${e.changes.length > 1 ? 's' : ''} changed` : 'Imported, nothing changed';
             if (!e.changes.length) return e.source === 'default' ? 'Default settings' : 'No changes';
@@ -2511,7 +2512,7 @@
                 const who = histEl('span', 'who');
                 who.appendChild(histEl('b', '', HIST_SOURCE[e.source] || e.source));
                 if (e.actor) who.appendChild(histEl('span', 'small', '· ' + e.actor));
-                if (engine) who.appendChild(histEl('span', 'chip-tag soft', 'engine'));
+                if (engine) who.appendChild(histEl('span', 'chip-tag soft', 'tentacle'));
                 head.appendChild(who);
                 head.appendChild(histEl('span', 'sum small', histSummary(e)));
                 if (e.current && engine) head.appendChild(histEl('span', 'chip-tag sig-green', 'in use'));
@@ -2541,7 +2542,7 @@
                     b.onclick = () => { histCancelRestore(); histFocus = key + ':toggle'; histRender(); refreshDirty(); };
                     a.appendChild(b);
                     const newer = histEntries.filter(x => (x.kind || 'config') === (e.kind || 'config') && x.id > e.id).map(histLabel);
-                    if (engine) d.appendChild(histEl('div', 'warn-note', 'Applying restarts the BitTorrent client, as any Engine save does: playback in progress stops.'));
+                    if (engine) d.appendChild(histEl('div', 'warn-note', 'Applying may reconnect the BitTorrent client: timeout, retrackers, read-ahead, Responsive and Shield apply live; disk warmup and the save path wait for a restart. A reconnect stops playback in progress.'));
                     const keep = !newer.length ? '' : ` ${newer.length > 3 ? 'The newer versions' : newer.length > 1 ? newer.slice(0, -1).join(', ') + ' and ' + newer.at(-1) : newer[0]} stay${newer.length === 1 ? 's' : ''} in the list.`;
                     a.appendChild(histEl('span', 'small faint', `${engine ? 'Apply' : 'Apply & restart'} in the bar below to restore.${keep}`));
                     d.appendChild(a);
@@ -2557,7 +2558,7 @@
                     b.dataset.hf = key + ':restore';
                     b.onclick = () => histStartRestore(key);
                     a.appendChild(b);
-                    a.appendChild(histEl('span', 'small faint', `Brings back the ${engine ? 'Engine ' : ''}settings as they were right after ${histLabel(e)}; newer versions stay in the list.`));
+                    a.appendChild(histEl('span', 'small faint', `Brings back the ${engine ? 'Tentacle ' : ''}settings as they were right after ${histLabel(e)}; newer versions stay in the list.`));
                     d.appendChild(a);
                     row.appendChild(d);
                 }
@@ -2571,7 +2572,7 @@
         }
 
         async function histStartRestore(key) {
-            const id = key.split(':')[1], base = histIsEngine(key) ? '/api/gostorm/history' : '/api/config/history';
+            const id = key.split(':')[1], base = histIsEngine(key) ? '/api/tentacle/history' : '/api/config/history';
             const others = Object.keys(GROUPS).filter(g => g !== 'restore' && isDirty(g));
             if (others.length) {
                 lastError = HIST_OTHERS;
@@ -2610,7 +2611,7 @@
             const engine = histIsEngine(histRestore), id = Number(histRestore.split(':')[1]);
             let r;
             try {
-                r = await fetch(engine ? '/api/gostorm/rollback' : '/api/config/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+                r = await fetch(engine ? '/api/tentacle/rollback' : '/api/config/rollback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
             } catch (_) { return { ok: false, message: 'Restore: connection error' }; }
             if (!r.ok) {
                 const msg = 'Restore: ' + ((await r.text()).trim() || r.status);
@@ -2620,7 +2621,7 @@
             const res = await r.json().catch(() => ({}));
             histRestore = null;
             histPreview = null;
-            if (engine) { await loadCore(); await histLoad(); return { ok: true, restart: false }; }
+            if (engine) { await loadCore(); await histLoad(); return { ok: true, restart: !!res.restart }; }
             // The engine already uses the restored configuration: show it, so the next save builds on it
             // and the restart knows whether the scheme changes.
             await loadEngine();
@@ -2637,7 +2638,7 @@
                 if (!r.ok) throw new Error(r.status);
                 const cfg = await r.json();
                 // The Engine history is optional: an older engine without it still shows the configuration.
-                const eng = await fetch('/api/gostorm/history?limit=50', { cache: 'no-store' })
+                const eng = await fetch('/api/tentacle/history?limit=50', { cache: 'no-store' })
                     .then(x => x.ok ? x.json() : null).catch(() => null);
                 histEngineMissing = eng === null;
                 histEntries = cfg.concat(eng || []).sort((a, b) => b.created_at - a.created_at || b.id - a.id);
@@ -2700,8 +2701,8 @@
                     box.appendChild(row);
                 });
                 const lamp = document.getElementById('rail-lamp');
-                lamp.className = 'lamp ' + (h.gostorm && h.gostorm.ok ? 'run' : 'err');
-                document.getElementById('rail-state').textContent = h.gostorm && h.gostorm.ok ? 'Engine online' : 'Engine unreachable';
+                lamp.className = 'lamp ' + (h.tentacle && h.tentacle.ok ? 'run' : 'err');
+                document.getElementById('rail-state').textContent = h.tentacle && h.tentacle.ok ? 'Tentacle online' : 'Tentacle unreachable';
             } catch (_) { }
         }
         loadLive();

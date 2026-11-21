@@ -611,6 +611,13 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-dot.off { fill: var(--hair2); opacity: .45; }
 
 .sw-box.strict { fill: var(--accent); }
+.sw-station { fill: var(--panel); stroke: var(--ink); stroke-width: 3; }
+.sw-station.strict { fill: var(--accent); stroke: var(--accent); }
+.sw-meter-track, .sw-meter { fill: none; stroke-width: 5.4; stroke-linecap: butt; }
+.sw-meter-track { stroke: var(--hair2); }
+.sw-meter { stroke: var(--ink); }
+.sw-meter-track.strict { stroke: var(--panel); opacity: .35; }
+.sw-meter.strict { stroke: var(--panel); }
 /* Nodes sit on the pipes with a gap in the panel colour, the same cut in light and dark. */
 .sw-ring { fill: none; stroke: var(--hair2); stroke-width: 2; }
 .sw-ring-arc { fill: none; stroke: var(--ink); stroke-width: 2; }
