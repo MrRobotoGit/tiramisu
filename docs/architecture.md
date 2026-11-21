@@ -296,7 +296,10 @@ worth roughly **5–7% of CPU**.
 
 ### 11. Tentacle: Tiramisu's own engine on an anacrolix/torrent fork
 
-Tentacle is the streaming engine inside the `tiramisu` binary. It replaced
+Tentacle is Tiramisu's own streaming engine, written for one job: playing a
+file while it is still downloading. It asks the swarm for the pieces the player
+needs next, keeps them in a fixed RAM budget, verifies them, and hands them to
+FUSE through an in-memory pipe paced by the player. It replaced
 GoStorm, the engine derived from [TorrServer Matrix](https://github.com/YouROK/TorrServer),
 in v1.13.0. The peer protocol still comes from Tiramisu's patched fork of
 **[anacrolix/torrent](https://github.com/anacrolix/torrent)** (MPL-2.0), reached
@@ -324,16 +327,15 @@ old names), the same library and the same stubs.
 
 The experience in two lines: a first play from a cold swarm takes 2–4 seconds, a
 repeat play from the SSD warmup cache opens in a fraction of a second, and 4K
-HDR playback costs about a fifth of one core. The table is the detail behind
-those two.
+HDR playback keeps the download well ahead of the player. The table is the
+detail behind those two.
 
 | Metric | Value |
 |--------|-------|
 | Cold start (first play, no warmup) | 2–4 s |
 | Warm start (SSD warmup HIT) | **0.1–0.5 s** |
 | Seek latency (cached position) | **< 0.01 s** |
-| CPU at 4K HDR streaming | **20–23%** of one core |
-| Binary size | **33 MB** |
+| Binary size | **39 MB** (arm64, PGO; the GoStorm build was 54 MB) |
 | Memory footprint (read-ahead) | Deterministic 256 MB |
 | GOMEMLIMIT | 2200 MiB |
 | Peak throughput (fast seeder) | **400+ Mbps** |
