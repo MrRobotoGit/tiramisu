@@ -23,7 +23,7 @@
   <a href="https://github.com/MrRobotoGit/tiramisu/releases"><b>Releases</b></a>
 </p>
 
-<p align="center"><img src="docs/screenshots/ui-network-light-v4.gif" alt="Tiramisu live swarm over one minute: a torrent and a client arrive and leave, Adaptive Shield goes STRICT and recovers, every flow at its real speed"></p>
+<p align="center"><img src="docs/screenshots/ui-network-light-v5.gif" alt="Tiramisu live swarm over one minute: a torrent and two clients arrive and leave, Adaptive Shield goes STRICT and recovers, every flow at its real speed"></p>
 <p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph. When a peer sends bad data, Adaptive Shield lights up the pipes it protects (see Screenshots).</sub></p>
 
 ---
