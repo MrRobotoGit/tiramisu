@@ -23,7 +23,7 @@
   <a href="https://github.com/MrRobotoGit/tiramisu/releases"><b>Releases</b></a>
 </p>
 
-<p align="center"><img src="docs/screenshots/ui-network-light-v2.gif" alt="Tiramisu live swarm: peers, torrents, piece cache, FUSE buffer and the devices that are watching, in one graph"></p>
+<p align="center"><img src="docs/screenshots/ui-network-light-v3.gif" alt="Tiramisu live swarm: peers, torrents, the Tentacle and FUSE stations with their gauges, and the devices that are watching, in one graph"></p>
 <p align="center"><sub>The live swarm: every peer, torrent, cache and player in one graph. When a peer sends bad data, Adaptive Shield lights up the pipes it protects (see Screenshots).</sub></p>
 
 ---
@@ -40,16 +40,16 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/ui-dashboard-light-v2.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
-    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark-v2.png" alt="Control Panel, Engine section in dark mode, with three pending changes in the change bar"></td>
+    <td width="50%"><img src="docs/screenshots/ui-dashboard-light-v3.png" alt="Dashboard in light mode: download speed, torrents, active streams, services, scheduler and logs"></td>
+    <td width="50%"><img src="docs/screenshots/ui-control-panel-dark-v3.png" alt="Control Panel, Tentacle section in dark mode, with three pending changes in the change bar"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Dashboard</b>: speed, torrents, streams, services, scheduler and logs</sub></td>
     <td align="center"><sub><b>Control Panel</b>: every setting, with a change bar that applies them together</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/ui-network-strict-dark-v2.png" alt="Live swarm in dark mode during an Adaptive Shield STRICT episode"></td>
-    <td><img src="docs/screenshots/ui-control-panel-light-v2.png" alt="Control Panel, Streaming and FUSE section in light mode"></td>
+    <td><img src="docs/screenshots/ui-network-strict-dark-v3.png" alt="Live swarm in dark mode during an Adaptive Shield STRICT episode: the Tentacle station turns orange and counts its clean streak"></td>
+    <td><img src="docs/screenshots/ui-control-panel-light-v3.png" alt="Control Panel, Streaming and FUSE section in light mode"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Adaptive Shield</b>: a STRICT episode, live</sub></td>
@@ -59,7 +59,7 @@ The BitTorrent engine runs in the same process as the filesystem, so data flows 
 
 <p align="center"><img src="docs/screenshots/ui-piece-map-light-v2.gif" alt="Active streams with the piece map open: a fixed playhead over a strip of pieces, ready, arriving and not yet requested, up to the download frontier"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
 
-<p align="center"><img src="docs/screenshots/ui-mobile-v2.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
+<p align="center"><img src="docs/screenshots/ui-mobile-v3.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
 
 ---
 
@@ -218,7 +218,7 @@ The full guide covers persistent state in `/state`, updates, mount propagation a
 
 ## Sign-in and Tokens
 
-<p align="center"><img src="docs/screenshots/ui-access-light-v2.png" alt="Control Panel, Access section: sign-in required, four named tokens, two for MCP and two for the API, with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, MCP and API tokens, browser sessions (sample data)</sub></p>
+<p align="center"><img src="docs/screenshots/ui-access-light-v3.png" alt="Control Panel, Access section: sign-in required, four named tokens, two for MCP and two for the API, with when and from where each was last used, and the signed-in browser sessions" width="720"><br><sub><b>Control Panel → Access</b>: sign-in, MCP and API tokens, browser sessions (sample data)</sub></p>
 
 Out of the box, anyone who can reach `:9080` on your network can use the Control Panel, the Dashboard and the APIs. Turn on sign-in in **Control Panel → Access** to require a password for all of them: the Control Panel, the Dashboard, every `/api/*` endpoint, `/metrics` and the MCP server.
 
@@ -244,7 +244,7 @@ curl -H "Authorization: Bearer tmr_..." http://<host>:9080/api/health
 
 Every endpoint is documented inside Tiramisu too: **Reference → API** in the side menu (`/api-docs`) lists the stable API with parameters, a ready-to-copy `curl` for your own address and sample responses, and puts the MCP server address first.
 
-<p align="center"><img src="docs/screenshots/ui-api-light.png" alt="Reference, API page: the MCP server box with its address and client config, then the endpoints grouped by area, one of them open with its parameters, request and response" width="720"><br><sub><b>Reference → API</b>: the MCP server and the HTTP endpoints, documented in the app</sub></p>
+<p align="center"><img src="docs/screenshots/ui-api-light-v3.png" alt="Reference, API page: the MCP server box with its address and client config, then the endpoints grouped by area, one of them open with its parameters, request and response" width="720"><br><sub><b>Reference → API</b>: the MCP server and the HTTP endpoints, documented in the app</sub></p>
 
 Sign-in is meant for your home network, with Tiramisu's own HTTPS or a reverse proxy in front of it; see [Sign-in and API tokens](docs/api.md#sign-in-and-api-tokens) and [HTTPS](docs/api.md#https) for the details: rate limits, reverse proxies, certificates and what happens if the state database cannot be read.
 
