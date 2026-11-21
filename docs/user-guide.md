@@ -175,19 +175,14 @@ Enable the scheduler with the **Enable Scheduler** toggle, pick weekdays and sta
 <details>
 <summary><b>Step 9: Tune Tentacle Settings</b></summary>
 
-Via the Control Panel at `:9080/control` → **Tentacle**, or via API. `set` takes the
-whole settings document (a missing key is saved as zero), so read it, change what
-you need and send it back:
+Via the Control Panel at `:9080/control` → **Tentacle**, or via API. `set` changes
+only the keys you send:
 
 ```bash
 curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"get"}' http://127.0.0.1:9080/api/gostorm/settings | \
-  jq '{action: "set", sets: (.ConnectionsLimit = 25 | .ResponsiveMode = true)}' | \
-  curl -s -X POST -H 'Content-Type: application/json' -d @- \
-  http://127.0.0.1:9080/api/gostorm/settings
+  -d '{"action":"set","sets":{"ConnectionsLimit":25,"ResponsiveMode":true}}' \
+  http://127.0.0.1:9080/api/tentacle/settings
 ```
-
-The route keeps its `gostorm` name for compatibility.
 
 | Setting | Default | Notes |
 |---------|---------|-------|

@@ -175,7 +175,7 @@ With sign-in on, every call to `:9080` needs an API token
 (`-H "Authorization: Bearer tmr_..."`), created in **Control Panel → Access**.
 Since v1.13.0 nothing listens on `:8090`: the engine runs in-process and is reached
 through `:9080` only. Move scripts to the Library API, `/api/torrents` and
-`/api/gostorm/settings` (see [API Quick Reference](api.md#api-quick-reference)).
+`/api/tentacle/settings` (see [API Quick Reference](api.md#api-quick-reference)).
 
 </details>
 

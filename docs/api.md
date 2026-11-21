@@ -354,17 +354,18 @@ turn HTTPS off or change the trusted proxies.
 ### Tentacle settings history
 
 The Tentacle settings (cache size, connections, peer port…) have their own
-history, shown in the same Control Panel page: `GET /api/gostorm/history`,
-`GET /api/gostorm/history/{id}/restore` and `POST /api/gostorm/rollback` work like the
-configuration routes above, with the same access rule. The routes keep the
-`gostorm` name for compatibility. Only manual saves become
-versions (Control Panel, `POST /api/gostorm/settings` with `set` or `def`, a restore):
+history, shown in the same Control Panel page: `GET /api/tentacle/history`,
+`GET /api/tentacle/history/{id}/restore` and `POST /api/tentacle/rollback` work like the
+configuration routes above, with the same access rule. The older `/api/gostorm/*`
+routes and the `gostorm` key of `/api/health` still answer, as aliases for existing
+scripts. Only manual saves become
+versions (Control Panel, `POST /api/tentacle/settings` with `set` or `def`, a restore):
 the peer port NAT-PMP sets and the defaults written at start-up do not.
 `StoreSettingsInJson`, and `PeersListenPort` while NAT-PMP is on, are
 never compared, and a save or a restore keeps their current value: with NAT-PMP the
 peer port is the one the VPN forwards, not the one in the form. A restore applies at once, with no restart.
-Changes to the disconnect timeout, retrackers mode, Responsive mode and Adaptive
-Shield apply live; any other change reconnects the BitTorrent client, and playback
+Changes to the disconnect timeout, retrackers mode, Responsive mode, Adaptive
+Shield and read-ahead apply live; any other change reconnects the BitTorrent client, and playback
 in progress stops.
 
 ---
@@ -429,15 +430,12 @@ curl -s http://127.0.0.1:9080/api/torrents | \
 
 # Read the Tentacle settings
 curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"get"}' http://127.0.0.1:9080/api/gostorm/settings | jq
+  -d '{"action":"get"}' http://127.0.0.1:9080/api/tentacle/settings | jq
 
-# Change one: "set" takes the whole document (a missing key is saved as zero),
-# so read it, edit it and send it back. "def" restores the defaults.
+# Change some: "set" changes only the keys in "sets". "def" restores the defaults.
 curl -s -X POST -H 'Content-Type: application/json' \
-  -d '{"action":"get"}' http://127.0.0.1:9080/api/gostorm/settings | \
-  jq '{action: "set", sets: (.ConnectionsLimit = 25)}' | \
-  curl -s -X POST -H 'Content-Type: application/json' -d @- \
-  http://127.0.0.1:9080/api/gostorm/settings
+  -d '{"action":"set","sets":{"ConnectionsLimit":25}}' \
+  http://127.0.0.1:9080/api/tentacle/settings
 ```
 
 Torrents are added and removed through the Library API, which also writes or
