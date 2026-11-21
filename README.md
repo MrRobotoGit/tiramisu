@@ -59,7 +59,7 @@ The result is 4K HDR Dolby Vision playback that starts in under a second from th
   </tr>
 </table>
 
-<p align="center"><img src="docs/screenshots/ui-piece-map-light-v2.gif" alt="Active streams with the piece map open: a fixed playhead over a strip of pieces, ready, arriving and not yet requested, up to the download frontier"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
+<p align="center"><img src="docs/screenshots/ui-piece-map-light-v3.gif" alt="Active streams with the piece map open: a strip of pieces from the playhead to the download frontier, labelled ready, arriving and not requested, with partly filled pieces and deadline underlines, next to the seconds of video ready ahead and their trend over the last 2 minutes"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
 
 <p align="center"><img src="docs/screenshots/ui-mobile-v3.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
 
