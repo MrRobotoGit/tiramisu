@@ -37,8 +37,10 @@ func (t *Torrent) evict(now time.Time, tun Tunables, spans []span, sh shares) {
 	if len(sel) == 0 {
 		if filled > c && now.Sub(t.lastStarve) >= starvedLogStep {
 			t.lastStarve = now
-			t.s.cfg.Logf("[CacheEvict] nothing evictable: filled=%dMB capacity=%dMB protected/reader(MB)=%d readers=%d torrent=%s",
-				filled>>20, c>>20, sh.protected>>20, countStreams(spans), t.ts.Hash())
+			h := cacheHolders(snap, prot, keep)
+			t.s.cfg.Logf("[CacheEvict] nothing evictable: filled=%dMB capacity=%dMB protected/reader(MB)=%d readers=%d torrent=%s piece=%dMB held(MB): window=%d edges=%d written=%d partial=%d other=%d demands=%d",
+				filled>>20, c>>20, sh.protected>>20, countStreams(spans), t.ts.Hash(), pl>>20,
+				h.window>>20, h.edges>>20, h.written>>20, h.partial>>20, h.other>>20, len(spans)-countStreams(spans))
 		}
 		return
 	}
@@ -76,6 +78,36 @@ func (t *Torrent) sweep(now time.Time, snap []piecestore.PieceInfo, prot []piece
 			t.ts.Piece(i).ReleaseIfUnwritten(writes[i])
 		}
 	}
+}
+
+// holders splits the cache by what keeps it resident: verified pieces in a protected window or in
+// a head/tail zone, written pieces awaiting the hash, partial pieces, anything else.
+type holders struct{ window, edges, written, partial, other int64 }
+
+func cacheHolders(snap []piecestore.PieceInfo, prot, keep []piecestore.Window) (h holders) {
+	in := func(ws []piecestore.Window, i int) bool {
+		for _, w := range ws {
+			if i >= w.First && i <= w.Last {
+				return true
+			}
+		}
+		return false
+	}
+	for _, p := range snap {
+		switch {
+		case p.State == piecestore.Written:
+			h.written += p.Allocated
+		case p.State == piecestore.Partial:
+			h.partial += p.Allocated
+		case in(prot, p.Index):
+			h.window += p.Allocated
+		case in(keep, p.Index):
+			h.edges += p.Allocated
+		default:
+			h.other += p.Allocated
+		}
+	}
+	return h
 }
 
 func countStreams(spans []span) int {
