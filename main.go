@@ -3674,6 +3674,13 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 			})
 			pumpTimers.Store(h.path, t)
 			logger.Printf("[V420] Last handle closed: Shared Pump entering %s grace period for %s", graceDuration, filepath.Base(h.path))
+			// No media.stop may follow (scan, players without webhooks): fill the tail once idle.
+			if v, ok := tailFillTargets.Load(h.path); ok && warmup.DiskWarmup != nil {
+				tgt, path := v.(tailFillTarget), h.path
+				warmup.DiskWarmup.EnsureTailWhenIdle(tgt.hash, tgt.fileID, tgt.size, func() bool {
+					return !anyLiveHandleFor(path) && !hashInPlayback(tgt.hash)
+				})
+			}
 		}
 
 	skipGrace:
@@ -4551,6 +4558,19 @@ func anyLiveHandleFor(path string) bool {
 	return found
 }
 
+// hashInPlayback reports whether a confirmed playback is reading a file of the torrent.
+func hashInPlayback(hash string) bool {
+	found := false
+	playbackRegistry.Range(func(_, val interface{}) bool {
+		ps := val.(*PlaybackState)
+		ps.mu.RLock()
+		found = ps.Hash == hash && ps.IsHealthy
+		ps.mu.RUnlock()
+		return !found
+	})
+	return found
+}
+
 // anyLiveHandleForHashExcept is anyLiveHandleForHash excluding one path: the file being
 // stopped still has its own handle open at webhook time and must not count as a sibling.
 func anyLiveHandleForHashExcept(hash, excludePath string) bool {
@@ -5196,6 +5216,7 @@ func main() {
 	// Lets the warmup package pull the tail window itself (EnsureTail): a prefetch nobody
 	// waits on; it cannot import the bridge, so the dependency is injected.
 	warmup.TailFetch = nativeBridge.PrefetchBlock
+	warmup.TailFillYield = func(hash string, _ int) bool { return hashInPlayback(hash) }
 	go registry.StartRegistryWatchdog(backgroundStopChan)
 	go natpmp.NatpmpLoop(backgroundStopChan, gc().NatPMP, logger, host.PeerPort())
 
