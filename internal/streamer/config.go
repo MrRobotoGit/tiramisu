@@ -34,6 +34,9 @@ type Config struct {
 	Tick     time.Duration // scheduler pass cadence, default 1s
 	// OnOpen, when set, is told of every consumer opened (length -1: to the end of the file).
 	OnOpen func(hash string, off, length int64, kind Kind)
+	// Playing, when set, tells whether a torrent is in playback: only those can be at stall risk.
+	// nil: every torrent counts.
+	Playing func(hash string) bool
 }
 
 // Kind of consumer (design.md §1.2).
@@ -54,6 +57,9 @@ var (
 	ErrIdle   = errors.New("streamer: no data within the idle timeout")
 	ErrClosed = errors.New("streamer: stream closed")
 	ErrRange  = errors.New("streamer: offset outside the file")
+	// ErrPaused fails a speculative read (KindPrefetch) whose bytes are not ready while a stream
+	// is at risk of stalling.
+	ErrPaused = errors.New("streamer: speculative read paused by a stall risk")
 )
 
 func (c Config) withDefaults() Config {

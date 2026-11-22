@@ -27,7 +27,9 @@ type Options struct {
 	BlockListEnabled bool
 	BlockListFilter  string
 	PeerInfo         engine.PeerInfoFunc // GeoIP of the swarm view; nil: none
-	Logf             func(format string, args ...any)
+	// Playing tells the scheduler which torrents are in playback (stall risk); nil: all.
+	Playing func(hash string) bool
+	Logf    func(format string, args ...any)
 
 	newEngine func(engine.Config, engine.Deps) *engine.Engine // tests: an offline engine
 }
@@ -75,7 +77,7 @@ func Boot(o Options) (*Host, error) {
 	if err := m.SetApplier(applier.New(e)); err != nil {
 		logf("[Settings] WARN the stored settings did not apply: %v", err)
 	}
-	st := streamer.New(streamer.Config{Logf: logf, Tunables: func() streamer.Tunables { return Tunables(m.Current()) }})
+	st := streamer.New(streamer.Config{Logf: logf, Playing: o.Playing, Tunables: func() streamer.Tunables { return Tunables(m.Current()) }})
 	return &Host{Engine: e, Settings: m, Streamer: st, Bridge: bridge.NewNativeClient(e, st), StateDir: o.StateDir, logf: logf}, nil
 }
 

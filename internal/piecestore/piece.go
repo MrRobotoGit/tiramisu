@@ -107,6 +107,7 @@ func (p *Piece) WriteAt(b []byte, off int64) (int, error) {
 		p.owner.filled.Add(grown)
 	}
 	p.mu.Unlock()
+	p.owner.received.Add(int64(len(b)))
 	p.owner.touchData()
 	p.notify()
 	if first {

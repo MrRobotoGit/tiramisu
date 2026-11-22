@@ -1,6 +1,7 @@
 package warmup
 
 import (
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -871,6 +872,13 @@ func (d *DiskWarmupCache) EnsureTailWhenIdle(hash string, fileID int, fileSize i
 	})
 }
 
+// TailPaused is the error TailFetch returns while speculative reads are paused (a stream at risk
+// of stalling): the fill waits and retries instead of giving up. Wired at startup.
+var TailPaused error
+
+// tailPausedRetry spaces the retries while paused; tailPausedMax bounds the wait.
+var tailPausedRetry, tailPausedMax = 2 * time.Second, 15 * time.Minute
+
 // EnsureTail fills the whole tail window sequentially in the background so TailReady can
 // actually become true. Opportunistic WriteTail only records the ranges a client happened
 // to probe, which leaves the MKV Cues index one network round trip away on every open.
@@ -890,7 +898,9 @@ func (d *DiskWarmupCache) EnsureTail(hash string, fileID int, fileSize int64) {
 		return
 	}
 
-	fetch, pacing, yield := TailFetch, tailFillPacing, TailFillYield // read once: tests swap them
+	// Read once: tests swap them.
+	fetch, pacing, yield := TailFetch, tailFillPacing, TailFillYield
+	paused, pausedRetry, pausedMax := TailPaused, tailPausedRetry, tailPausedMax
 	go func() {
 		defer d.tailFills.Delete(path)
 		tailFillSlots <- struct{}{}
@@ -921,6 +931,10 @@ func (d *DiskWarmupCache) EnsureTail(hash string, fileID int, fileSize int64) {
 				return
 			}
 			n, err := fetch(hash, fileID, tailStart+rel, buf[:end-rel])
+			if paused != nil && errors.Is(err, paused) && time.Since(started) < pausedMax {
+				time.Sleep(pausedRetry)
+				continue
+			}
 			if err != nil || n <= 0 {
 				logf.Printf("[DiskWarmup] Tail fill stopped at %.1f/%.1fMB for %s: %v",
 					float64(rel)/(1<<20), float64(tailLen)/(1<<20), filepath.Base(path), err)

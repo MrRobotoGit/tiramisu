@@ -49,6 +49,13 @@ func (d *deadlineState) sample(n int64, now time.Time) {
 	}
 }
 
+// consumption is the measured drain rate, bytes/s (0: not measured yet).
+func (d *deadlineState) consumption() float64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.rate
+}
+
 // clear forgets the schedule and returns the pieces it had installed.
 func (d *deadlineState) clear() pieceRange {
 	d.mu.Lock()

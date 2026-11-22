@@ -32,6 +32,8 @@ type Stream struct {
 	demoted atomic.Bool
 	waiters atomic.Int32
 	touch   atomic.Int64 // unix nanos of the last progress (or open)
+	// bitrate is the film's bytes per second of content (size / duration); 0: unknown
+	bitrate atomic.Int64
 	// waitSeq: when the reader began waiting on piece waitAt-1 (0: never); it holds until the
 	// position leaves that piece, so a reader woken block by block keeps its place
 	waitSeq atomic.Int64
@@ -39,6 +41,9 @@ type Stream struct {
 
 	closed atomic.Bool
 	done   chan struct{}
+
+	// lead: bytes the consumer already holds past Pos (the pump's lead over the player)
+	lead atomic.Int64
 
 	modePiece  int // piece whose mode is fixed, reader goroutine only
 	responsive bool
@@ -76,6 +81,16 @@ func (t *Torrent) Open(f File, off, length int64, kind Kind) (*Stream, error) {
 	t.trigger()
 	return s, nil
 }
+
+// SetLead records the bytes the consumer holds past Pos, ready for its player (negative: 0).
+func (s *Stream) SetLead(n int64) { s.lead.Store(max(n, 0)) }
+
+// SetBitrate records the film's bytes per second of content: the stall risk measures the
+// buffer at that pace instead of the pump's drain.
+func (s *Stream) SetBitrate(n int64) { s.bitrate.Store(max(n, 0)) }
+
+// Lead is the last SetLead value.
+func (s *Stream) Lead() int64 { return s.lead.Load() }
 
 // Pos is the file offset of the next byte Read returns.
 func (s *Stream) Pos() int64 { return s.pos.Load() }
@@ -139,6 +154,18 @@ func (s *Stream) Read(ctx context.Context, p []byte) (int, error) {
 			}
 			return 0, err
 		}
+		var paused <-chan struct{} // nil: never fires
+		if s.kind == KindPrefetch {
+			paused = s.t.s.pausedCh()
+			select {
+			case <-paused:
+				if s.t.othersAtRisk() {
+					return 0, ErrPaused
+				}
+				paused = nil // only this torrent is at risk: its own prefetch goes on
+			default:
+			}
+		}
 		if idle == nil {
 			idle = time.NewTimer(s.idleTimeout())
 			lastWrites, lastState = piece.WriteCount(), piece.State()
@@ -158,6 +185,10 @@ func (s *Stream) Read(ctx context.Context, p []byte) (int, error) {
 			return 0, ctx.Err()
 		case <-s.done:
 			return 0, ErrClosed
+		case <-paused:
+			if s.t.othersAtRisk() {
+				return 0, ErrPaused
+			}
 		case <-idle.C:
 			// the swarm is stopped only if the whole torrent got nothing (it may be serving
 			// older waiters' pieces first)

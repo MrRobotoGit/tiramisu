@@ -23,6 +23,7 @@ type TorrentStore struct {
 	onData atomic.Pointer[func()]
 	// lastData: unix nanos of the last write or verification into any piece (0: none)
 	lastData atomic.Int64
+	received atomic.Int64 // bytes written into pieces
 }
 
 func newTorrentStore(hash string, pieceLen, length, capacity int64, pool *ChunkPool, shield *Shield) *TorrentStore {
@@ -57,6 +58,9 @@ func (t *TorrentStore) LastData() time.Time {
 }
 
 func (t *TorrentStore) touchData() { t.lastData.Store(time.Now().UnixNano()) }
+
+// Received is the number of bytes written into the store's pieces since it opened.
+func (t *TorrentStore) Received() int64 { return t.received.Load() }
 
 // Done is closed when the store closes.
 func (t *TorrentStore) Done() <-chan struct{} { return t.done }

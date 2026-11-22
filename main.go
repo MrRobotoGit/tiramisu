@@ -44,6 +44,7 @@ import (
 	"tiramisu/internal/lockmgr"
 	"tiramisu/internal/mcp"
 	"tiramisu/internal/metadb"
+	"tiramisu/internal/mkvinfo"
 	"tiramisu/internal/monitor/clients"
 	"tiramisu/internal/monitor/collector"
 	"tiramisu/internal/monitor/dashboard"
@@ -54,6 +55,7 @@ import (
 	"tiramisu/internal/prowlarr"
 	"tiramisu/internal/ratelimit"
 	"tiramisu/internal/registry"
+	"tiramisu/internal/streamer"
 	syncercache "tiramisu/internal/syncer/cache"
 	"tiramisu/internal/syncer/engines"
 	"tiramisu/internal/syncer/scheduler"
@@ -1537,6 +1539,8 @@ type MkvHandle struct {
 	streamedOnce    atomic.Bool  // read sequentially like a player at least once
 	openedAt        time.Time    // set once at Open
 	wakeWait        *pendingWake // activation still running when Open returned; set once
+	bitrateKnown    atomic.Bool  // the film bitrate reached the pump reader
+	bitrateTried    atomic.Int64 // unix nanos of the last header parse attempt
 }
 
 // pendingWake is a torrent activation Open stopped waiting for.
@@ -2087,6 +2091,42 @@ func probePumpParked(confirmedOrInferred bool, playerOff, offset, chunkSize int6
 }
 
 // nativePumpChunk reads a single chunk from the Native pipe into raCache.
+// filmHeaderProbe is how much of the file head the MKV Info lookup reads.
+const filmHeaderProbe = 256 << 10
+
+// filmBitrateOf reads the MKV duration from the SSD head or the read-ahead cache (a var: the FUSE
+// simulator serves no real MKV).
+var filmBitrateOf = func(h *MkvHandle) (int64, bool) {
+	head := make([]byte, filmHeaderProbe)
+	n := 0
+	if warmup.DiskWarmup != nil && h.usesWarmup && h.hash != "" {
+		n, _ = warmup.DiskWarmup.ReadAt(h.hash, h.fileID, head, 0)
+	}
+	if n < len(head) {
+		n = max(n, raCache.CopyTo(h.path, 0, int64(len(head))-1, head))
+	}
+	return mkvinfo.Bitrate(head[:n], h.size)
+}
+
+// applyFilmBitrate gives the pump's stream the film's bitrate (size / MKV duration), from the
+// SSD head or the read-ahead cache, retried every few seconds until the header is local.
+func (h *MkvHandle) applyFilmBitrate(r *bridge.NativeReader) {
+	if h.bitrateKnown.Load() || !strings.HasSuffix(h.path, ".mkv") {
+		return
+	}
+	now := time.Now().UnixNano()
+	if last := h.bitrateTried.Load(); now-last < int64(5*time.Second) || !h.bitrateTried.CompareAndSwap(last, now) {
+		return
+	}
+	b, ok := filmBitrateOf(h)
+	if !ok {
+		return
+	}
+	r.SetBitrate(b)
+	h.bitrateKnown.Store(true)
+	logger.Printf("[Streamer] Film bitrate %.1f MB/s for %s", float64(b)/(1<<20), filepath.Base(h.path))
+}
+
 // pumpLeadLimit caps the pump's lead so the player stays inside the raCache window. The cache
 // holds the last `budget` bytes the pump wrote, i.e. [pumpOff-budget, pumpOff]; the pump stops
 // only once diff EXCEEDS the limit, so its settled lead is limit+chunkSize. With limit == budget
@@ -2147,6 +2187,8 @@ func (h *MkvHandle) nativePumpChunk(r *bridge.NativeReader, offset, chunkSize, p
 			t.SetPlaybackPressure(diff < budget*20/100, offset)
 		}
 	}
+	r.SetPlayerLead(diff) // the streamer's stall risk counts what the pump already holds
+	h.applyFilmBitrate(r)
 
 	end := offset + chunkSize
 	if end > h.size {
@@ -4571,6 +4613,20 @@ func hashInPlayback(hash string) bool {
 	return found
 }
 
+// hashPlaying reports whether a file of the torrent is in playback, confirmed by a webhook or
+// inferred from its reads (players without webhooks).
+func hashPlaying(hash string) bool {
+	found := false
+	playbackRegistry.Range(func(_, val interface{}) bool {
+		ps := val.(*PlaybackState)
+		if ps.Hash == hash && (ps.GetStatus() || ps.IsInferredPlayback()) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
 // anyLiveHandleForHashExcept is anyLiveHandleForHash excluding one path: the file being
 // stopped still has its own handle open at webhook time and must not count as a sibling.
 func anyLiveHandleForHashExcept(hash, excludePath string) bool {
@@ -5200,7 +5256,8 @@ func main() {
 	// engine.md §1.13: legacy import, settings, blocklist, start; Boot returns once ready.
 	logger.Println("Starting the engine...")
 	host, hostErr := enginehost.Boot(enginehost.Options{DB: boot.DB, StateDir: engineStateDir, PortManaged: gc().NatPMP.Enabled,
-		BlockListEnabled: gc().BlockListEnabled, BlockListFilter: gc().BlockListFilter, PeerInfo: peerInfo, Logf: logger.Printf})
+		BlockListEnabled: gc().BlockListEnabled, BlockListFilter: gc().BlockListFilter, PeerInfo: peerInfo, Logf: logger.Printf,
+		Playing: hashPlaying})
 	if hostErr != nil {
 		config.Fatal(hostErr)
 	}
@@ -5217,6 +5274,7 @@ func main() {
 	// waits on; it cannot import the bridge, so the dependency is injected.
 	warmup.TailFetch = nativeBridge.PrefetchBlock
 	warmup.TailFillYield = func(hash string, _ int) bool { return hashInPlayback(hash) }
+	warmup.TailPaused = streamer.ErrPaused
 	go registry.StartRegistryWatchdog(backgroundStopChan)
 	go natpmp.NatpmpLoop(backgroundStopChan, gc().NatPMP, logger, host.PeerPort())
 

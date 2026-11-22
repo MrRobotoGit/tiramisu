@@ -151,9 +151,34 @@ type NativeReader struct {
 	closing          atomic.Bool // Close closed the pipe: no reconnect
 	pipeReaderAtomic atomic.Pointer[io.PipeReader]
 	pieceLen         atomic.Int64
+	stream           atomic.Pointer[streamer.Stream] // the open stream (nil under StreamSource)
+	bitrate          atomic.Int64                    // film bytes/s of content, carried to every stream
 }
 
 func (r *NativeReader) SetPieceLen(n int64) { r.pieceLen.Store(n) }
+
+// SetPlayerLead tells the open stream how far the pump runs ahead of the player, so its stall
+// risk counts the bytes already pumped.
+func (r *NativeReader) SetPlayerLead(n int64) {
+	if r == nil {
+		return
+	}
+	if s := r.stream.Load(); s != nil {
+		s.SetLead(n)
+	}
+}
+
+// SetBitrate gives the stream the film's bytes per second of content (size / duration), which
+// its stall risk uses as consumption; kept for the streams a reconnect or a seek opens later.
+func (r *NativeReader) SetBitrate(n int64) {
+	if r == nil || n <= 0 {
+		return
+	}
+	r.bitrate.Store(n)
+	if s := r.stream.Load(); s != nil {
+		s.SetBitrate(n)
+	}
+}
 
 // ErrInterrupted is returned by ReadAt when the pipe was closed by Interrupt().
 var ErrInterrupted = fmt.Errorf("interrupted by seek")
@@ -402,17 +427,23 @@ var StreamSource func(ctx context.Context, hash string, fileID int, offset, leng
 func (r *NativeReader) startStream(off int64) error {
 	pr, pw := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
-	if _, err := r.c.startSource(ctx, r.hash, r.fileID, off, -1, streamer.KindStream, pw); err != nil {
+	st, err := r.c.startSource(ctx, r.hash, r.fileID, off, -1, streamer.KindStream, pw)
+	if err != nil {
 		cancel()
 		pr.Close()
 		return err
 	}
+	if b := r.bitrate.Load(); b > 0 && st != nil {
+		st.SetBitrate(b)
+	}
+	r.stream.Store(st)
 	r.pipeReader, r.pipeWriter, r.offset, r.cancelFunc = pr, pw, off, cancel
 	r.pipeReaderAtomic.Store(pr)
 	return nil
 }
 
 func (r *NativeReader) closeStream() {
+	r.stream.Store(nil)
 	// V460: cancel first, so the stream stops and releases its priorities promptly.
 	if r.cancelFunc != nil {
 		r.cancelFunc()

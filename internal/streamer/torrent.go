@@ -26,11 +26,15 @@ type Streamer struct {
 	stop chan struct{}
 	wg   sync.WaitGroup
 	seq  atomic.Int64 // consumer open order
+	// riskMu guards the torrents at risk of a stall and riskCh, closed while there are any (risk.go)
+	riskMu sync.Mutex
+	atRisk int
+	riskCh chan struct{}
 }
 
 // New returns a Streamer; schedulers start on first use.
 func New(cfg Config) *Streamer {
-	return &Streamer{cfg: cfg.withDefaults(), tors: map[*piecestore.TorrentStore]*Torrent{}, stop: make(chan struct{})}
+	return &Streamer{cfg: cfg.withDefaults(), tors: map[*piecestore.TorrentStore]*Torrent{}, stop: make(chan struct{}), riskCh: make(chan struct{})}
 }
 
 // Tunables returns the settings in use now.
@@ -88,13 +92,17 @@ type Torrent struct {
 
 	wake chan struct{}
 
-	passMu     sync.Mutex // one pass at a time; guards the fields below
-	local      map[int]piecestore.Priority
-	pins       map[int]bool // pieces holding a demand pin
-	cursorsSet []int64      // read positions last given to the engine
-	lastScan   time.Time
-	lastSweep  time.Time
-	lastStarve time.Time
+	riskOn      atomic.Bool // mirrors risk.on for readers outside the pass
+	passMu      sync.Mutex  // one pass at a time; guards the fields below
+	local       map[int]piecestore.Priority
+	pins        map[int]bool // pieces holding a demand pin
+	cursorsSet  []int64      // read positions last given to the engine
+	lastScan    time.Time
+	lastSweep   time.Time
+	lastStarve  time.Time
+	gp          goodput
+	risk        riskState
+	lastRiskLog time.Time
 }
 
 // Store is the torrent's piece store.
@@ -139,6 +147,7 @@ func (t *Torrent) run() {
 
 func (t *Torrent) exit() {
 	t.ts.SetOnData(nil)
+	t.releaseRisk()
 	t.mu.Lock()
 	t.dead = true
 	t.mu.Unlock()
@@ -195,7 +204,12 @@ func (t *Torrent) pass(now time.Time) {
 	for _, r := range clears {
 		t.clearDeadlines(r, pieceRange{}, nil)
 	}
-	want := desired(spans, sh, np, func(i int) bool { return t.ts.Piece(i).Complete() })
+	t.assessRisk(now, streams, sh)
+	plan := spans
+	if t.othersAtRisk() {
+		plan = withoutPrefetch(spans)
+	}
+	want := desired(plan, sh, np, func(i int) bool { return t.ts.Piece(i).Complete() })
 	if calls := diff(t.local, want); len(calls) > 0 {
 		t.ctl.SetPiecePriorities(calls)
 	}
