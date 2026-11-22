@@ -135,13 +135,12 @@ type Torrent struct {
 	// warmup-active cycle - SetWarmupActive(true) is called repeatedly (once per WriteChunk).
 	hedgeWatchdogRunning atomic.Bool
 
-	// Outlier peer ejection pacing (see samplePeerEwma/maybeEjectOutlierPeer). Timestamps guarded
-	// by t.cl's lock; peerEjectCount is atomic for lock-free /metrics reads.
+	// Peer EWMA pacing (see samplePeerEwma), guarded by t.cl's lock. peerEjectCount counts the
+	// connections replaced to make room for a new one (addPeerConn), atomic for /metrics.
 	lastPeerEwmaSampleAt time.Time
-	lastPeerEjectCheckAt time.Time
 	peerEjectCount       atomic.Int64
-	// Per-transport breakdown of the two proactive drop paths. The *UTP counters are subsets of
-	// their totals, so tcp = total - utp.
+	// Per-transport breakdown of the replacements above and of the warmup churn drops. The *UTP
+	// counters are subsets of their totals, so tcp = total - utp.
 	peerEjectCountUTP atomic.Int64
 	peerChurnCount    atomic.Int64
 	peerChurnCountUTP atomic.Int64
@@ -1122,8 +1121,8 @@ func (t *Torrent) HedgeCircuitOpen() bool {
 	return t.hedgeCircuitOpen.Load()
 }
 
-// PeerEjectCount returns the total number of outlier peers proactively ejected from this
-// torrent (see maybeEjectOutlierPeer), for /metrics.
+// PeerEjectCount returns how many connections of this torrent were replaced by a new one when
+// the pool was full (addPeerConn), for /metrics.
 func (t *Torrent) PeerEjectCount() int64 {
 	return t.peerEjectCount.Load()
 }
@@ -1300,16 +1299,6 @@ func (t *Torrent) hedgeWatchdog() {
 			t.cl.unlock()
 			continue
 		}
-		// Peer sampling and ejection deliberately run even while the hedge circuit breaker is
-		// open. They used to share the breaker's gate, which meant the whole subsystem switched
-		// off exactly when a dead-weight peer costs most - and since the breaker latches for a
-		// full cooldown, ejection had never fired once in production (peer_eject_count 0 against
-		// 29 PEXChurn drops). Sampling must never stop regardless: a gap in it ages
-		// ewmaLastSampleAt, so the first sample afterwards averages across the whole blind
-		// window.
-		now := time.Now()
-		t.samplePeerEwma(now)
-		t.maybeEjectOutlierPeer(now)
 		if t.hedgeCircuitOpen.Load() {
 			t.cl.unlock()
 			continue
@@ -1322,11 +1311,6 @@ func (t *Torrent) hedgeWatchdog() {
 // peerSampleWatchdog keeps every connection's throughput EWMA fresh for the whole life of the
 // swarm, instead of only while hedgeWatchdog happens to be running (which needs warmup or
 // playback pressure). Pure observation: it feeds /metrics and nothing else.
-//
-// Ejection deliberately stays on the hedge watchdog's schedule. With a full buffer we are
-// demand-limited, so peer rates measure what we asked for rather than what a peer can give, and
-// evicting the bottom of that distribution would be close to arbitrary. The same numbers are
-// still worth reporting - they just are not a fair basis for dropping a connection.
 func (t *Torrent) peerSampleWatchdog() {
 	defer t.peerSampleRunning.Store(false)
 	for {
@@ -1516,24 +1500,16 @@ func (t *Torrent) warmupP95(size int64) (p95 time.Duration, ok bool) {
 const (
 	peerEwmaSampleInterval = 5 * time.Second
 	peerEwmaAlpha          = 0.3
-	peerEjectCheckInterval = 10 * time.Second
-	peerEjectMinConns      = 8   // never eject below this swarm size
-	peerEjectMedianRatio   = 0.2 // outlier threshold: EWMA below this fraction of swarm median
-	peerEjectUselessAfter  = 10 * time.Second
-	peerEjectGracePeriod   = 30 * time.Second // don't judge connections younger than this
-	peerEjectCooldown      = 60 * time.Second // keep ejected IP out of outgoing dials
 )
 
-// samplePeerEwma updates each connected peer's throughput EWMA. Called from the hedge watchdog
+// samplePeerEwma updates each connected peer's throughput EWMA. Called from peerSampleWatchdog
 // tick; self-paces to peerEwmaSampleInterval. Client lock must be held.
 func (t *Torrent) samplePeerEwma(now time.Time) {
 	if now.Sub(t.lastPeerEwmaSampleAt) < peerEwmaSampleInterval {
 		return
 	}
 	t.lastPeerEwmaSampleAt = now
-	underPressure := t.warmupActive.Load() || t.playbackPressureActive.Load()
 	for c := range t.conns {
-		c.ewmaPressureSeen = underPressure
 		useful := c._stats.BytesReadUsefulData.Int64()
 		if c.ewmaLastSampleAt.IsZero() {
 			c.ewmaLastBytes = useful
@@ -1554,100 +1530,6 @@ func (t *Torrent) samplePeerEwma(now time.Time) {
 			c.ewmaRate = peerEwmaAlpha*inst + (1-peerEwmaAlpha)*c.ewmaRate
 		}
 	}
-}
-
-// maybeEjectOutlierPeer drops at most one statistical outlier connection per check, when the
-// pool is full and a replacement is queued in t.peers. Never ejects the sole source of an
-// imminently-needed piece. Client lock must be held.
-func (t *Torrent) maybeEjectOutlierPeer(now time.Time) {
-	if now.Sub(t.lastPeerEjectCheckAt) < peerEjectCheckInterval {
-		return
-	}
-	t.lastPeerEjectCheckAt = now
-	if len(t.conns) < peerEjectMinConns || len(t.conns) < t.maxEstablishedConns-2 {
-		return
-	}
-	if t.peers.Len() == 0 {
-		return // no queued replacement - a slow slot beats an empty one
-	}
-	rates := make([]float64, 0, len(t.conns))
-	var worst *PeerConn
-	for c := range t.conns {
-		// ewmaPressureSeen: never judge a peer on a rate measured while the buffer was full -
-		// that number says how much we asked for, not what the peer can deliver.
-		if !c.ewmaSeeded || !c.ewmaPressureSeen || now.Sub(c.completedHandshake) < peerEjectGracePeriod {
-			continue
-		}
-		rates = append(rates, c.ewmaRate)
-		if worst == nil || c.ewmaRate < worst.ewmaRate {
-			worst = c
-		}
-	}
-	if worst == nil || len(rates) < peerEjectMinConns {
-		return
-	}
-	sort.Float64s(rates)
-	median := rates[len(rates)/2]
-	if median <= 0 {
-		return // swarm-wide stall (pause, tunnel hiccup) - nothing to single out
-	}
-	if worst.ewmaRate >= median*peerEjectMedianRatio {
-		return
-	}
-	if now.Sub(worst.lastUsefulChunkReceived) < peerEjectUselessAfter {
-		return
-	}
-	if t.peerIsSolePieceSource(worst) {
-		return
-	}
-	if t.churnCooldown == nil {
-		t.churnCooldown = make(map[string]churnCooldownEntry)
-	}
-	t.churnCooldown[churnCooldownKey(worst.RemoteAddr)] = churnCooldownEntry{until: now.Add(peerEjectCooldown)}
-	t.peerEjectCount.Add(1)
-	if worst.utp() {
-		t.peerEjectCountUTP.Add(1)
-	}
-	uselessFor := "ever (no useful chunk received)"
-	if !worst.lastUsefulChunkReceived.IsZero() {
-		uselessFor = now.Sub(worst.lastUsefulChunkReceived).Round(time.Second).String()
-	}
-	t.logger.WithDefaultLevel(log.Warning).Printf(
-		"[PeerEject] hash=%s dropping outlier peer %v: ewma %.0f B/s vs swarm median %.0f B/s, no useful chunk for %s",
-		t.infoHash.HexString(), worst.RemoteAddr, worst.ewmaRate, median, uselessFor)
-	worst.drop()
-	t.openNewConns()
-}
-
-// peerIsSolePieceSource reports whether c is the only connected peer with an incomplete piece
-// in the active warmup/playback-pressure window.
-func (t *Torrent) peerIsSolePieceSource(c *PeerConn) bool {
-	var begin, end pieceIndex
-	var ok bool
-	if t.warmupActive.Load() {
-		begin, end, ok = t.warmupPieceRange(hedgeWarmupPieceWindow)
-	} else {
-		begin, end, ok = t.playbackPressureRange()
-	}
-	if !ok {
-		return false
-	}
-	for i := begin; i < end; i++ {
-		if t.pieceComplete(i) || !c.peerHasPiece(i) {
-			continue
-		}
-		held := false
-		for other := range t.conns {
-			if other != c && other.peerHasPiece(i) {
-				held = true
-				break
-			}
-		}
-		if !held {
-			return true
-		}
-	}
-	return false
 }
 
 func (t *Torrent) close(wg *sync.WaitGroup) (err error) {
@@ -2229,7 +2111,7 @@ func (t *Torrent) openNewConns() (initiated int) {
 			return
 		}
 		p := t.peers.PopMax()
-		// Skip IPs churned/ejected recently - avoid immediately re-filling a freed slot.
+		// Skip IPs churned recently - avoid immediately re-filling a freed slot.
 		if t.cl.config.AggressivePeerManagement && len(t.churnCooldown) > 0 {
 			if entry, ok := t.churnCooldown[churnCooldownKey(p.Addr)]; ok && time.Now().Before(entry.until) {
 				continue
@@ -2882,6 +2764,10 @@ func (t *Torrent) addPeerConn(c *PeerConn) (err error) {
 		})
 		if c == nil {
 			return errors.New("don't want conn")
+		}
+		t.peerEjectCount.Add(1)
+		if c.utp() {
+			t.peerEjectCountUTP.Add(1)
 		}
 		c.close()
 		t.deletePeerConn(c)

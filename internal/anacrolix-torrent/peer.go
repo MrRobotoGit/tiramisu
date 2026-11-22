@@ -81,16 +81,12 @@ type (
 		gradient2Limit *gradient2
 		// gradient2Window wraps gradient2Limit when Gradient2Windowed is on. Guarded by t.cl's lock.
 		gradient2Window *windowedGradient2
-		// Recent-throughput EWMA for outlier ejection (see maybeEjectOutlierPeer); unlike
+		// Recent-throughput EWMA for /metrics (see samplePeerEwma); unlike
 		// downloadRate()'s lifetime average, this reflects current behavior. Guarded by t.cl's lock.
 		ewmaRate         float64
 		ewmaSeeded       bool // false until first sample - distinguishes "no data" from a real zero rate
 		ewmaLastBytes    int64
 		ewmaLastSampleAt time.Time
-		// ewmaPressureSeen is true when the most recent sample was taken while the torrent was
-		// demanding throughput (warmup or playback pressure). Only then does the rate reflect
-		// what the peer can give rather than what we happened to ask for.
-		ewmaPressureSeen bool
 
 		// Stuff controlled by the local peer.
 		needRequestUpdate    string
