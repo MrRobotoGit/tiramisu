@@ -48,7 +48,7 @@ const (
 )
 
 // adaptiveTargetLatency is the queue target for a peer whose minimum request latency is minLat.
-// Adapted from TCP Vegas/BBR as used for concurrency limits (Netflix): queue only what keeps the
+// Delay-based, as in TCP congestion control: queue only what keeps the
 // path busy, instead of a fixed amount of time.
 func adaptiveTargetLatency(minLat time.Duration, ok bool) time.Duration {
 	if !ok {

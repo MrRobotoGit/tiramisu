@@ -107,7 +107,7 @@ func aheadOf(ts *piecestore.TorrentStore, sp span, readahead int64) int64 {
 	return max(min(at, end)-sp.pos, 0)
 }
 
-// quantileForBuffer picks the goodput quantile from the seconds of content ready (Kairos):
+// quantileForBuffer picks the goodput quantile from the seconds of content ready:
 // pessimistic when the buffer is thin, the median when it is deep, linear in between.
 func quantileForBuffer(sec float64) float64 {
 	lo, hi := bufferLow.Seconds(), bufferHigh.Seconds()

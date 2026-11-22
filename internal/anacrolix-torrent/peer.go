@@ -77,7 +77,7 @@ type (
 		// by t.cl's lock.
 		requestMeanLatency *expAvgMeasurement
 		// gradient2Limit, when Gradient2 is on, sizes the request queue from the closed-loop
-		// Netflix Gradient2 limiter. Lazily created. Guarded by t.cl's lock.
+		// Gradient2 limiter. Lazily created. Guarded by t.cl's lock.
 		gradient2Limit *gradient2
 		// gradient2Window wraps gradient2Limit when Gradient2Windowed is on. Guarded by t.cl's lock.
 		gradient2Window *windowedGradient2

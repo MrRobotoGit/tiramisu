@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Scheduling levers adapted from Netflix concurrency-limits, each behind its own variable so it
+// Scheduling levers adapted from concurrency-limit algorithms, each behind its own variable so it
 // can be measured on its own. Gradient2Windowed is on by default: the windowed sampler is the mode
 // the reference uses, and the per-chunk sampler does not control a shared bottleneck (measured on
 // the local simulator 2026-10-02). AIMD and the request reserve remain opt-in.

@@ -135,7 +135,7 @@ type ClientConfig struct {
 	// queue, would not finish the block sooner than the holder (peak-EWMA placement). Off by
 	// default until measured; TORRENT_PEAK_EWMA=1 enables it.
 	PeakEwma bool
-	// Gradient2 sizes each peer's request queue with Netflix's closed-loop Gradient2 limiter
+	// Gradient2 sizes each peer's request queue with a closed-loop gradient limiter
 	// (average-RTT gradient, app-limited aware) instead of the fixed/adaptive target. Off by
 	// default; TORRENT_GRADIENT2=1 enables it. When on it takes precedence over AdaptivePipeline.
 	Gradient2 bool

@@ -14,7 +14,7 @@ const gradient2EnvKey = "TORRENT_GRADIENT2"
 // defaultGradient2 is off by decision after the 2026-10-02 local-simulator run: against the
 // adaptive BDP pipeline, G2 (windowed or per-chunk, any cap) produced ~0.3 stalls >1s per mixed
 // swarm run, doubled the worst read, and 3-6x the cancellations, with no throughput win; the
-// lossy-tunnel behaviour was not fixed by the Netflix minLimit either. Off until the per-peer
+// lossy-tunnel behaviour was not fixed by the reference minLimit either. Off until the per-peer
 // choke/queue mechanism is understood and measured.
 const defaultGradient2 = false
 
@@ -49,7 +49,7 @@ func gradient2FromEnv() bool {
 //
 // The algorithm parameters follow the Java reference (rttTolerance 1.5, long-RTT decay 0.95), not
 // the Go port (which drops the tolerance and decays by 0.9). The bounds are the engine's, not
-// Netflix's server defaults: a torrent peer should not be forced to hold 20 requests in flight.
+// the reference server defaults: a torrent peer should not be forced to hold 20 requests in flight.
 const (
 	gradient2QueueSize    = 4
 	gradient2Smoothing    = 0.2
@@ -195,7 +195,7 @@ func clampGradient2Limit(limit int, peerMax int64) int {
 	return limit
 }
 
-// expAvgMeasurement is Netflix's ExpAvgMeasurement: a simple average for the first warmupWindow
+// expAvgMeasurement is the reference ExpAvgMeasurement: a simple average for the first warmupWindow
 // samples, then an exponential average with factor 2/(window+1).
 type expAvgMeasurement struct {
 	value        float64
