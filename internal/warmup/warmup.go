@@ -169,6 +169,7 @@ type DiskWarmupCache struct {
 	tailCoverage sync.Map   // V265: path -> *tailRange (written range tracking)
 	tailFills    sync.Map   // path -> true while a sequential tail fill is running
 	warmupStarts sync.Map   // path -> time.Time (STARTING timestamp, for duration histogram)
+	touched      sync.Map   // path -> time.Time of the last mtime refresh on read
 	writeCh      chan warmupWrite
 }
 
@@ -274,6 +275,19 @@ func (d *DiskWarmupCache) scanExisting(dropHeads bool) (total int64, dropped, re
 		}
 	}
 	return total, dropped, residues, nil
+}
+
+// touchInterval bounds mtime refreshes on read: eviction orders by mtime, minutes are enough.
+const touchInterval = time.Minute
+
+// touch marks path as used now, so quota eviction follows reads and not only the last write.
+func (d *DiskWarmupCache) touch(path string) {
+	now := time.Now()
+	if v, ok := d.touched.Load(path); ok && now.Sub(v.(time.Time)) < touchInterval {
+		return
+	}
+	d.touched.Store(path, now)
+	os.Chtimes(path, now, now)
 }
 
 func fileExists(path string) bool {
@@ -635,6 +649,9 @@ func (d *DiskWarmupCache) ReadAt(hash string, fileID int, buf []byte, off int64)
 	}
 
 	n, err := ch.f.ReadAt(buf, off)
+	if n > 0 {
+		d.touch(path)
+	}
 	return n, err
 }
 
@@ -738,6 +755,9 @@ func (d *DiskWarmupCache) ReadTail(hash string, fileID int, buf []byte, absolute
 	}
 
 	n, err := ch.f.ReadAt(buf, relOffset)
+	if n > 0 {
+		d.touch(path)
+	}
 	return n, err
 }
 
@@ -755,6 +775,7 @@ func (d *DiskWarmupCache) RemoveHash(hash string) {
 
 			d.closeHandle(fullPath)
 			d.sizeCache.Delete(fullPath)
+			d.touched.Delete(fullPath)
 			d.removeTail(fullPath)
 			os.Remove(fullPath)
 		}
@@ -801,6 +822,11 @@ func (d *DiskWarmupCache) enforceQuotaLocked(needed int64) {
 		if diskTotal+needed <= quota {
 			break
 		}
+		// A live handle means a reader or writer is on it now: never evict from under it.
+		if v, ok := d.handles.Load(fi.path); ok && time.Since(time.Unix(0, v.(*cachedHandle).lastUsedNano.Load())) < handleIdleMax {
+			continue
+		}
+		d.touched.Delete(fi.path)
 		d.closeHandle(fi.path)
 		d.sizeCache.Delete(fi.path)
 		d.removeTail(fi.path)
