@@ -143,7 +143,8 @@ func (t *Torrent) ActivePeers() int {
 func (e *Engine) ListStreaming() []*Torrent {
 	var out []*Torrent
 	for _, t := range e.ListHydrated() {
-		if down, _ := t.stats.speeds(); t.Consumers() > 0 || down > 0 {
+		// IsPriority: playback confirmed by the media server, even while the player reads from its own buffer.
+		if down, _ := t.stats.speeds(); t.Consumers() > 0 || down > 0 || t.IsPriority.Load() {
 			out = append(out, t)
 		}
 	}
