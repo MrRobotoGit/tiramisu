@@ -1,6 +1,6 @@
-// Package mkvinfo reads the duration of a Matroska file from its header, so the stall-risk
-// estimate can measure the buffer in seconds of content (the film's bitrate), not in the pump's
-// drain, which follows the player's buffering.
+// Package mkvinfo reads the duration of a film (Matroska header, or an MP4's mvhd in its head or
+// tail), so the stall-risk estimate can measure the buffer in seconds of content (the film's
+// bitrate), not in the pump's drain, which follows the player's buffering.
 package mkvinfo
 
 import (
@@ -51,8 +51,20 @@ func Duration(head []byte) (time.Duration, bool) {
 
 // Bitrate is the file's average bytes per second of content: size over Duration.
 func Bitrate(head []byte, size int64) (int64, bool) {
+	return BitrateOf(head, nil, size)
+}
+
+// BitrateOf is size over the duration read from head (Matroska, or a fast-start MP4) or from
+// tail (an MP4 written moov-last). Some ".mkv" files are MP4 inside.
+func BitrateOf(head, tail []byte, size int64) (int64, bool) {
 	d, ok := Duration(head)
-	if !ok || size <= 0 {
+	if !ok {
+		d, ok = MP4Duration(head)
+	}
+	if !ok {
+		d, ok = MP4Duration(tail)
+	}
+	if !ok || size <= 0 || d <= 0 {
 		return 0, false
 	}
 	return int64(float64(size) / d.Seconds()), true

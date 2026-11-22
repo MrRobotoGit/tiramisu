@@ -1541,6 +1541,8 @@ type MkvHandle struct {
 	wakeWait        *pendingWake // activation still running when Open returned; set once
 	bitrateKnown    atomic.Bool  // the film bitrate reached the pump reader
 	bitrateTried    atomic.Int64 // unix nanos of the last header parse attempt
+	mp4HeadTried    atomic.Bool  // an MP4's larger head was searched for its moov once
+	mp4TailTried    atomic.Bool  // an MP4's SSD tail was searched for its moov once
 }
 
 // pendingWake is a torrent activation Open stopped waiting for.
@@ -2094,18 +2096,41 @@ func probePumpParked(confirmedOrInferred bool, playerOff, offset, chunkSize int6
 // filmHeaderProbe is how much of the file head the MKV Info lookup reads.
 const filmHeaderProbe = 256 << 10
 
-// filmBitrateOf reads the MKV duration from the SSD head or the read-ahead cache (a var: the FUSE
-// simulator serves no real MKV).
+// filmBitrateOf reads the film's duration from the SSD head or the read-ahead cache (a var: the
+// FUSE simulator serves no real MKV). An MP4 named .mkv keeps it in its moov, in the head or at
+// the end of the file.
 var filmBitrateOf = func(h *MkvHandle) (int64, bool) {
 	head := make([]byte, filmHeaderProbe)
 	n := 0
-	if warmup.DiskWarmup != nil && h.usesWarmup && h.hash != "" {
+	warm := warmup.DiskWarmup != nil && h.usesWarmup && h.hash != ""
+	if warm {
 		n, _ = warmup.DiskWarmup.ReadAt(h.hash, h.fileID, head, 0)
 	}
 	if n < len(head) {
 		n = max(n, raCache.CopyTo(h.path, 0, int64(len(head))-1, head))
 	}
-	return mkvinfo.Bitrate(head[:n], h.size)
+	if b, ok := mkvinfo.Bitrate(head[:n], h.size); ok || n < 8 || string(head[4:8]) != "ftyp" {
+		return b, ok
+	}
+	// MP4: the moov sits in a larger head (fast-start) or at the end of the file. Each is
+	// searched once, when its 16 MB are on the SSD; an MP4 without a duration stays unknown.
+	if !warm {
+		return 0, false
+	}
+	span := min(warmup.TailWarmupSize, h.size)
+	if warmup.DiskWarmup.GetAvailableRange(h.hash, h.fileID) >= span && h.mp4HeadTried.CompareAndSwap(false, true) {
+		big := make([]byte, span)
+		nb, _ := warmup.DiskWarmup.ReadAt(h.hash, h.fileID, big, 0)
+		if b, ok := mkvinfo.BitrateOf(big[:nb], nil, h.size); ok {
+			return b, ok
+		}
+	}
+	if warmup.DiskWarmup.TailReady(h.hash, h.fileID) && h.mp4TailTried.CompareAndSwap(false, true) {
+		tail := make([]byte, span)
+		m, _ := warmup.DiskWarmup.ReadTail(h.hash, h.fileID, tail, h.size-span, h.size)
+		return mkvinfo.BitrateOf(nil, tail[:m], h.size)
+	}
+	return 0, false
 }
 
 // applyFilmBitrate gives the pump's stream the film's bitrate (size / MKV duration), from the
