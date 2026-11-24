@@ -467,6 +467,17 @@ func (d *DiskWarmupCache) getHandle(path string) (*cachedHandle, error) {
 	return ch, nil
 }
 
+// storeNewHandle caches the handle of a file just created, keeping one a concurrent getHandle
+// stored first.
+func (d *DiskWarmupCache) storeNewHandle(path string, f *os.File) {
+	ch := &cachedHandle{f: f}
+	ch.lastUsedNano.Store(time.Now().UnixNano())
+	if prev, loaded := d.handles.LoadOrStore(path, ch); loaded {
+		prev.(*cachedHandle).lastUsedNano.Store(time.Now().UnixNano())
+		f.Close()
+	}
+}
+
 func (d *DiskWarmupCache) closeHandle(path string) {
 	if val, ok := d.handles.LoadAndDelete(path); ok {
 		ch := val.(*cachedHandle)
@@ -546,6 +557,9 @@ func (d *DiskWarmupCache) processWrite(hash string, fileID int, data []byte, off
 	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if off != 0 {
+			return // removed under this write: [0, off) would be a hole reported as covered
+		}
 		os.MkdirAll(d.dir, 0755)
 
 		d.mu.Lock()
@@ -553,14 +567,12 @@ func (d *DiskWarmupCache) processWrite(hash string, fileID int, data []byte, off
 		d.mu.Unlock()
 		d.missing.Delete(path)
 
-		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 		if err != nil {
 			logf.Printf("[DiskWarmup] Error creating file: %v", err)
 			return
 		}
-		newCh := &cachedHandle{f: f}
-		newCh.lastUsedNano.Store(time.Now().UnixNano())
-		d.handles.Store(path, newCh)
+		d.storeNewHandle(path, f)
 		d.indexAdd(path)
 		d.warmupStarts.Store(path, time.Now())
 		logf.Printf("[DiskWarmup] STARTING %s at offset %d", filepath.Base(path), off)
@@ -767,15 +779,15 @@ func (d *DiskWarmupCache) WriteTail(hash string, fileID int, data []byte, absolu
 		d.mu.Lock()
 		d.enforceQuotaLocked(tailLen)
 		d.mu.Unlock()
-		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-		if err != nil {
+		// O_EXCL: a concurrent first write that lost the race must not truncate the winner's bytes.
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+		if err == nil {
+			atomic.AddInt64(&d.totalSize, tailLen)
+			d.storeNewHandle(path, f)
+			logf.Printf("[DiskWarmup] TAIL STARTING %s at relOffset %d", filepath.Base(path), relOffset)
+		} else if !os.IsExist(err) {
 			return
 		}
-		atomic.AddInt64(&d.totalSize, tailLen)
-		tailCh := &cachedHandle{f: f}
-		tailCh.lastUsedNano.Store(time.Now().UnixNano())
-		d.handles.Store(path, tailCh)
-		logf.Printf("[DiskWarmup] TAIL STARTING %s at relOffset %d", filepath.Base(path), relOffset)
 	}
 
 	ch, err := d.getHandle(path)
