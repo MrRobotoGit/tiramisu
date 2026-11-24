@@ -9,21 +9,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
-func newLoop(t *testing.T, installErr error) (*Loop, *int) {
+func newLoop(t *testing.T, installErr error) (*Loop, *atomic.Int32) {
 	dir := t.TempDir()
-	installs := 0
+	installs := new(atomic.Int32)
 	return &Loop{
 		Dir:         func() string { return dir },
 		URL:         func() string { return "" },
 		CountRanges: func(p string) int { b, _ := os.ReadFile(p); return strings.Count(string(b), "-") },
-		Install:     func() error { installs++; return installErr },
+		Install:     func() error { installs.Add(1); return installErr },
 		Logf:        func(string, ...any) {},
 		Done:        make(chan struct{}),
 		Go:          func(f func()) { go f() },
-	}, &installs
+	}, installs
 }
 
 func TestUpdateGzipInstallsAndRecordsURL(t *testing.T) {
@@ -37,14 +38,14 @@ func TestUpdateGzipInstallsAndRecordsURL(t *testing.T) {
 	url := srv.URL + "/list?archiveformat=gz"
 	l.Update(url)
 	b, err := os.ReadFile(filepath.Join(l.Dir(), "blocklist"))
-	if err != nil || !strings.Contains(string(b), "1.2.3.4-1.2.3.5") || *installs != 1 {
-		t.Fatalf("file %q err %v installs %d", b, err, *installs)
+	if err != nil || !strings.Contains(string(b), "1.2.3.4-1.2.3.5") || installs.Load() != 1 {
+		t.Fatalf("file %q err %v installs %d", b, err, installs.Load())
 	}
 	if u, _ := os.ReadFile(filepath.Join(l.Dir(), "blocklist.url")); string(u) != url {
 		t.Fatalf("url sidecar %q", u)
 	}
 	l.Update(url) // recent and same URL: skipped
-	if *installs != 1 {
+	if installs.Load() != 1 {
 		t.Fatalf("a recent list was downloaded again")
 	}
 }
@@ -56,8 +57,8 @@ func TestUpdateRefusesAListWithNoRanges(t *testing.T) {
 	prev := filepath.Join(l.Dir(), "blocklist")
 	os.WriteFile(prev, []byte("old:9.9.9.9-9.9.9.9\n"), 0644)
 	l.Update(srv.URL)
-	if b, _ := os.ReadFile(prev); !strings.Contains(string(b), "old") || *installs != 0 {
-		t.Fatalf("previous list replaced: %q installs %d", b, *installs)
+	if b, _ := os.ReadFile(prev); !strings.Contains(string(b), "old") || installs.Load() != 0 {
+		t.Fatalf("previous list replaced: %q installs %d", b, installs.Load())
 	}
 	if _, err := os.Stat(prev + ".tmp"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("temp file left behind")
