@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -219,7 +219,7 @@ func (s *TTFFSession) recordRead(src ttffSource, d time.Duration, n int, off int
 
 // ttffIsReal decides at close time whether a session was a real playback
 // (vs a Plex/Samba scan probe). Scanners read almost nothing — even a tail
-// Cues probe stays within one chunk (see tailProbeZoneSize docs in main.go);
+// Cues probe stays within one chunk (see tailProbeZoneSize in stream_policy.go);
 // any 1MB+ of data, or a tail/deep read of more than 64KB, is playback.
 func ttffIsReal(tailOrDeep bool, bytesRead int64) bool {
 	if bytesRead >= ttffProbeMinRead {

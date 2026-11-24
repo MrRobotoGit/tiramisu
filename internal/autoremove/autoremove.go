@@ -1,4 +1,5 @@
-package main
+// Package autoremove blacklists and releases the torrent behind a deleted library stub.
+package autoremove
 
 import (
 	"bufio"
@@ -19,27 +20,36 @@ import (
 	"tiramisu/internal/vfs"
 )
 
-// TorrentRemover handles automatic torrent removal from Tentacle
-// Extracts hash directly from .mkv file content and handles blacklisting
-// TorrentRemover handles automatic torrent removal from Tentacle
-// Extracts hash directly from .mkv file content and handles blacklisting
-type TorrentRemover struct {
+// Remover blacklists and releases the torrent behind a stub, reading the hash from the stub.
+type Remover struct {
 	nativeBridge *bridge.NativeClient // V160: Native Bridge
 	logger       *log.Logger
 	hashPattern  *regexp.Regexp // Still useful for fallback
 	// release is the library's single release point (ReleaseIfUnused), set once it exists.
 	release func(ctx context.Context, hash string) (bool, error)
+	deps    Deps
+}
+
+// Deps is what the remover reads from the rest of the process.
+type Deps struct {
+	StateDir      func() string                // where blacklist.json lives
+	AudioRegistry func() library.AudioRegistry // audio projections that may still use a torrent
+	ClearNegative func(hash string)            // forget the sync's negative cache for hash
 }
 
 // SetRelease routes torrent removal through the library, which also checks the other
 // stubs and tv_episodes rows: one episode of a season pack must not take the pack.
-func (tr *TorrentRemover) SetRelease(fn func(ctx context.Context, hash string) (bool, error)) {
+func (tr *Remover) SetRelease(fn func(ctx context.Context, hash string) (bool, error)) {
 	tr.release = fn
 }
 
-// NewTorrentRemover creates a new torrent remover
-func NewTorrentRemover(nativeBridge *bridge.NativeClient, logger *log.Logger) *TorrentRemover {
-	return &TorrentRemover{
+// New returns a remover over the engine bridge.
+func New(nativeBridge *bridge.NativeClient, logger *log.Logger, deps Deps) *Remover {
+	if deps.StateDir == nil || deps.AudioRegistry == nil || deps.ClearNegative == nil {
+		panic("autoremove: every Deps field is required")
+	}
+	return &Remover{
+		deps:         deps,
 		nativeBridge: nativeBridge,
 		logger:       logger,
 		hashPattern:  regexp.MustCompile(`(?i)([a-f0-9]{40})`),
@@ -49,9 +59,9 @@ func NewTorrentRemover(nativeBridge *bridge.NativeClient, logger *log.Logger) *T
 // IdentifyAndBlacklist extracts the hash from a stub and blacklists it. The torrent is
 // released by ReleaseHash once the stub and its registry rows are gone.
 // blacklisted reports whether the release really reached the blacklist.
-func (tr *TorrentRemover) IdentifyAndBlacklist(fullPath string) (hash string, blacklisted bool, err error) {
+func (tr *Remover) IdentifyAndBlacklist(fullPath string) (hash string, blacklisted bool, err error) {
 	filename := filepath.Base(fullPath)
-	title := tr.deriveTitleFromPath(fullPath)
+	title := tr.DeriveTitleFromPath(fullPath)
 
 	// V271: Extract hash from filename suffix FIRST (zero I/O, no FUSE access).
 	// Previously read the file content first, which could deadlock if the file
@@ -77,7 +87,7 @@ func (tr *TorrentRemover) IdentifyAndBlacklist(fullPath string) (hash string, bl
 
 	// 2. ALWAYS add to blacklist (FASE 5.1)
 	blacklisted = true
-	if err := tr.addToBlacklist(fullHash, title); err != nil {
+	if err := tr.AddToBlacklist(fullHash, title); err != nil {
 		blacklisted = false
 		tr.logger.Printf("AutoRemove: WARNING: %s not blacklisted, the sync may add it back: %v", fullHash[:8], err)
 	}
@@ -86,7 +96,7 @@ func (tr *TorrentRemover) IdentifyAndBlacklist(fullPath string) (hash string, bl
 }
 
 // ReleaseHash removes the torrent when nothing references it any more.
-func (tr *TorrentRemover) ReleaseHash(hash string) (bool, error) {
+func (tr *Remover) ReleaseHash(hash string) (bool, error) {
 	if tr.release != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -97,7 +107,7 @@ func (tr *TorrentRemover) ReleaseHash(hash string) (bool, error) {
 
 // extractHashFromFile reads the virtual mkv to get the hash.
 // Supports both JSON (new) and line-based (legacy) formats.
-func (tr *TorrentRemover) extractHashFromFile(path string) string {
+func (tr *Remover) extractHashFromFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -125,8 +135,8 @@ func (tr *TorrentRemover) extractHashFromFile(path string) string {
 	return ""
 }
 
-// deriveTitleFromPath gets the show or movie name from the directory structure
-func (tr *TorrentRemover) deriveTitleFromPath(path string) string {
+// DeriveTitleFromPath gets the show or movie name from the directory structure
+func (tr *Remover) DeriveTitleFromPath(path string) string {
 	// Example: /mnt/torrserver/tv/9-1-1_Nashville (2025)/Season.01/file.mkv
 	// We want "9-1-1_Nashville (2025)"
 	parts := strings.Split(filepath.Dir(path), string(os.PathSeparator))
@@ -145,16 +155,16 @@ func (tr *TorrentRemover) deriveTitleFromPath(path string) string {
 	return lastDir
 }
 
-// addToBlacklist adds a hash and title to the persistent blacklist file
-func (tr *TorrentRemover) addToBlacklist(hash, title string) error {
-	return tr.addToBlacklistAt(filepath.Join(GetStateDir(), "blacklist.json"), hash, title)
+// AddToBlacklist adds a hash and title to the persistent blacklist file
+func (tr *Remover) AddToBlacklist(hash, title string) error {
+	return tr.addToBlacklistAt(filepath.Join(tr.deps.StateDir(), "blacklist.json"), hash, title)
 }
 
 // blacklistMu serialises the read-modify-write: the unlink handler, the Library API
 // and the reaper write concurrently, and the last rename would drop the others' hashes.
 var blacklistMu sync.Mutex
 
-func (tr *TorrentRemover) addToBlacklistAt(blacklistPath, hash, title string) error {
+func (tr *Remover) addToBlacklistAt(blacklistPath, hash, title string) error {
 	blacklistMu.Lock()
 	defer blacklistMu.Unlock()
 	// Readers look the hash up lowercased, so a capitalised entry would never match.
@@ -245,7 +255,7 @@ func (tr *TorrentRemover) addToBlacklistAt(blacklistPath, hash, title string) er
 }
 
 // findFullHashBySuffix (Fallback logic)
-func (tr *TorrentRemover) findFullHashBySuffix(suffix string) (string, string, error) {
+func (tr *Remover) findFullHashBySuffix(suffix string) (string, string, error) {
 	// Use Native Bridge to list torrents (O(N) operation but in-memory so fast)
 	torrents, err := tr.nativeBridge.ListTorrents()
 	if err != nil {
@@ -261,11 +271,11 @@ func (tr *TorrentRemover) findFullHashBySuffix(suffix string) (string, string, e
 }
 
 // removeTorrent calls the Tentacle API to remove a torrent
-func (tr *TorrentRemover) removeTorrent(hash string) (bool, error) {
+func (tr *Remover) removeTorrent(hash string) (bool, error) {
 	// Unlinking a video stub must not take a torrent an audio projection is still
 	// projected from: audio lives in the registry, not as a file under the video
 	// directories, so nothing above this point can see it. Fails closed.
-	registry := audioOwnershipRegistry()
+	registry := tr.deps.AudioRegistry()
 	allowed, err := library.MayDropTorrent(registry, hash)
 	if err != nil {
 		tr.logger.Printf("AutoRemove: keeping torrent %s, cannot check its audio projections: %v", hash[:8], err)
@@ -281,8 +291,6 @@ func (tr *TorrentRemover) removeTorrent(hash string) (bool, error) {
 		return false, err
 	}
 
-	if globalSyncCacheManager != nil {
-		globalSyncCacheManager.ClearNegativeCache(hash)
-	}
+	tr.deps.ClearNegative(hash)
 	return true, nil
 }

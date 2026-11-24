@@ -125,7 +125,7 @@ stopping=""
 
 # Exit code tiramisu uses to ask for a restart (Control Panel button). Any other
 # code ends the container, so a real crash still hands control to Docker's
-# restart policy. Keep in sync with restartExitCode in main.go.
+# restart policy. Keep in sync with restartExitCode in internal/app/globals.go.
 RESTART_EXIT_CODE=75
 
 shutdown() {

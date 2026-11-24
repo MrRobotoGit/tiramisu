@@ -755,14 +755,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if exist "%REPO_ROOT%\settings.html" (
-  copy /y "%REPO_ROOT%\settings.html" "%_stackDir%\src\settings.html" >nul
-  if errorlevel 1 (
-    echo ERROR: Failed to copy settings.html
-    exit /b 1
-  )
-)
-
 REM Internal packages (exclude heavy testdata trees)
 echo [stack] Copying internal packages
 robocopy "%REPO_ROOT%\internal" "%_stackDir%\src\internal" /E /XD ".git" "testdata" ".tmp" /R:2 /W:2 /NFL /NDL /NJH /NJS /NP

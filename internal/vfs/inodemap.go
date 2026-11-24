@@ -33,7 +33,7 @@ const (
 	// Save interval
 	InodeSaveInterval = 60 * time.Second
 
-	// Default save path (unified with main.go)
+	// Default save path (unified with internal/app)
 	DefaultInodeMapPath = "/home/pi/STATE/inode_map.json"
 )
 

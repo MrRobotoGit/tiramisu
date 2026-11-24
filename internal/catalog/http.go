@@ -26,7 +26,7 @@ var (
 
 // SetRetryDefaults overrides the process-wide retry attempt count and base delay used by
 // every Do call site that doesn't otherwise specify its own policy. Intended to be called
-// once at startup (see main.go) from config.Config's MaxRetryAttempts/RetryDelayMS. Passing
+// once at startup (see internal/app/run.go) from config.Config's MaxRetryAttempts/RetryDelayMS. Passing
 // 0 (or a negative value) for either argument resets that value to the compiled-in default
 // (3 attempts / 1000ms) rather than disabling retries or backoff — there is currently no way
 // to configure "0 delay" or "0 attempts" through this API; callers wanting genuinely instant

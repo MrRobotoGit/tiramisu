@@ -32,7 +32,7 @@ The FUSE mount is a projection of engine state, not an administrable directory. 
 
 ## House rules
 
-- **Architecture.** New Go files go into an existing package under `internal/`. The repository root is reserved for `main.go`, `version.go` and the legacy files still coupled to `main`; it is not a valid place for new code. Do not introduce new global state: the existing state stays in `main.go` until it is extracted; internal packages export constructors and types, never singletons.
+- **Architecture.** New Go code goes into the package under `internal/` it belongs to. The repository root holds only `main.go`, which calls `app.Run`, and `version.go`. `internal/app` is wiring only (startup, routes, connecting packages) and must not grow: a new feature gets its own package, and code leaving `internal/app` for a package of its own is welcome. Do not introduce new global state: the existing state stays in `internal/app` until it is extracted; internal packages export constructors and types, never singletons.
 - **Root cause, in Go.** Fixes belong in the Go code path. The embedded HTML/JS is a thin layer; a frontend patch over a backend defect will be rejected.
 - **Performance budget.** Raspberry Pi 4 is the baseline. Memory ceilings, read-ahead budget and startup time are part of the contract. Changes to hot paths need measurements: before/after, with the workload and the hardware named.
 - **Dependencies.** Do not add a module without discussing it in an issue first. The anacrolix/torrent fork is vendored and patched in-tree: changes to it are accepted like any other code, while sending patches upstream to anacrolix remains a deliberate maintainer decision, not a side effect of a PR.
