@@ -112,6 +112,9 @@ func (b *Boot) PatchSaved(body []byte) (base, next Config, err error) {
 	if next.ReadAheadBudgetMB == inUse.ReadAheadBudgetMB && inUse.ReadAheadBudgetMB != base.ReadAheadBudgetMB {
 		next.ReadAheadBudgetMB = base.ReadAheadBudgetMB
 	}
+	if err := next.SecretsFollowURL(&base, body); err != nil {
+		return base, Config{}, err
+	}
 	return base, next, nil
 }
 
@@ -188,8 +191,13 @@ func (b *Boot) Rollback(id int64, actor string) (Config, int64, []Change, error)
 	// A rollback restores settings, not the install's identity.
 	doc = b.Store.keepTelemetryID(doc)
 	// Resolve before saving: a document that cannot be put in use is not saved.
-	if _, err := Resolve(doc, Env{RootPath: b.Root, LegacyPath: LegacyConfigPath(), WithEnv: true}); err != nil {
+	env := Env{RootPath: b.Root, LegacyPath: LegacyConfigPath(), WithEnv: true}
+	restored, err := Resolve(doc, env)
+	if err != nil {
 		return Config{}, 0, nil, err
+	}
+	if inUse, err := Resolve(cur, env); err == nil && restored.Plex.URL != inUse.Plex.URL && envPlexTokenFollows() {
+		return Config{}, 0, nil, errEnvPlexToken
 	}
 	if _, _, err := b.Store.Save(doc, "rollback", actor, fmt.Sprintf("rollback to #%d", id)); err != nil {
 		return Config{}, 0, nil, err
