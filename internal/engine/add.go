@@ -58,7 +58,13 @@ func (e *Engine) addSpec(spec bt.Spec, meta Meta) (*Torrent, error) {
 		}
 		spec.Trackers = mergeStoredTiers(spec.Trackers, stored.Trackers)
 	}
-	spec.Trackers = applyRetrackers(cfg.RetrackersMode, spec.Trackers, e.trackers(), readTrackersFile(e.deps.StateDir))
+	extra := readTrackersFile(e.deps.StateDir)
+	if bt.InfoPrivate(spec.InfoBytes) {
+		// A private torrent announces only to its own trackers (BEP 27), whatever the mode.
+		spec.Trackers = withoutTrackers(spec.Trackers, e.trackers(), BuiltinTrackers, extra)
+	} else {
+		spec.Trackers = applyRetrackers(cfg.RetrackersMode, spec.Trackers, e.trackers(), extra)
+	}
 
 	e.addMu.Lock()
 	defer e.addMu.Unlock()
@@ -142,6 +148,9 @@ func (e *Engine) watchInfo(t *Torrent, displayName string) {
 	}
 	t.extend(e.config().timeout())
 	t.mu.Lock()
+	if t.bt.Private() { // a magnet learns it only now: the saved row keeps no public tracker
+		t.tiers = withoutTrackers(t.tiers, e.trackers(), BuiltinTrackers, readTrackersFile(e.deps.StateDir))
+	}
 	stored := t.stored
 	t.mu.Unlock()
 	if !stored {

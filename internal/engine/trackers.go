@@ -204,12 +204,16 @@ func mergeTrackerLists(lists ...[]string) []string {
 }
 
 // fanOutTrackers adds a freshly loaded list as one tier to every hydrated torrent: spec
-// trackers are built at add time only (5bbf950). Only modes 1 and 3 use the default list.
+// trackers are built at add time only (5bbf950). Only modes 1 and 3 use the default list;
+// private torrents never get it.
 func (e *Engine) fanOutTrackers(list []string) {
 	if m := e.config().RetrackersMode; m != 1 && m != 3 {
 		return
 	}
 	for _, t := range e.ListHydrated() {
+		if t.Private() {
+			continue
+		}
 		t.bt.AddTrackers([][]string{list})
 		t.mu.Lock()
 		t.tiers = mergeStoredTiers(t.tiers, [][]string{list})

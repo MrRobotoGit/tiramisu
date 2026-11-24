@@ -55,6 +55,16 @@ func InfoName(infoBytes []byte) string {
 	return info.BestName()
 }
 
+// InfoPrivate reports the private flag of an info dictionary; false when it does not decode.
+func InfoPrivate(infoBytes []byte) bool {
+	if len(infoBytes) == 0 {
+		return false
+	}
+	mi := metainfo.MetaInfo{InfoBytes: infoBytes}
+	info, err := mi.UnmarshalInfo()
+	return err == nil && info.Private != nil && *info.Private
+}
+
 func fromLib(ts *torrent.TorrentSpec) Spec {
 	var trackers [][]string
 	for _, tier := range ts.Trackers {

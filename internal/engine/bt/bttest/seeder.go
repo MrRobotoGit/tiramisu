@@ -144,3 +144,25 @@ func TorrentFile(t testing.TB, name string, size int, pieceLen int64) (file []by
 	}
 	return file, mi.HashInfoBytes().HexString()
 }
+
+// FlaggedTorrentFile builds a single-file .torrent with the given private flag and announce URL.
+func FlaggedTorrentFile(t testing.TB, private bool, announce string) (file, infoBytes []byte, infoHash string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "p.bin")
+	if err := os.WriteFile(path, make([]byte, 40_000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info := metainfo.Info{PieceLength: 16 << 10, Private: &private}
+	if err := info.BuildFromFilePath(path); err != nil {
+		t.Fatal(err)
+	}
+	ib, err := bencode.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mi := &metainfo.MetaInfo{InfoBytes: ib, Announce: announce}
+	if file, err = bencode.Marshal(mi); err != nil {
+		t.Fatal(err)
+	}
+	return file, ib, mi.HashInfoBytes().HexString()
+}

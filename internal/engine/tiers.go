@@ -49,6 +49,29 @@ func applyRetrackers(mode int, tiers [][]string, defaults, extra []string) [][]s
 	return clean
 }
 
+// withoutTrackers drops the URLs listed in drop, and the tiers left empty.
+func withoutTrackers(tiers [][]string, drop ...[]string) [][]string {
+	skip := map[string]bool{}
+	for _, l := range drop {
+		for _, u := range l {
+			skip[u] = true
+		}
+	}
+	var out [][]string
+	for _, t := range tiers {
+		var keep []string
+		for _, u := range t {
+			if !skip[u] {
+				keep = append(keep, u)
+			}
+		}
+		if len(keep) > 0 {
+			out = append(out, keep)
+		}
+	}
+	return out
+}
+
 // mergeStoredTiers adds, as one tier, the stored URLs the spec does not already have.
 func mergeStoredTiers(spec, stored [][]string) [][]string {
 	seen := map[string]bool{}
