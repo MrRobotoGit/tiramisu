@@ -123,14 +123,15 @@ type Torrent struct {
 
 	// hedgeTriggerCount is the total number of tail-hedge duplicate requests fired, for /metrics.
 	hedgeTriggerCount atomic.Int64
-	// hedgeCircuitOpen is true when hedging is auto-disabled because the trigger rate spiked -
-	// signals the shared VPN tunnel itself is the bottleneck, not peer variance, so hedging would
-	// only waste the pipe further. Auto-resets after a cooldown.
+	// hedgeCircuitOpen is true while hedging is paused because most recent hedges arrived after
+	// the original (see hedgeAllowed), for /metrics.
 	hedgeCircuitOpen atomic.Bool
-	// hedgeWindowStart/hedgeWindowCount track a rolling 60s hedge-rate window for the circuit
-	// breaker. hedgeWindowStart is a Unix nano timestamp.
-	hedgeWindowStart atomic.Int64
-	hedgeWindowCount atomic.Int64
+	// Outcomes of the last resolved hedges (true: the duplicate arrived first) and the next probe
+	// allowed while paused. Client lock.
+	hedgeOutcomes    [hedgeOutcomeWindow]bool
+	hedgeOutcomeN    int
+	hedgeOutcomeNext int
+	hedgeProbeAt     time.Time
 	// hedgeWatchdogRunning guards against spawning more than one hedgeWatchdog goroutine per
 	// warmup-active cycle - SetWarmupActive(true) is called repeatedly (once per WriteChunk).
 	hedgeWatchdogRunning atomic.Bool
@@ -1123,8 +1124,8 @@ func (t *Torrent) HedgeTriggerCount() int64 {
 	return t.hedgeTriggerCount.Load()
 }
 
-// HedgeCircuitOpen reports whether this torrent's hedge circuit breaker is currently tripped
-// (auto-disabled due to an excessive hedge rate), for /metrics.
+// HedgeCircuitOpen reports whether hedging is currently paused because hedges stopped arriving
+// first, for /metrics.
 func (t *Torrent) HedgeCircuitOpen() bool {
 	return t.hedgeCircuitOpen.Load()
 }
@@ -1260,13 +1261,12 @@ func (t *Torrent) PeerTransportStats() (s PeerTransportSnapshot) {
 
 const (
 	hedgeWatchdogInterval = 250 * time.Millisecond
-	// hedgeCircuitBreakerThreshold: reviewed 2026-07-03 against real production data (a Plex
-	// movie scan generating warmup traffic across 12 distinct torrents) - 4 trips, on 4 different
-	// torrents, each independently reaching ~31 hedges/60s during its own warmup burst. Confirmed
-	// reasonable as-is.
-	hedgeCircuitBreakerThreshold = 30
-	hedgeCircuitBreakerWindow    = 60 * time.Second
-	hedgeCircuitBreakerCooldown  = 5 * time.Minute
+	// Hedging pauses while fewer than half of the last hedgeOutcomeWindow resolved hedges arrived
+	// before the original: a duplicate that loses only costs bandwidth. While paused, one probe
+	// hedge per hedgeProbeInterval keeps the estimate current.
+	hedgeOutcomeWindow = 20
+	hedgeOutcomeMin    = 10
+	hedgeProbeInterval = 5 * time.Second
 	// hedgeNoBaselineCeiling: stateless fallback threshold used when warmupP95 has too few
 	// samples to be trusted (ok=false) - covers cold starts on dead swarms (zero responses
 	// ever) AND playback-pressure on resumed torrents, where warmupActive is never set and
@@ -1275,7 +1275,7 @@ const (
 	// playback-pressure is active is unambiguously on the freeze critical path (TTFF target
 	// 2-4s cold start). First reasonable value derived theoretically, NOT production-
 	// validated - calibrate from /metrics + [TailHedge] 'exceeded ceiling' logs, same method
-	// used for hedgeCircuitBreakerThreshold (which was validated on real data 2026-07-03).
+	// used for the hedge rate limit it replaced (validated on real data 2026-07-03).
 	hedgeNoBaselineCeiling = 4 * time.Second
 )
 
@@ -1304,10 +1304,6 @@ func (t *Torrent) hedgeWatchdog() {
 			return
 		}
 		if !t.cl.config.AggressivePeerManagement {
-			t.cl.unlock()
-			continue
-		}
-		if t.hedgeCircuitOpen.Load() {
 			t.cl.unlock()
 			continue
 		}
@@ -1362,12 +1358,6 @@ func (t *Torrent) checkAndFireHedges() {
 	}
 	now := time.Now()
 	for r, rs := range t.requestState {
-		if t.hedgeCircuitOpen.Load() {
-			// A single scan can find many simultaneously-stalled requests (e.g. a near-dead
-			// swarm) - stop as soon as the breaker trips mid-loop instead of calling fireHedge
-			// (and re-tripping/re-logging) once per remaining stalled request in this same scan.
-			return
-		}
 		if _, alreadyHedged := t.hedgedRequests[r]; alreadyHedged {
 			continue // one hedge per request - don't re-hedge an already-hedged still-pending request
 		}
@@ -1381,66 +1371,96 @@ func (t *Torrent) checkAndFireHedges() {
 		if now.Sub(rs.when) < threshold {
 			continue
 		}
-		t.fireHedge(r, req, rs.peer, trigger)
+		if !t.fireHedge(r, req, rs.peer, trigger, now) {
+			return // paused: the rest of this scan would be refused too
+		}
+	}
+}
+
+// hedgeAllowed reports whether a hedge may be sent now. Client lock must be held.
+func (t *Torrent) hedgeAllowed(now time.Time) bool {
+	if t.hedgeOutcomeN < hedgeOutcomeMin {
+		return true
+	}
+	won := 0
+	for _, w := range t.hedgeOutcomes[:t.hedgeOutcomeN] {
+		if w {
+			won++
+		}
+	}
+	if 2*won >= t.hedgeOutcomeN {
+		if t.hedgeCircuitOpen.CompareAndSwap(true, false) {
+			t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s resuming hedges: %d of the last %d arrived before the original", t.infoHash.HexString(), won, t.hedgeOutcomeN)
+		}
+		return true
+	}
+	if t.hedgeCircuitOpen.CompareAndSwap(false, true) {
+		t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s pausing hedges: only %d of the last %d arrived before the original", t.infoHash.HexString(), won, t.hedgeOutcomeN)
+	}
+	if now.Before(t.hedgeProbeAt) {
+		return false
+	}
+	t.hedgeProbeAt = now.Add(hedgeProbeInterval)
+	return true
+}
+
+// recordHedgeOutcome stores whether a hedge response was the first copy of its chunk. Client lock.
+func (t *Torrent) recordHedgeOutcome(won bool) {
+	t.hedgeOutcomes[t.hedgeOutcomeNext] = won
+	t.hedgeOutcomeNext = (t.hedgeOutcomeNext + 1) % hedgeOutcomeWindow
+	if t.hedgeOutcomeN < hedgeOutcomeWindow {
+		t.hedgeOutcomeN++
 	}
 }
 
 // fireHedge sends a duplicate request for req to a next-best available peer (one that isn't
-// already holding the request and reports having the piece, preferring the peer with the most
-// recent useful chunk received - the same recency signal already used for request-stealing in
-// applyRequestState, not a new ranking mechanism). The duplicate is sent as a raw wire request
+// already holding the request, reports having the piece and is not choking us, preferring the
+// shortest hedgeEta; recency breaks ties among peers not yet measured). The duplicate is sent as a raw wire request
 // via peerImpl._request, bypassing t.requestState bookkeeping entirely (which enforces one peer
 // per request index) - the existing "redundant chunk" handling in receiveChunk already discards
-// whichever response arrives second, so this needs no new reconciliation logic. Gated by a
-// rolling 60s hedge-rate circuit breaker: if hedges spike, the bottleneck is shared across
-// peers (a saturated link, a VPN tunnel among other causes) rather than peer variance, so
-// hedging is auto-disabled for a cooldown period instead of adding to the contention.
-// Client lock must be held.
+// whichever response arrives second, so this needs no new reconciliation logic. Gated by
+// hedgeAllowed; returns false when the gate refused it. Client lock must be held.
 //
 // trigger labels which threshold fired ("p95" or "ceiling") and is used only in the log
 // line - it exists so production calibration can distinguish baseline-driven hedges from
 // no-baseline ceiling hedges (see hedgeNoBaselineCeiling).
-func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer, trigger string) {
-	// Pick the candidate BEFORE touching the circuit breaker's rate counter - a stalled request
-	// with no alternative peer available (common in exactly the low-peer-count swarms this
-	// feature targets) must not count against the breaker, since zero duplicate bytes are ever
-	// sent. Counting failed attempts here would let a single chronically-stalled request in a
-	// 1-2-peer swarm trip the breaker in seconds on phantom "hedge" traffic that never happened.
+func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer, trigger string, now time.Time) bool {
+	// Pick the candidate before consulting the gate: with no alternative peer nothing is sent,
+	// so there is nothing to gate (common in the low-peer-count swarms this feature targets).
 	pieceIdx := pieceIndex(req.Index)
 	var candidate *Peer
+	var candidateEta time.Duration
+	candidateKnown := false
 	t.iterPeers(func(p *Peer) {
-		if p == currentPeer || !p.peerHasPiece(pieceIdx) {
+		if p == currentPeer || !p.peerHasPiece(pieceIdx) || p.peerChoking {
 			return
 		}
-		if candidate == nil || p.lastUsefulChunkReceived.After(candidate.lastUsefulChunkReceived) {
-			candidate = p
+		eta, known := hedgeEta(p, int64(req.Length))
+		switch {
+		case candidate == nil:
+		case known != candidateKnown:
+			if !known {
+				return // a measured peer beats an unmeasured one
+			}
+		case known:
+			if eta >= candidateEta {
+				return
+			}
+		default:
+			if !p.lastUsefulChunkReceived.After(candidate.lastUsefulChunkReceived) {
+				return
+			}
 		}
+		candidate, candidateEta, candidateKnown = p, eta, known
 	})
 	if candidate == nil {
-		return // no alternative peer available right now - don't mark as hedged, retry next tick
+		return true // no alternative peer available right now - don't mark as hedged, retry next tick
 	}
-
-	nowNano := time.Now().UnixNano()
-	windowStart := t.hedgeWindowStart.Load()
-	if windowStart == 0 || time.Duration(nowNano-windowStart) > hedgeCircuitBreakerWindow {
-		t.hedgeWindowStart.Store(nowNano)
-		t.hedgeWindowCount.Store(0)
+	if !ownerStalled(currentPeer, candidateEta, candidateKnown, now) {
+		return true // the owner is still delivering: the duplicate would arrive second
 	}
-	count := t.hedgeWindowCount.Add(1)
-	if count > hedgeCircuitBreakerThreshold {
-		// CompareAndSwap so the trip log/cooldown-scheduling only happens once, even though
-		// count keeps climbing past the threshold on every subsequent call within the same
-		// window (e.g. a single checkAndFireHedges scan finding many stalled requests at once).
-		if !t.hedgeCircuitOpen.CompareAndSwap(false, true) {
-			return
-		}
-		t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Circuit breaker tripped: %d hedges/60s, disabling — bottleneck is shared across peers (saturated link or tunnel), not peer variance", t.infoHash.HexString(), count)
-		time.AfterFunc(hedgeCircuitBreakerCooldown, func() {
-			t.hedgeCircuitOpen.Store(false)
-			t.hedgeWindowCount.Store(0)
-			t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Circuit breaker cooldown elapsed, re-enabling hedging", t.infoHash.HexString())
-		})
-		return
+	if !t.hedgeAllowed(now) {
+		return false
 	}
 	if t.hedgedRequests == nil {
 		t.hedgedRequests = make(map[RequestIndex]struct{})
@@ -1455,9 +1475,34 @@ func (t *Torrent) fireHedge(r RequestIndex, req Request, currentPeer *Peer, trig
 		candidate.validReceiveChunks = make(map[RequestIndex]int)
 	}
 	candidate.validReceiveChunks[r]++
+	if candidate.hedgesPending == nil {
+		candidate.hedgesPending = make(map[RequestIndex]struct{})
+	}
+	candidate.hedgesPending[r] = struct{}{}
 	candidate.peerImpl._request(req)
 	t.hedgeTriggerCount.Add(1)
 	t.logger.WithDefaultLevel(log.Warning).Printf("[TailHedge] hash=%s Hedging piece=%d begin=%d to %v (original request exceeded %s)", t.infoHash.HexString(), req.Index, req.Begin, candidate.RemoteAddr, trigger)
+	return true
+}
+
+// ownerStalled reports whether the peer holding a late request has been silent for longer than
+// the candidate would take to deliver it: a late request queued behind others at a peer that is
+// still delivering arrives before any duplicate could.
+func ownerStalled(owner *Peer, candidateEta time.Duration, known bool, now time.Time) bool {
+	if !known || owner.lastUsefulChunkReceived.IsZero() {
+		return true
+	}
+	return now.Sub(owner.lastUsefulChunkReceived) >= candidateEta
+}
+
+// hedgeEta is how long a new request of n bytes would wait at p: its queue, hedges it has not
+// answered yet included, drained at its measured rate. false when the peer has delivered nothing yet.
+func hedgeEta(p *Peer, n int64) (time.Duration, bool) {
+	if !p.ewmaSeeded || p.ewmaRate <= 0 {
+		return 0, false
+	}
+	queued := float64(p.requestState.Requests.GetCardinality()+uint64(len(p.hedgesPending))+1) * float64(n)
+	return time.Duration(queued / p.ewmaRate * float64(time.Second)), true
 }
 
 // maxWarmupLatencySamples caps the ring buffer per chunk size - only enough recent samples to

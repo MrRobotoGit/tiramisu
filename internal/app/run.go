@@ -410,7 +410,7 @@ func Run(version string) {
 			warmupBuckets[4], warmupBuckets[5], warmupBuckets[6], warmupBuckets[7])
 
 		// Task 4: hedge counters live per-Torrent on the fork - sum trigger count across active
-		// torrents, report circuit breaker as open if any active torrent currently has it tripped.
+		// torrents, report hedging as paused if any active torrent currently has it paused.
 		hedgeTriggerTotal, deadlinePieces, hedgeCircuitOpenAny := eng.HedgeTotals()
 		// Peer view split by transport - conn slots are capped, so a transport is only worth
 		// the share of useful bytes it returns for the share of slots it takes.
