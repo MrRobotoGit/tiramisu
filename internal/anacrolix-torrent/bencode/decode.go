@@ -21,6 +21,10 @@ const DefaultDecodeMaxStrLen = 1<<27 - 1 // ~128MiB
 
 type MaxStrLen = int64
 
+// maxDepth bounds list and dict nesting: real metainfo nests a handful of levels, and each level
+// costs the recursive decoder stack (a 4 MiB tracker reply of nested lists took 512 MB).
+const maxDepth = 256
+
 type Decoder struct {
 	// Maximum parsed bencode string length. Defaults to DefaultMaxStrLen if zero.
 	MaxStrLen MaxStrLen
@@ -32,7 +36,18 @@ type Decoder struct {
 	// Sum of bytes used to Decode values.
 	Offset int64
 	buf    bytes.Buffer
+	depth  int // open lists and dicts
 }
+
+// enter opens a list or dict; the caller defers leave.
+func (d *Decoder) enter() {
+	d.depth++
+	if d.depth > maxDepth {
+		panic(&SyntaxError{Offset: d.Offset - 1, What: errors.New("nesting too deep")})
+	}
+}
+
+func (d *Decoder) leave() { d.depth-- }
 
 func (d *Decoder) Decode(v interface{}) (err error) {
 	defer func() {
@@ -527,6 +542,8 @@ func (d *Decoder) readOneValue() bool {
 
 	switch b {
 	case 'd', 'l':
+		d.enter()
+		defer d.leave()
 		// read until there is nothing to read
 		for d.readOneValue() {
 		}
@@ -616,8 +633,12 @@ func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
 	case 'e':
 		return false, nil
 	case 'd':
+		d.enter()
+		defer d.leave()
 		return true, d.parseDict(v)
 	case 'l':
+		d.enter()
+		defer d.leave()
 		return true, d.parseList(v)
 	case 'i':
 		return true, d.parseInt(v)
@@ -654,8 +675,12 @@ func (d *Decoder) parseValueInterface() (interface{}, bool) {
 	case 'e':
 		return nil, false
 	case 'd':
+		d.enter()
+		defer d.leave()
 		return d.parseDictInterface(), true
 	case 'l':
+		d.enter()
+		defer d.leave()
 		return d.parseListInterface(), true
 	case 'i':
 		return d.parseIntInterface(), true
