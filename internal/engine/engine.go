@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -11,7 +12,9 @@ import (
 	"time"
 
 	"tiramisu/internal/engine/bt"
+	"tiramisu/internal/friends"
 	"tiramisu/internal/piecestore"
+	"tiramisu/internal/streamer"
 )
 
 var ErrNotConnected = errors.New("engine: BT client not connected")
@@ -53,14 +56,43 @@ type Engine struct {
 	loader *trackerLoader
 
 	peerInfoFn atomic.Pointer[PeerInfoFunc] // GeoIP hook of the swarm view
+
+	friends          *friends.Manager // nil without a DB
+	freshPublicIPs   func(ctx context.Context, ipv6 bool) (net.IP, net.IP)
+	friendsAddrEvery time.Duration // re-read period: the shared public IP lookup caches forever
+	friendsCtx       context.Context
+	friendsStop      context.CancelFunc
+	friendsStarted   atomic.Bool // Start has run: OnActive may launch the timers
+	friendsLaunched  atomic.Bool
+	friendsPlayMu    sync.Mutex
+	friendsPlaying   map[string]map[string]struct{}                // infohash -> open playback sessions
+	watching         map[string]*watchSession                      // infohash -> playback asking help (friendsPlayMu)
+	friendDial       func(t *bt.Torrent, addr string, id [20]byte) // (*bt.Torrent).DialFriend; tests observe it
+	friendsWG        sync.WaitGroup
+	friendsMu        sync.Mutex // guards friendsClosed and friendsWG.Add against Close
+	friendsClosed    bool
+	friendsAddrMu    sync.Mutex // one public-address read at a time
+
+	coldMu            sync.Mutex
+	friendsColdIntent map[string]uint64 // cold opens of torrents not registered yet, by order
+	coldSeq           uint64
+
+	bg     atomic.Pointer[background] // data slots shared with the FUSE pumps; nil = none
+	serve  friendServe                // friends-only torrents over the SSD warmup
+	meters sync.Map                   // infohash -> *deliveryMeter of a playback with helpers
+
+	streamer    atomic.Pointer[streamer.Streamer] // piece scheduler: helps need it
+	helps       helpRegistry                      // friends' playbacks we help
+	helpControl func(PieceControl) PieceControl   // tests observe a help's levels
 }
 
 // New builds an engine; nothing connects until Start.
 func New(cfg Config, d Deps) *Engine {
 	e := &Engine{
 		deps: d, rows: newRowCache(rowCacheLimit), torrents: map[string]*Torrent{},
-		ready: make(chan struct{}), now: time.Now, newClient: bt.NewClient,
-		publicIPs: bt.PublicIPs, dhtNodes: bt.DHTNodes,
+		ready: make(chan struct{}), now: time.Now, newClient: bt.NewClient, friendDial: (*bt.Torrent).DialFriend,
+		friendsPlaying: map[string]map[string]struct{}{},
+		publicIPs:      bt.PublicIPs, freshPublicIPs: bt.FreshPublicIPs, dhtNodes: bt.DHTNodes,
 		trackers: func() []string { return BuiltinTrackers },
 		retries:  30, retryDelay: time.Second, tickEvery: time.Second, settle: 200 * time.Millisecond,
 		infoWait: func(c Config) time.Duration { return 60*time.Second + c.timeout() },
@@ -71,6 +103,8 @@ func New(cfg Config, d Deps) *Engine {
 	e.tickFn = e.tick
 	e.loader = newTrackerLoader(d.logf)
 	e.trackers = e.loader.List
+	e.friendsAddrEvery = 15 * time.Minute
+	e.initFriends()
 	return e
 }
 
@@ -107,6 +141,7 @@ func (e *Engine) Start() error {
 	}
 	e.loader.SetOnLoad(e.fanOutTrackers)
 	e.loader.Start()
+	e.startFriends()
 	e.readyOnce.Do(func() { close(e.ready) })
 	return nil
 }
@@ -126,6 +161,7 @@ func (e *Engine) clientOptions(cfg Config) bt.Options {
 	}
 	o.PublicIP4, o.PublicIP6 = e.publicIPs(cfg.EnableIPv6)
 	o.Blocklist = e.connectBlocklist()
+	e.friendOptions(&o)
 	if e.tuneBT != nil {
 		e.tuneBT(&o)
 	}
@@ -170,7 +206,11 @@ func (e *Engine) disconnect() {
 func (e *Engine) Close() {
 	e.setMu.Lock()
 	defer e.setMu.Unlock()
+	e.stopFriends()
 	e.loader.Stop()
+	e.endHelps("engine closed")
+	e.dropServed("")
+	e.clearColdIntents()
 	for _, t := range e.ListHydrated() {
 		e.close(t)
 	}
@@ -183,6 +223,9 @@ func (e *Engine) Reconnect(cfg Config) error {
 	e.setMu.Lock()
 	defer e.setMu.Unlock()
 	c := cfg.normalized()
+	e.endHelps("reconnect")
+	e.dropServed("")
+	e.clearColdIntents()
 	for _, t := range e.ListHydrated() {
 		e.close(t)
 	}
@@ -201,6 +244,7 @@ func (e *Engine) Reconnect(cfg Config) error {
 	if err != nil {
 		return err
 	}
+	e.friendsReconnected()
 	time.Sleep(e.settle)
 	e.readyOnce.Do(func() { close(e.ready) })
 	return nil

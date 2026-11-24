@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -32,7 +33,10 @@ func (s *Scheduler) ServeAction(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch action {
 	case "run":
-		err = s.TriggerRun(name)
+		if err = s.TriggerRun(name); errors.Is(err, ErrHeld) {
+			s.writeHeld(w, name)
+			return
+		}
 	case "stop":
 		err = s.StopJob(name)
 	}

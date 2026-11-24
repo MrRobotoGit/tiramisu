@@ -226,7 +226,7 @@ func NewMovieGoEngine(cfg MovieEngineConfig) *MovieGoEngine {
 // torrent if nothing else references it. The stub goes first: a crash in between leaves
 // an orphan torrent, never a stub without one that rehydrate would bring back.
 func (e *MovieGoEngine) removeStub(ctx context.Context, path, hash string) {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := library.RemoveStub(path); err != nil {
 		e.logger.Printf("[MovieSync] WARNING: failed to remove %s: %v", filepath.Base(path), err)
 	}
 	if e.invalidatePath != nil {

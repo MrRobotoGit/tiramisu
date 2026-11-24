@@ -219,11 +219,11 @@ func (t *Torrent) othersAtRisk() bool {
 	return n > 0
 }
 
-// withoutPrefetch drops the speculative consumers from a plan.
+// withoutPrefetch drops the speculative consumers (prefetches and helps) from a plan.
 func withoutPrefetch(spans []span) []span {
 	out := make([]span, 0, len(spans))
 	for _, sp := range spans {
-		if sp.kind != KindPrefetch {
+		if sp.kind != KindPrefetch && sp.kind != KindHelp {
 			out = append(out, sp)
 		}
 	}

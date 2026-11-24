@@ -29,6 +29,7 @@ type Config struct {
 	DisableUPNP              bool
 	ResponsiveMode           bool
 	AdaptiveShield           bool
+	FriendsMaxHelps          int // friends' playbacks helped at once; 0 = default (2), negative = none
 }
 
 const (

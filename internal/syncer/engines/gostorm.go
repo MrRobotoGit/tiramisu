@@ -3,7 +3,6 @@ package engines
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -123,18 +122,8 @@ func (c *GoStormClient) ActiveHashes(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// TitleFromFilename extracts a clean display title from an MKV filename.
-// e.g. "Your_Friends_Neighbors_S01E09_17361ba1.mkv" → "Your Friends Neighbors S01E09"
-func TitleFromFilename(filename string) string {
-	s := strings.TrimSuffix(filename, filepath.Ext(filename))
-	// Remove trailing _hash8 (8 hex chars)
-	if re := regexp.MustCompile(`(?i)_[a-f0-9]{8}$`); re.MatchString(s) {
-		s = s[:len(s)-9]
-	}
-	s = strings.ReplaceAll(s, "_", " ")
-	s = strings.ReplaceAll(s, ".", " ")
-	return strings.TrimSpace(s)
-}
+// TitleFromFilename extracts a clean display title from an MKV filename (library.TitleFromFilename).
+func TitleFromFilename(filename string) string { return library.TitleFromFilename(filename) }
 
 // BuildMagnet and DefaultTrackers live in internal/library, shared with the
 // /api/library endpoints.

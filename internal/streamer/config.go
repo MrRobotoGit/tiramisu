@@ -51,6 +51,9 @@ const (
 	// KindPrefetch is a bounded read nobody waits on (WarmLanding, predictive prefetch,
 	// TailFetch): raises its range at Readahead, never pinned.
 	KindPrefetch
+	// KindHelp downloads a stride of pieces for a friend's playback: level Normal, never pinned,
+	// dropped while another torrent is at risk, evicted behind its window.
+	KindHelp
 )
 
 var (

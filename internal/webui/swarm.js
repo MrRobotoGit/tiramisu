@@ -23,6 +23,9 @@
   // can resume the fade-in / pulse-and-fade exactly where it was.
   const life = new Map();
   const BORN_MS = 900, BIRTH_PULSE_MS = 2000, DYING_MS = 1800;
+  // Friends lane rows by torrent:peer: a row keeps its slot while it lives and while it fades out.
+  const laneLife = new Map();
+  let laneSeen = false;
 
   function el(tag, attrs, parent) {
     const n = document.createElementNS(NS, tag);
@@ -35,6 +38,10 @@
     const t = el('text', { x, y, class: cls || 'sw-lab', 'text-anchor': anchor || 'start' }, parent);
     t.textContent = s;
     return t;
+  }
+  // Rendered width of a text node; the estimate covers a drawing that is not laid out yet.
+  function textLen(t, guess) {
+    try { return t.getComputedTextLength() || guess; } catch (_) { return guess; }
   }
   // Deterministic PRNG per torrent so peers don't jump on every poll.
   function rng(seed) {
@@ -60,12 +67,36 @@
     } catch (_) { return cc; }
   }
 
+  // Friends: when each became one (the peer card's "Friend since"), and which hold a proven link
+  // (the "N friends, idle" note on the PEERS head). Read with the other extras, every 15 s.
+  let friendSince = new Map(), friendsLinked = [];
+  async function fetchFriends() {
+    try {
+      const r = await fetch('/api/friends');
+      const d = r.ok ? await r.json() : null;
+      const fs = (d && d.friends) || [];
+      friendSince = new Map(fs.map(f => [f.name, f.since || 0]));
+      friendsLinked = fs.filter(f => f.now && f.now.links && f.now.links.length).map(f => f.name);
+    } catch (_) { }
+  }
+  const sinceText = ts => ts ? 'Friend since ' + new Date(ts * 1000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Friend';
+  // A friend has a row in the friends lane only while data moves, in either direction. The
+  // engine's own rates decide (not a tween's eased ones), at the threshold the flows use.
+  const friendOn = p => p.friend && ((p.real_kbps ?? p.kbps) >= 0.5 || (p.real_up ?? (p.up_kbps || 0)) >= 0.5);
+  function laneRows(torrents) {
+    const rows = [];
+    torrents.forEach(t => (t.peer_rates || []).filter(friendOn)
+      .sort((a, b) => a.friend.localeCompare(b.friend)).forEach(p => rows.push({ t, p })));
+    return rows.slice(0, 4);
+  }
+  const shortTitle = t => short((t.clean_title || t.title || t.hash.slice(0, 8)).replace(/\s+S\d+E\d+.*$/i, '').replace(/\s*\(\d{4}\)$/, ''), 18);
+
   function details(title, rows, at, action) {
     closeDetails();
     anchor = at && at.node;
     // title may carry a subtitle: { title, sub } (a peer's network under its country).
     const head = typeof title === 'object' ? title : { title };
-    const body = `<div class="sw-d-title">${esc(head.title)}</div>` +
+    const body = `<div class="sw-d-title${head.cls ? ' ' + head.cls : ''}">${esc(head.title)}</div>` +
       (head.sub ? `<div class="sw-d-sub">${esc(head.sub)}</div>` : '') + rows.map(([a, b]) =>
       `<div class="sw-d-row"><span>${esc(a)}</span><span class="mono">${esc(b)}</span></div>`).join('') +
       (action ? `<button type="button" class="btn sm sw-d-act">${esc(action.text)}</button>` : '');
@@ -174,7 +205,7 @@
     const t = act
       .map(x => [x.hash.slice(0, 8), speeds ? x.speed_mbs.toFixed(1) : x.speed_mbs > 0.01, speeds ? (x.up_mbs || 0).toFixed(2) : (x.up_mbs || 0) * 8 >= 0.05,
         x.peers, x.seeders, x.half_open, x.is_priority,
-        (speeds ? (x.peer_rates || []) : (x.peer_rates || []).slice(0, MAX_PEERS)).map(p => p.id + (speeds ? Math.round(Math.log2(1 + p.kbps)) + '/' + Math.round(Math.log2(1 + (p.up_kbps || 0)))
+        (speeds ? (x.peer_rates || []) : (x.peer_rates || []).slice(0, MAX_PEERS)).map(p => p.id + (p.friend ? '@' + (p.friend_role || '') : '') + (speeds ? Math.round(Math.log2(1 + p.kbps)) + '/' + Math.round(Math.log2(1 + (p.up_kbps || 0)))
           : (p.kbps >= 0.5 ? '+' : '-') + ((p.up_kbps || 0) >= 0.5 ? '+' : '-'))).sort().join(',')].join(':')).join('|') + '>' + order;
     const sh = shieldState(d.shield, Date.now());
     return [host.clientWidth, host.clientWidth < 560 ? document.documentElement.clientHeight : 0, document.documentElement.dataset.theme, t, sh.mode, sh.cleanS, sh.wave, (d.health || {}).v304_banned_peers,
@@ -182,6 +213,8 @@
       speeds ? (d.health || {}).cache_hit_rate_pct : '', speeds ? act.map(x => x.cache_capacity ? Math.round(100 * x.cache_filled / x.cache_capacity) : '').join(',') : '', speeds ? Math.round((d.health || {}).fuse_active_pct || 0) : '',
       speeds ? Math.round((d.health || {}).fuse_stale_pct || 0) : '', transport && transport.utp, clients && JSON.stringify([...clients].map(([k, c]) => [k, c.label, c.state, c.state === 'paused' ? c.pos : 0])), reducedMotion(),
       focusKey, recent.length && recent[0].started_at,
+      // Friends lane rows and the idle-friends note change the drawing's shape.
+      act.map(x => (x.peer_rates || []).filter(friendOn).map(p => p.id).join(',')).join('|'), friendsLinked.join(','),
       scan && scan.active ? [scan.label, scan.files_per_min, scan.files_read,
         Object.entries(scan.torrents || {}).map(([h, a]) => h.slice(0, 8) + Math.floor(a / 10)).sort().join(',')].join(':') : ''].join('#');
   }
@@ -222,6 +255,8 @@
     lastSig = sig;
     const W = host.clientWidth || 600;
     const vertical = W < 560;
+    // Friends lane: one row per friend moving data, above the peer field.
+    const lane = laneRows((data.torrents || []).filter(t => t.status !== 'idle').sort((a, b) => b.speed_mbs - a.speed_mbs).slice(0, 4));
     const H = vertical ? fitHeight() : 470;
     // Cross-fade: the previous drawing fades out on top while the new one fades in, instead of a cut.
     // Only data updates fade; forced redraws (resize, theme, motion setting) and height changes cut.
@@ -248,8 +283,35 @@
     const sh = shieldState(data.shield, now);
     const h = data.health || {};
 
+    // Lane slots: sticky per row; a row that stops moving data fades out in its slot.
+    const laneKeys = new Set(lane.map(r => r.t.hash + ':' + r.p.id));
+    laneLife.forEach((v, k) => {
+      if (laneKeys.has(k)) return;
+      if (!v.dying) v.dying = now;
+      else if (now - v.dying >= DYING_MS) laneLife.delete(k);
+    });
+    lane.forEach(r => {
+      const k = r.t.hash + ':' + r.p.id;
+      let v = laneLife.get(k);
+      if (v && v.dying) { v.dying = 0; v.born = now; }
+      if (!v) {
+        const used = new Set([...laneLife.values()].map(x => x.slot));
+        let s = 0; while (used.has(s)) s++;
+        v = { slot: Math.min(s, 3), born: laneSeen ? now : 0, dying: 0 };
+        laneLife.set(k, v);
+      }
+      v.row = r;
+    });
+    laneSeen = true;
+    // The first row sits in the free strip above the peer field; only further rows take room, and
+    // that room follows the linked friends (not who moves data now), so a row coming and going
+    // never moves the graph.
+    const laneSlots = Math.min(4, Math.max(friendsLinked.length, 0, ...[...laneLife.values()].map(v => v.slot + 1)));
+    const ROW = vertical ? 34 : 26;
+    const laneX = laneSlots > 1 ? (laneSlots - 1) * ROW : 0;
+
     // Logical coords: f = along the flow (0..1), c = across (0..1). Map to x/y per orientation.
-    const pad = vertical ? { f0: 40, f1: H - 44, c0: 30, c1: W - 30 } : { f0: 18, f1: W - 30, c0: 44, c1: H - 18 };
+    const pad = vertical ? { f0: 40 + laneX, f1: H - 44, c0: 30, c1: W - 30 } : { f0: 18, f1: W - 30, c0: 44 + laneX, c1: H - 18 };
     const P = (f, c) => {
       const ff = pad.f0 + (pad.f1 - pad.f0) * f, cc = pad.c0 + (pad.c1 - pad.c0) * c;
       return vertical ? [cc, ff] : [ff, cc];
@@ -267,14 +329,23 @@
 
     // Column headings and guides.
     const heads = [['Peers', F.peers], ['Torrents', F.torrent], ['Piece cache', F.cache], ['FUSE', F.fuse], ['Clients', F.client]];
+    // Friends with a proven link that move no data: a note on the PEERS head, not a row.
+    const idleFriends = lane.length || !torrents.length ? 0 : friendsLinked.length;
+    const idleNote = idleFriends ? `${idleFriends} friend${idleFriends === 1 ? '' : 's'}, idle` : '';
     heads.forEach(([name, f], i) => {
       const [x, y] = P(f, 0);
       if (i && !vertical) {
         const a = P(f, 0.02), b = P(f, 1);
-        el('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: 'sw-guide' }, svg);
+        el('line', { x1: a[0], y1: a[1] - laneX, x2: b[0], y2: b[1], class: 'sw-guide' }, svg);
       }
-      if (vertical) { if (i === 0) txt(svg, W - 4, y + 3, name.toUpperCase(), 'sw-head', 'end'); }
-      else txt(svg, x, 14, name.toUpperCase(), 'sw-head', i === 0 ? 'start' : i === heads.length - 1 ? 'end' : 'middle');
+      if (vertical) {
+        if (i) return;
+        const hd = txt(svg, W - 4, y + 3, name.toUpperCase(), 'sw-head', 'end');
+        if (idleNote) txt(svg, W - 4 - textLen(hd, 32) - 6, y + 3, idleNote + ' ·', 'sw-head-note', 'end');
+      } else if (i === 0) {
+        const hd = txt(svg, x, 14, name.toUpperCase(), 'sw-head');
+        if (idleNote) txt(svg, x + textLen(hd, 32) + 8, 14, '· ' + idleNote, 'sw-head-note');
+      } else txt(svg, x, 14, name.toUpperCase(), 'sw-head', i === heads.length - 1 ? 'end' : 'middle');
     });
 
     const cacheP = P(F.cache, 0.45), fuseP = P(F.fuse, 0.45);
@@ -304,7 +375,10 @@
       };
       // Peers. With per-peer rates from the engine each node is a real peer (stable id, real
       // seeder flag, its own rate); without them (older engine) nodes are numbered slots.
-      const rates = Array.isArray(t.peer_rates) ? t.peer_rates.slice(0, MAX_PEERS) : null;
+      // Friends are not in the public field: an active one has its row in the friends lane, an idle
+      // one is counted on the PEERS head.
+      const friendPeers = Array.isArray(t.peer_rates) ? t.peer_rates.filter(p => p.friend).length : 0;
+      const rates = Array.isArray(t.peer_rates) ? t.peer_rates.filter(p => !p.friend).slice(0, MAX_PEERS) : null;
       const list = rates ? rates.map(p => ({ key: p.id, seed: p.seed, kbps: p.kbps, utp: !!p.utp, up: p.up_kbps || 0, cc: p.cc || '', asn: p.asn || 0, org: p.org || '',
         lk: p.real_kbps ?? p.kbps, lu: p.real_up ?? (p.up_kbps || 0) }))
         : Array.from({ length: n }, (_, k) => ({ key: String(k), seed: k < seeds, kbps: null, utp: null }));
@@ -411,12 +485,99 @@
       const live = t.speed_mbs > 0.01;
       el('path', { d, class: live ? 'sw-pipe' : 'sw-pipe idle', 'stroke-width': width(t.speed_mbs) }, edgeLayer);
       // What the graph leaves out, so the labels can say so: peers past MAX_PEERS, half-open past MAX_PENDING.
-      pipes.push({ t, d, w: width(t.speed_mbs), tp, live, shown: list.length, pendShown: pend });
+      pipes.push({ t, d, w: width(t.speed_mbs), tp, live, shown: list.length + friendPeers, pendShown: pend });
       curKey = null;
     });
 
     const shown = new Set(torrents.map(t => t.hash));
     [...life.keys()].forEach(hk => { if (!shown.has(hk)) life.delete(hk); });
+
+    // Friends lane. Each active friend: a node at the start of its row and a violet tube along the
+    // band that turns into its torrent only past the public field, so it never meets a stranger.
+    // Labelled on the tube: name and role, rate, and (helping you) its share of that torrent's download.
+    // Rates are the tween's eased ones, like every width and dash; whether a direction shows is the engine's.
+    const laneLayer = el('g', {}, svg);
+    svg.insertBefore(laneLayer, nodeLayer);
+    laneLife.forEach(v => {
+      const { t, p } = v.row, pipe = pipes.find(x => x.t.hash === t.hash), i = v.slot;
+      if (!pipe) return;
+      curKey = t.hash;
+      const lk = p.kbps || 0, lu = p.up_kbps || 0;
+      const role = p.friend_role || '';
+      // The role names the direction that counts; without one (or when it moves nothing) both show.
+      let down = (p.real_kbps ?? p.kbps) >= 0.5, up = (p.real_up ?? (p.up_kbps || 0)) >= 0.5;
+      if (role === 'helping_you' && down) up = false;
+      if (role === 'you_help' && up) down = false;
+      // A newborn row fades in like a new peer; a row that stopped fades out in its slot.
+      const rowG = el('g', {}, laneLayer), labG = el('g', {}, nodeLayer);
+      const age = now - (v.dying || v.born);
+      if (v.dying) [rowG, labG].forEach(g => { g.classList.add('sw-dying'); g.style.animationDelay = `${-Math.min(age, DYING_MS)}ms`; });
+      else if (v.born && age < BORN_MS) [rowG, labG].forEach(g => { g.classList.add('sw-born'); g.style.animationDelay = `${-age}ms`; });
+      const [tx, ty] = pipe.tp;
+      let fx, fy, d;
+      if (vertical) {
+        // Phone: the tube runs down the free left margin, then turns into the torrent.
+        fx = 10 + i * 8; fy = 16 + i * ROW;
+        const yb = ty - 50;
+        d = `M${fx} ${fy} L${fx} ${yb} C${fx} ${ty} ${fx + (tx - fx) * 0.3} ${ty} ${tx} ${ty}`;
+      } else {
+        fx = P(F.peers, 0)[0] + 5; fy = 36 + i * ROW;
+        const xr = P(F.peersEnd + (F.torrent - F.peersEnd) * 0.35, 0)[0];
+        d = `M${fx} ${fy} L${xr} ${fy} C${xr + (tx - xr) * 0.55} ${fy} ${xr + (tx - xr) * 0.45} ${ty} ${tx} ${ty}`;
+      }
+      el('path', { d, class: 'sw-friend-tube' }, rowG);
+      // Data along the tube at the friend's own rate: towards the torrent (helping you) or back
+      // towards the friend (you help).
+      [[down, lk, ''], [up, lu, ' up']].forEach(([on, kb, cls]) => {
+        if (!on || kb <= 0) return;
+        const fl = el('path', { d, class: 'sw-friend-flow' + cls, pathLength: 100 }, rowG);
+        const dur = Math.max(0.5, Math.min(6, 30 / Math.sqrt(kb)));
+        fl.style.animationDuration = `${dur.toFixed(2)}s`;
+        fl.style.animationDelay = flowDelay(t.hash + ':fr' + cls + p.id, dur, now, rng(t.hash + p.id + cls)());
+      });
+      el('circle', { cx: fx, cy: fy, r: 8.5, class: 'sw-friend-halo' }, rowG);
+      el('circle', { cx: fx, cy: fy, r: 4.5, class: 'sw-peer friend' }, rowG);
+      if (!v.dying && v.born && age < BIRTH_PULSE_MS) {
+        const ring = el('circle', { cx: fx, cy: fy, r: 4.5, class: 'sw-birth-ring friend' }, laneLayer);
+        ring.style.animationDelay = `${-age}ms`;
+      }
+      if (v.dying) {
+        const ring = el('circle', { cx: fx, cy: fy, r: 4.5, class: 'sw-death-ring friend' }, rowG);
+        ring.style.animationDelay = `${-Math.min(age, DYING_MS)}ms`;
+      }
+      // Label: name and role, then the rate with the share of the torrent's download and its bar.
+      // Phone: two lines beside the margin; desktop: one line above the tube.
+      const lx = vertical ? 30 : fx + 14, ny = vertical ? fy - 3 : fy - 6;
+      const nm = txt(labG, lx, ny, p.friend, 'sw-name sw-friend-name');
+      const rl = { helping_you: 'helping you', you_help: 'you help' }[role];
+      if (rl) { const ts = el('tspan', { class: 'sw-friend-role', dx: 6 }, nm); ts.textContent = rl; }
+      const rx = vertical ? lx : lx + textLen(nm, 110) + 10, ry = vertical ? ny + 14 : ny;
+      const rt = txt(labG, rx, ry, '', 'sw-sub');
+      const span = (s, cls) => { const ts = el('tspan', cls ? { class: cls } : {}, rt); ts.textContent = s; };
+      const total = (t.peer_rates || []).reduce((a, x) => a + (x.kbps || 0), 0) || t.speed_mbs * 1024;
+      const share = down && total > 0 ? Math.min(1, lk / total) : null;
+      if (share != null) {
+        span(`↓ ${mbps(lk / 1024)}`, 'sw-friend-rate');
+        span(` · ${Math.round(share * 100)} %` + (vertical ? '' : ` of ${shortTitle(t)}`));
+        if (up) span(` · ↑ ${mbps(lu / 1024)}`, 'sw-friend-rate');
+        const bw = vertical ? 36 : 44, bx = rx + textLen(rt, 150) + 6;
+        el('rect', { x: bx, y: ry - 4, width: bw, height: 1, class: 'sw-share-track' }, labG);
+        el('rect', { x: bx, y: ry - 6, width: Math.max(2, bw * share), height: 5, class: 'sw-share' }, labG);
+      } else {
+        if (up) span(`↑ ${mbps(lu / 1024)}`, 'sw-friend-rate');
+      }
+      if (!v.dying) {
+        const rk = p.real_kbps ?? p.kbps, ru = p.real_up ?? (p.up_kbps || 0);
+        const hit = el('circle', { cx: fx, cy: fy, r: 9, class: 'sw-peer-hit', 'data-peer': t.hash + ':' + p.id }, nodeLayer);
+        hoverable(hit, () => details({ title: p.friend, cls: 'friend', sub: sinceText(friendSince.get(p.friend)) }, [
+          ['Download', mbps(rk / 1024)],
+          ['Upload', ru > 0 ? mbps(ru / 1024) : '—'],
+          ['Role', (p.seed ? 'seeder' : 'leecher') + (rl ? ' · ' + rl : '')],
+          ['Transport', p.utp ? 'uTP' : 'TCP'],
+        ], { rect: hit.getBoundingClientRect(), node: hit }));
+      }
+      curKey = null;
+    });
 
     // Banned peers sit in the peer field, cut off: no pipe reaches a torrent. The engine counts
     // bans process-wide, so they are spread over the field rather than pinned to one swarm.
@@ -798,7 +959,7 @@
     try {
       const rr = await fetch('/api/recent-streams');
       if (rr.ok) recent = (await rr.json()) || [];
-    } catch (_) { }
+    } catch (_) { }    await fetchFriends();
   }
 
   // ---------- idle orbit ----------

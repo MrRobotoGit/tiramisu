@@ -236,8 +236,8 @@ With [HTTPS](api.md#https) on, the same address moves to `https://<your-pi-ip>:9
 
 ### Layout
 
-Eight sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
-**Sources & Media**, **Tentacle**, **Release Selection**, **Scheduler**, **Access** and **History**. Each section says when
+Nine sections, one per page, listed in the left rail: **Streaming & FUSE**, **Network & VPN**,
+**Sources & Media**, **Tentacle**, **Release Selection**, **Scheduler**, **Access**, **History** and **Friends**. Each section says when
 its settings take effect: on restart (Tiramisu settings, saved in the state database) or live
 (Tentacle settings, applied to the running engine). Find any setting with <kbd>⌘K</kbd>.
 
@@ -254,9 +254,121 @@ its settings take effect: on restart (Tiramisu settings, saved in the state data
 | **Scheduler** | Movies and TV sync days and start time; Watchlist sync interval (Music keeps its own schedule, `scheduler.music_sync`) |
 | **Access** *(live)* | Optional sign-in for `:9080` (one user, password), API tokens for agents and scripts, browser sessions, and HTTPS *(restart)*: a guided card to turn it on, download and trust the CA, and move clients to `https://`. See [Sign-in and API tokens](api.md#sign-in-and-api-tokens) and [HTTPS](api.md#https) |
 | **History** *(restart)* | The last 50 saved versions of the configuration and, marked *engine*, the last 50 manual saves of the Tentacle settings: who saved each one and what it changed (keys and tokens only as changed); filter by restart, secrets or Tentacle, and restore any version through the change bar: the newer ones stay in the list. A Tentacle restore applies at once: timeout, retrackers, read-ahead, Responsive and Shield apply live, other keys reconnect the BitTorrent client (playback in progress stops), and disk warmup and the save path wait for a restart |
+| **Friends** *(live)* | This node (name, reachability, help friends while they watch, concurrent helps), your friends with their status and invitations, what friends can see, and the shared library (send, accept, leave, release). See [Friends](#friends) |
 
 Keys and tokens (media server token, TMDB and Prowlarr API keys) are write-only: the
 Control Panel shows whether one is set, never its value. Leave the field empty to keep it.
+
+---
+
+## Friends
+
+Friends are other Tiramisu installations you pair with by invitation. They
+recognise each other in the swarms they share, get priority when your node
+chooses whom to send to and whom to ask first, serve each other the warmup cache
+and help each other's playback. Friends are ordinary BitTorrent peers on the peer
+port: no account, no central server, no new port. Every piece a friend sends is
+checked like a piece from anyone else.
+
+Everything is in **Control Panel → Friends** and applies live. Friends need the
+state database (`STATE/tiramisu.db`), which every installation has unless it was
+started without one.
+
+### 09.1 This node
+
+- **Node name**: the name your friends see. Set it before you invite anyone.
+- **Reachability**: friends connect to your peer port, so at least one of two
+  friends must be reachable from the Internet (port forward on the router,
+  NAT-PMP, UPnP or a VPN with port forwarding). The card reads it from real
+  traffic: it says *reachable* once a peer from the Internet has connected since
+  start, and *checking* until then. Two nodes behind the same router reach each
+  other only if the router does hairpin NAT.
+- **Help friends while they watch**: when a friend starts a film you also have,
+  your node joins the swarm and fetches ahead for them, at the priority of a Plex
+  scan. Your own playback comes first: while one of your streams is open, the help
+  slows down.
+- **Concurrent helps**: friends helped at the same time, 2 by default
+  (`FriendsMaxHelps` in the Tentacle settings; turning helping off stores it as a
+  negative value).
+
+### 09.2 Friends
+
+1. **Invite a friend** creates a one-time code (`TMF1-…`) that carries your
+   public address, valid for 48 hours. Send it to your friend; you can withdraw it
+   while it is unused.
+2. Your friend opens **Join with a code** and pastes it. The page first shows the
+   name the inviting node declares and how long the code is still valid: check
+   the name with the person, since anyone holding the code could have sent it.
+3. You see a yellow **Request** and approve or decline it. Nobody has to stay on
+   the page: the decision reaches the other node when it is next online, for up
+   to 48 hours.
+
+Each friend shows a lamp: **violet glow** while you are exchanging data,
+**full** online, **empty** offline, **orange** only for errors. Next to it, what
+is happening now: a film it is helping you with, or one you are helping it with.
+**Remove** tells the friend if it is online and deletes the pair; becoming friends
+again takes a new code.
+
+The control channel between friends is encrypted. After the first encrypted
+contact a node refuses plaintext from that friend for good. If a friend goes back
+to an older Tiramisu version and the two nodes refuse each other, **Reset
+encryption** on that friend lets the next contact negotiate again.
+
+### 09.3 What friends can see
+
+Your node's name and address, and the film you start watching, so that friends
+who have it can help. Nothing else about your library, your players or your
+settings, unless you send them your library (below). Tiramisu keeps no per-friend
+traffic history: the page shows only what is happening now.
+
+### What friends do for each other
+
+- **Cold starts.** When you open a title with no local warmup, your node calls
+  its friends at the same moment as the DHT, the trackers and the peer cache,
+  never before. A friend with the beginning and end of that film in its warmup
+  cache serves them from its SSD, even if the torrent is not running there. A
+  friend that does not answer costs nothing. Pieces received from a friend fill
+  your own warmup, so the next start is warm locally.
+- **Playback.** When you start a film, friends who have it fetch the part you
+  will need next and send it to you. It helps most on swarms limited by their
+  seeders; the pieces they fetch stay in their warmup and can serve other
+  friends later.
+- **Live swarm.** On the Dashboard, friends are violet, with their name in place
+  of the country and "helping you" while they do; the glow appears only while
+  data moves.
+
+### 09.4 Library
+
+A node can send its library to its friends. It becomes the **master**; each
+friend that accepts becomes a **slave** and gets the same films and series, so
+every title is on every node and friends can always help each other.
+
+- **Propose and accept.** On the master, **Make slave** next to a friend sends a
+  proposal. The friend sees *wants to be your library master* and accepts from
+  its own Control Panel within 48 hours. A slave follows one master; a master can
+  have many slaves; a node with a master cannot have slaves.
+- **First alignment, then changes.** On acceptance the slave receives the whole
+  library in blocks, with progress on the card, and resumes after an interruption.
+  After that every stub the master writes or removes, from the sync engine, the
+  Library API or the MCP server, reaches the slaves. Each stub keeps the master's
+  file name and torrent, so Plex and Jellyfin see stable files. The torrent's
+  metadata comes from the master, so the slave does not wait for the swarm.
+- **On the slave.** The movie, TV and watchlist syncs are held (**Scheduler**
+  says *Off: your library comes from …*, and the saved schedule is kept). The
+  titles it had before stay next to the master's. Adding or removing films and
+  episodes locally is refused while the master is active: the Library API answers
+  `409 library_from_master`, the MCP server refuses with the same message, and
+  deleting a stub through the share is refused too. Music is not shared: the music sync keeps running.
+- **Ending it.** The slave can **Leave** and the master can **Release** a slave;
+  either side keeps the friendship. The titles received stay on the slave, and
+  its syncs come back with the saved schedule. Removing a friend ends the role
+  first.
+- **Trust.** A master can put any torrent in a slave's library. Accept only a
+  friend you trust.
+
+On a master the card lists each slave with its state (*aligning*, *in sync*,
+*behind*, *offline*) and what it has received; on a slave it shows the master,
+the entries received and the latest changes.
 
 ---
 

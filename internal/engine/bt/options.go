@@ -9,6 +9,7 @@ import (
 	"github.com/anacrolix/dht/v2"
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/mse"
+	pp "github.com/anacrolix/torrent/peer_protocol"
 	"golang.org/x/time/rate"
 )
 
@@ -41,6 +42,14 @@ type Options struct {
 	DHTNodes  []string // resolved ip:port; empty = the library's global bootstrap
 
 	Blocklist *Blocklist // nil = no filtering
+
+	Friends     torrent.FriendHooks                 // nil = no friend nodes
+	OnHandshake func(incoming bool, network string) // every completed handshake; nil = none
+	// OnFriendLinkClosed runs under the client lock when a proven friend link closes.
+	OnFriendLinkClosed func(ih [20]byte)
+	// OnFriendHave runs under the client lock for every Have a proven friend link announces: it
+	// must only count.
+	OnFriendHave func(ih [20]byte, piece int)
 }
 
 func peerID() string {
@@ -109,6 +118,26 @@ func libConfig(o Options, st *Storage) *torrent.ClientConfig {
 	c.ListenPort = max(o.ListenPort, 0)
 	c.PublicIp4 = o.PublicIP4
 	c.PublicIp6 = o.PublicIP6
+	c.Friends = o.Friends
+	if f := o.OnHandshake; f != nil {
+		c.Callbacks.CompletedHandshake = func(pc *torrent.PeerConn, _ torrent.InfoHash) {
+			f(pc.Discovery == torrent.PeerSourceIncoming, pc.Network)
+		}
+	}
+	if f := o.OnFriendLinkClosed; f != nil {
+		c.Callbacks.PeerConnClosed = func(pc *torrent.PeerConn) {
+			if pc.Friend() {
+				f(pc.Torrent().InfoHash())
+			}
+		}
+	}
+	if f := o.OnFriendHave; f != nil {
+		c.Callbacks.ReadMessage = func(pc *torrent.PeerConn, m *pp.Message) {
+			if m.Type == pp.Have && pc.Friend() {
+				f(pc.Torrent().InfoHash(), int(m.Index))
+			}
+		}
+	}
 	if !o.DisableDHT && len(o.DHTNodes) > 0 {
 		nodes := o.DHTNodes
 		c.DhtStartingNodes = func(network string) dht.StartingNodesGetter {

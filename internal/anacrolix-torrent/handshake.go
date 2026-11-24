@@ -37,6 +37,7 @@ func handleEncryption(
 	ret io.ReadWriter,
 	headerEncrypted bool,
 	cryptoMethod mse.CryptoMethod,
+	s []byte,
 	err error,
 ) {
 	// Tries to start an unencrypted stream.
@@ -64,9 +65,8 @@ func handleEncryption(
 			return
 		}
 	}
-	headerEncrypted = true
-	ret, cryptoMethod, err = mse.ReceiveHandshake(rw, skeys, selector)
-	return
+	res := mse.ReceiveHandshakeEx(rw, skeys, selector)
+	return res.ReadWriter, true, res.CryptoMethod, res.S, res.Err()
 }
 
 type PeerExtensionBits = pp.PeerExtensionBits

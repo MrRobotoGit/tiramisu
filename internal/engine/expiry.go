@@ -17,6 +17,7 @@ func (e *Engine) expire() {
 		if e.expired(t) {
 			e.saveLocked(t)
 			e.closeLocked(t)
+			e.friendsPlaybackEnd(t.hash)
 		}
 		t.life.Unlock()
 	}

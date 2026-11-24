@@ -97,7 +97,7 @@ func (t *Torrent) stealRequestGraceElapsed(req RequestIndex, holder *Peer, urgen
 // stealPermitted decides whether a peer may take a request another peer holds. diff is the
 // stealer's queue depth after the steal minus the holder's after losing it. Backported from
 // upstream 41fc76adf and 23d8abf90.
-func stealPermitted(reason string, diff int64, stealerLast, holderLast time.Time, holderStalled bool, graceElapsed func() bool) bool {
+func stealPermitted(reason string, diff int64, stealerLast, holderLast time.Time, stealerFriend, holderStalled bool, graceElapsed func() bool) bool {
 	// An update caused by a cancel comes from a steal: stealing back would ping-pong the request.
 	if reason == "Peer.cancel" {
 		return false
@@ -109,8 +109,8 @@ func stealPermitted(reason string, diff int64, stealerLast, holderLast time.Time
 		return graceElapsed()
 	}
 	// Don't steal from the poor: only for one more request than the holder keeps, and on a tie
-	// only if the stealer received a useful chunk more recently.
-	if diff > 1 || (diff == 1 && !stealerLast.After(holderLast)) {
+	// only if the stealer received a useful chunk more recently or is a friend.
+	if diff > 1 || (diff == 1 && !stealerFriend && !stealerLast.After(holderLast)) {
 		return false
 	}
 	return graceElapsed()

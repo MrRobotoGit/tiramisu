@@ -26,6 +26,8 @@ type Library interface {
 	ListGaps() ([]library.Gap, int, error)
 	Diagnose(ctx context.Context) (*library.Diagnosis, error)
 	RemoveAny(ctx context.Context, req library.RemoveRequest) (any, error)
+	// LocalChange refuses a video addition or removal while the node's library comes from a master.
+	LocalChange(kind string, add bool) error
 }
 
 // Backend is the network side: TMDB, the indexers, the release file.

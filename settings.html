@@ -83,6 +83,13 @@
         .day-pill { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--hair2); background: var(--panel); color: var(--ink2); font-size: 10px; font-weight: 500; cursor: pointer; padding: 0; }
         .day-pill.selected { background: var(--ink); border-color: var(--ink); color: var(--inv); }
         .day-pill.conflict { opacity: .3; text-decoration: line-through; cursor: not-allowed; }
+        .managed-note { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--hair); border-radius: 6px; }
+        .managed-note .bar { align-self: stretch; width: 2px; min-height: 10px; background: var(--friend); border-radius: 1px; }
+        .managed-note .small { flex: 1; color: var(--ink2); }
+        .managed-tag { margin-left: 8px; font-size: 11px; font-weight: 500; color: var(--friend); }
+        .job.held .field, .job.held > button { opacity: .4; }
+        .job.held .who .t { color: var(--ink3); }
+        .sched-meta.held { color: var(--friend); font-weight: 500; }
         .sched-meta { font-size: 11px; color: var(--ink3); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
         #sched-body.disabled { opacity: .4; pointer-events: none; }
 
@@ -174,6 +181,140 @@
         #tls-warn, #tls-err { margin-top: 12px; }
         @media (max-width: 900px) { .acc-status { flex-direction: column; align-items: flex-start; } .acc-row .dev { min-width: 0; } }
         @media (max-width: 900px) { .tls-kv { grid-template-columns: 1fr; gap: 2px 0; } .tls-kv dd { margin-bottom: 8px; } }
+        /* ---- 09 Friends ---- */
+        .fr-reach { padding-top: 22px; display: flex; flex-direction: column; gap: 2px; }
+        .fr-reach .status-line { font-size: 12px; }
+        .fr-reach .hint { margin-top: 6px; }
+        .fr-thead { display: flex; align-items: center; padding: 10px 24px; background: var(--well); }
+        .fr-thead .label:first-child, .fr-row .who { width: 260px; flex: 0 0 260px; }
+        .fr-row { display: flex; align-items: center; padding: 14px 24px; border-top: 1px solid var(--hair); min-width: 0; }
+        .fr-row .who { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .fr-row .who .t { display: flex; align-items: center; gap: 8px; font-weight: 500; min-width: 0; }
+        .fr-row .who .t b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fr-row .now { flex: 1 1 auto; max-width: 600px; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .fr-row .now .ti { font-size: 11px; font-weight: 500; }
+        .fr-row .now .de { font-size: 11px; line-height: 15px; color: var(--ink3); overflow-wrap: anywhere; }
+        .fr-row .now .de.mono { font-family: var(--mono); }
+        .fr-row.off .now .ti { color: var(--ink3); }
+        .fr-row .spacer { flex: 1; }
+        .fr-row .lamp { width: 7px; height: 7px; flex-basis: 7px; margin: 0 3.5px; }
+        .fr-req { display: flex; align-items: center; gap: 16px; padding: 14px 24px; background: var(--well); }
+        .fr-req + .fr-req, .fr-req + .fr-thead { border-top: 1px solid var(--hair); }
+        .fr-req ~ .fr-thead { background: transparent; }
+        .fr-req .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .fr-req .who .t { display: flex; align-items: center; gap: 8px; font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+        .fr-inv { display: flex; align-items: center; gap: 16px; padding: 12px 24px; border-top: 1px solid var(--hair); }
+        .fr-row .fr-make { margin-right: 6px; }
+        .fr-role { font-size: 11px; font-weight: 500; color: var(--friend); }
+        .fr-libreq { flex-direction: column; align-items: stretch; gap: 14px; padding: 16px 24px; }
+        .fr-libreq .h { display: flex; align-items: center; gap: 16px; }
+        .fr-conseq { display: flex; flex-direction: column; gap: 6px; }
+        .fr-conseq .c { display: flex; align-items: flex-start; gap: 10px; font-size: 11px; line-height: 15px; color: var(--ink2); }
+        .fr-conseq .c .lamp { width: 6px; height: 6px; flex: 0 0 6px; margin: 4px 0 0; }
+        .fr-libreq .if { display: flex; flex-direction: column; gap: 8px; }
+        .fr-dialog .fr-conseq { gap: 10px; }
+        /* 09.4 Library */
+        .fl-status { display: flex; align-items: center; gap: 16px; }
+        .fl-status .lamp { width: 8px; height: 8px; flex: 0 0 8px; }
+        .fl-status .t { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+        .fl-status .t b { font-weight: 500; }
+        .fl-big { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+        .fl-prog { display: flex; flex-direction: column; gap: 8px; }
+        .fl-prog .h { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+        .fl-bar { height: 6px; border-radius: 3px; background: var(--well); border: 1px solid var(--hair); overflow: hidden; }
+        .fl-bar > span { display: block; height: 100%; background: var(--friend); border-radius: 3px; }
+        .fl-bar.thin { height: 4px; width: 300px; max-width: 100%; }
+        .fl-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+        .fl-stat { display: flex; flex-direction: column; gap: 4px; }
+        .fl-recent .ch { display: flex; align-items: center; gap: 12px; padding: 6px 0; font-size: 11px; }
+        .fl-recent .ch .s { width: 12px; font-family: var(--mono); color: var(--ink2); font-weight: 500; }
+        .fl-recent .ch .ti { width: 320px; flex: 0 0 320px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fl-recent .ch .w { flex: 1; color: var(--ink3); }
+        .fl-recent .ch .at { font-family: var(--mono); color: var(--ink3); }
+        .fl-syncs { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+        .fl-syncs span { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 500; color: var(--ink2); }
+        .fl-syncs .lamp, .fl-intro .lamp, .fl-slave .who .lamp { width: 7px; height: 7px; flex: 0 0 7px; }
+        .fl-hr { border-top: 1px solid var(--hair); }
+        .fl-intro { display: flex; align-items: center; gap: 10px; padding: 14px 24px; font-size: 11px; color: var(--ink2); }
+        .fl-thead { display: flex; align-items: center; padding: 10px 24px; background: var(--well); border-top: 1px solid var(--hair); }
+        .fl-thead .label:nth-child(1), .fl-slave .who { width: 260px; flex: 0 0 260px; }
+        .fl-thead .label:nth-child(2), .fl-slave .st { width: 420px; flex: 0 0 420px; }
+        .fl-thead .label:nth-child(3), .fl-slave .en { width: 200px; flex: 0 0 200px; }
+        .fl-slave { display: flex; align-items: center; padding: 14px 24px; border-top: 1px solid var(--hair); }
+        .fl-slave .who { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+        .fl-slave .st { display: flex; flex-direction: column; gap: 4px; }
+        .fl-slave .st .ti { font-size: 11px; font-weight: 500; }
+        .fl-slave.off .st .ti { color: var(--ink3); }
+        .fl-slave .en { font-family: var(--mono); font-size: 11px; color: var(--ink2); }
+        .fl-slave .spacer { flex: 1; }
+        .fr-inv .lamp, .fr-note .lamp { width: 6px; height: 6px; flex-basis: 6px; margin: 0 4px; }
+        .fr-inv .n { font-size: 11px; font-weight: 500; color: var(--ink2); }
+        .fr-inv .m { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--ink3); white-space: nowrap; }
+        .fr-step { display: flex; align-items: flex-start; gap: 16px; padding: 16px 24px; }
+        .fr-step + .fr-step { border-top: 1px solid var(--hair); }
+        .fr-step .t { font-weight: 500; }
+        .fr-step .d { font-size: 11px; line-height: 15px; color: var(--ink3); margin-top: 3px; }
+        .fr-notes { gap: 10px; }
+        .fr-note { display: flex; align-items: flex-start; gap: 10px; }
+        .fr-note .lamp { margin-top: 4px; }
+        .fr-actions, .fr-reach-phone, .fr-row .who .t .fr-rm-p { display: none; }
+        .fr-code { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--well); border: 1px solid var(--hair); border-radius: 4px; }
+        .fr-code code { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; user-select: all; }
+        .fr-kv { display: grid; grid-template-columns: 90px 1fr; gap: 6px 12px; font-size: 11px; line-height: 15px; }
+        .fr-kv dt { font-weight: 500; color: var(--ink2); }
+        .fr-kv dd { margin: 0; color: var(--ink3); }
+        .fr-preview { display: flex; align-items: center; gap: 16px; padding: 16px; border: 1px solid var(--hair); border-radius: 4px; }
+        .fr-msg { display: flex; align-items: flex-start; gap: 10px; }
+        .fr-msg .lamp { margin-top: 5px; }
+        .fr-msg .t { font-weight: 500; }
+        .fr-dialog { width: min(600px, calc(100vw - 32px)); }
+        .fr-dialog.narrow { width: min(520px, calc(100vw - 32px)); }
+        .fr-dialog .card-body { gap: 20px; }
+        .fr-paste { border: 0; background: transparent; font: 500 11px var(--sans); color: var(--ink2); cursor: pointer; padding: 0; }
+        .fr-paste:hover { color: var(--ink); }
+        .p-only { display: none !important; }
+        @media (max-width: 900px) {
+            .p-only { display: revert !important; }
+            .d-only { display: none !important; }
+            #sec-friends .fr-lib-card { order: 0; }
+            .fr-row .who .t .fr-mk-p { display: inline-flex; margin-left: auto; }
+            .fr-row .who .t .fr-mk-p + .fr-rm-p { margin-left: 6px; }
+            .fr-libreq { padding: 12px 16px; gap: 10px; }
+            .fr-libreq .ab { display: flex !important; justify-content: flex-end; gap: 10px; }
+            #fr-lib-body:not(.flush) { padding: 16px; gap: 14px !important; }
+            .fl-stats.p-only { display: flex !important; gap: 24px; }
+            .fl-syncs { flex-direction: column; align-items: flex-start; gap: 8px; }
+            .fl-syncs span { font-weight: 400; }
+            .fl-leave-p { align-self: flex-end; }
+            .fl-intro { padding: 12px 16px; }
+            .fl-thead, .fl-slave .en, .fl-slave > .spacer, .fl-slave > .btn { display: none; }
+            .fl-slave { flex-direction: column; align-items: stretch; gap: 6px; padding: 12px 16px; }
+            .fl-slave .who, .fl-slave .st { width: auto; flex: none; }
+            .fl-slave .who .btn { margin-left: auto; }
+            .fl-bar.thin { width: 100%; }
+            #sec-friends { gap: 16px; }
+            #sec-friends .fr-actions { display: flex; gap: 10px; flex-wrap: wrap; order: 1; }
+            #sec-friends .fr-list-card { order: 2; }
+            #sec-friends .fr-reach-phone { display: flex; align-items: center; gap: 8px; order: 3; padding: 0 4px; }
+            #sec-friends .fr-reach-phone .lamp { width: 6px; height: 6px; flex-basis: 6px; }
+            #sec-friends .fr-node { order: 4; }
+            #sec-friends .fr-note-card { order: 5; }
+            #sec-friends .fr-head-actions { display: none; }
+            .fr-thead { display: none; }
+            .fr-row { flex-direction: column; align-items: stretch; gap: 4px; padding: 12px 16px; }
+            .fr-row:first-child, .fr-req + .fr-row, .fr-thead + .fr-row { border-top: 0; }
+            .fr-req + .fr-row { border-top: 1px solid var(--hair); }
+            .fr-row .who, .fr-row .now { width: auto; flex: none; max-width: none; }
+            .fr-row .who .since { display: none; }
+            .fr-row .who .t .fr-rm-p { display: inline-flex; margin-left: auto; }
+            .fr-row > .btn, .fr-row > .spacer { display: none; }
+            .fr-req { flex-wrap: wrap; padding: 12px 16px; gap: 10px; }
+            .fr-req .who { flex-basis: 100%; }
+            .fr-req .btn:first-of-type { margin-left: auto; }
+            .fr-inv { padding: 12px 16px; flex-wrap: wrap; }
+            .fr-step { padding: 14px 16px; }
+            .fr-reach { padding-top: 0; }
+        }
         .hist-row { padding: 14px 24px; display: flex; flex-direction: column; gap: 12px; }
         .hist-row + .hist-row { border-top: 1px solid var(--hair); }
         .hist-row.open, .hist-row.restoring { background: var(--well); }
@@ -234,6 +375,7 @@
                 <a href="#scheduler" data-sec="sec-scheduler"><span class="num">06</span>Scheduler<span class="dirty"></span></a>
                 <a href="#access" data-sec="sec-access"><span class="num">07</span>Access</a>
                 <a href="#history" data-sec="sec-history"><span class="num">08</span>History<span class="dirty"></span></a>
+                <a href="#friends" data-sec="sec-friends"><span class="num">09</span>Friends<span class="dirty"></span></a>
             </nav>
             <nav class="nav">
                 <span class="label">Reference</span>
@@ -506,11 +648,13 @@
                             <p>Where releases are searched, where metadata comes from and which media server gets refreshed after a sync.</p>
                         </div>
 
+                        <div class="managed-note" data-slave-only hidden><span class="bar"></span><span class="small" data-slave-text="Films and series come from {m}. Prowlarr and TMDB serve only the music sync here; the media server still gets a refresh for every change {m} sends."></span><button type="button" class="btn sm" onclick="openFriendsLibrary()">Friends › Library</button></div>
+
                         <div class="card">
                             <div class="card-head"><span class="num">03.1</span><span class="label ink">Indexer</span><span class="spacer"></span><span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span></div>
                             <div class="card-body">
                                 <div class="toggle-row" style="padding-top:0">
-                                    <div class="text"><div class="title">Enable Prowlarr</div><div class="hint">Use Prowlarr as indexer; if disabled, uses Torrentio.</div></div>
+                                    <div class="text"><div class="title">Enable Prowlarr <span class="managed-tag" data-slave-only hidden>Music only</span></div><div class="hint">Use Prowlarr as indexer; if disabled, uses Torrentio.</div></div>
                                     <label class="switch"><input type="checkbox" name="prowlarr_enabled" data-nested="prowlarr.enabled" onchange="updateProwlarrState()"><span class="slider"></span></label>
                                 </div>
                                 <div class="grid2">
@@ -534,9 +678,9 @@
                             <div class="card-head"><span class="num">03.2</span><span class="label ink">Metadata</span><span class="spacer"></span><span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span></div>
                             <div class="card-body">
                                 <div class="grid2">
-                                    <div class="field"><label>TMDB API key</label>
+                                    <div class="field" data-slave-disabled><label>TMDB API key</label>
                                         <div class="input mono"><input type="password" name="tmdb_api_key" autocomplete="off"><button type="button" class="btn ghost sm reveal">Show</button></div>
-                                        <div class="hint">Titles, years and posters for the sync engines.</div>
+                                        <div class="hint" data-slave-hint="Not used while {m} sends your library: films and series arrive with their titles and years.">Titles, years and posters for the sync engines.</div>
                                     </div>
                                 </div>
                             </div>
@@ -560,7 +704,7 @@
                                     </div>
                                     <div class="field"><label>Media Server URL</label>
                                         <div class="input mono"><input type="text" name="plex_url" data-nested="plex.url" placeholder="http://192.168.1.10:32400  or  http://192.168.1.10:8096"></div>
-                                        <div class="hint" title="A LAN broadcast finds servers on the same network, but not one running in a Docker bridge network, so setting this is the reliable way.">Plex or Jellyfin.</div>
+                                        <div class="hint" data-slave-hint="Refreshed after every change from {m}." title="A LAN broadcast finds servers on the same network, but not one running in a Docker bridge network, so setting this is the reliable way.">Plex or Jellyfin.</div>
                                     </div>
                                     <div class="field"><label>Media Server Token</label>
                                         <div class="input mono"><input type="password" name="plex_token" data-nested="plex.token" autocomplete="off"><button type="button" class="btn ghost sm reveal">Show</button></div>
@@ -571,11 +715,11 @@
                                 <div class="grid3">
                                     <div class="field"><label>Movies</label>
                                         <div class="input"><input type="number" name="plex_library_id" data-nested="plex.library_id"></div>
-                                        <div class="hint">Gates the post-sync refresh only.</div>
+                                        <div class="hint" data-slave-hint="Refreshed when films arrive.">Gates the post-sync refresh only.</div>
                                     </div>
                                     <div class="field"><label>TV Series</label>
                                         <div class="input"><input type="number" name="plex_tv_library_id" data-nested="plex.tv_library_id"></div>
-                                        <div class="hint">Gates the post-sync refresh only.</div>
+                                        <div class="hint" data-slave-hint="Refreshed when episodes arrive.">Gates the post-sync refresh only.</div>
                                     </div>
                                     <div class="field"><label>Music</label>
                                         <div class="input"><input type="number" name="plex_music_library_id" data-nested="plex.music_library_id" min="0"></div>
@@ -856,6 +1000,8 @@
                         <p>Automates the Movies, TV and Watchlist sync jobs that create the virtual .mkv files.</p>
                     </div>
 
+                    <div class="managed-note" data-slave-only hidden><span class="bar"></span><span class="small" data-slave-text="Movies, TV and Watchlist syncs are off while {m} sends you its library. Your schedule is kept and comes back when you leave."></span><button type="button" class="btn sm" onclick="openFriendsLibrary()">Friends › Library</button></div>
+
                     <div class="card">
                         <div class="card-head"><span class="num">06.1</span><span class="label ink">MKV Creation Scheduler</span><span class="spacer"></span><span class="scope"><span class="lamp off"></span><span class="label">Restart</span></span></div>
                         <div class="card-body" style="gap:0">
@@ -895,8 +1041,8 @@
                                     <button type="button" id="sched-wl-btn" class="btn sm" onclick="runSyncNow('watchlist')">▶ Run now</button>
                                 </div>
                                 <div class="job" style="padding:16px 0 0">
-                                    <span class="lamp off"></span>
-                                    <span class="small faint">Music sync keeps its own schedule from the saved configuration — not editable here, preserved on save.</span>
+                                    <span class="lamp off" data-slave-lamp="lamp"></span>
+                                    <span class="small faint" data-slave-hint="Music sync keeps its own schedule from the saved configuration and runs as usual: music is not part of the shared library.">Music sync keeps its own schedule from the saved configuration — not editable here, preserved on save.</span>
                                 </div>
                             </div>
                         </div>
@@ -1030,6 +1176,76 @@
                         </div>
                     </div>
                 </section>
+
+                <!-- ================= 09 FRIENDS ================= -->
+                <!-- The two help settings belong to the Tentacle form (change bar); the rest acts at once. -->
+                <section class="settings" id="sec-friends" data-title="Friends">
+                    <div class="page-intro">
+                        <span class="label">Settings · 09</span>
+                        <div class="row">
+                            <h1 class="h1">Friends</h1><span class="spacer"></span>
+                            <span class="scope"><span class="lamp"></span><span class="label">Applies live</span></span>
+                        </div>
+                        <p>Connect with friends who run Tiramisu. A film starts sooner when a friend already has its beginning, and while you watch, friends with the same film will never let you down.</p>
+                    </div>
+
+                    <div class="note-box" id="fr-off" hidden><span class="lamp off"></span><span class="small">Friends need the state database, which this installation does not have.</span></div>
+
+                    <div class="card fr-node">
+                        <div class="card-head"><span class="num">09.1</span><span class="label ink">This node</span></div>
+                        <div class="card-body">
+                            <div class="toggle-row" style="padding-top:0">
+                                <div class="text"><div class="title">Help friends while they watch</div>
+                                    <div class="hint">Fetches ahead for a friend playing a film you have, at scan priority. Your own playback comes first.</div></div>
+                                <label class="switch"><input type="checkbox" name="friendsHelp" form="gostorm-form" onchange="frHelpState()"><span class="slider"></span></label>
+                            </div>
+                            <div class="grid3">
+                                <div class="field"><label for="fr-name">Node name</label>
+                                    <div class="input mono"><input type="text" id="fr-name" maxlength="64" autocomplete="off" spellcheck="false"></div>
+                                    <div class="hint" id="fr-name-hint">Shown to your friends.</div>
+                                </div>
+                                <div class="field" id="fr-max-field"><label for="fr-max">Concurrent helps</label>
+                                    <div class="input mono"><input type="number" id="fr-max" name="friendsMaxHelps" form="gostorm-form" min="1" max="8" step="1"></div>
+                                    <div class="hint">Friends helped at the same time.</div>
+                                </div>
+                                <div class="fr-reach">
+                                    <div class="status-line"><span class="lamp off" id="fr-reach-lamp"></span><span id="fr-reach-text">Checking</span></div>
+                                    <div class="hint" id="fr-reach-hint"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="fr-actions">
+                        <button type="button" class="btn primary sm" onclick="frInvite()"><span class="ico">+</span>Invite a friend</button>
+                        <button type="button" class="btn sm" onclick="frJoin()">Join with a code</button>
+                    </div>
+
+                    <div class="card fr-list-card">
+                        <div class="card-head"><span class="num">09.2</span><span class="label ink">Friends</span><span class="spacer"></span>
+                            <span class="fr-head-actions">
+                                <button type="button" class="btn sm" onclick="frJoin()">Join with a code</button>
+                                <button type="button" class="btn primary sm" onclick="frInvite()"><span class="ico">+</span>Invite a friend</button>
+                            </span>
+                        </div>
+                        <div class="card-body flush" id="fr-list"><div class="hist-empty small faint">Loading…</div></div>
+                    </div>
+                    <div class="fr-reach-phone"><span class="lamp off" id="fr-reach-lamp-p"></span><span class="small faint" id="fr-reach-text-p"></span></div>
+
+                    <div class="card fr-note-card">
+                        <div class="card-head"><span class="num">09.3</span><span class="label ink">What friends can see</span></div>
+                        <div class="card-body fr-notes">
+                            <div class="fr-note"><span class="lamp off"></span><span class="small faint">Your node's name and address, and the film you start watching: friends who have it can help. Nothing else about your library, your players or your settings.</span></div>
+                            <div class="fr-note"><span class="lamp off"></span><span class="small faint">Friends get priority when your node chooses whom to send to and whom to ask first. Pieces from a friend are checked like pieces from anyone else.</span></div>
+                            <div class="fr-note"><span class="lamp off"></span><span class="small faint">A library master sees and fills your whole library, and can put any torrent in it. Accept only a friend you trust; you can leave at any time.</span></div>
+                        </div>
+                    </div>
+
+                    <div class="card fr-lib-card" id="fr-lib" hidden>
+                        <div class="card-head"><span class="num">09.4</span><span class="label ink">Library</span><span class="spacer"></span><span id="fr-lib-head"></span></div>
+                        <div class="card-body" id="fr-lib-body"></div>
+                    </div>
+                </section>
             </div>
 
             <!-- ============ CHANGE BAR ============ -->
@@ -1097,6 +1313,12 @@
         }
 
         // --- Adaptive Shield state (disabled when ResponsiveMode is OFF) ---
+        // 09.1: the count reads as inactive while helping is off.
+        function frHelpState() {
+            const on = document.querySelector('[name="friendsHelp"]')?.checked;
+            document.getElementById('fr-max-field')?.classList.toggle('is-disabled', !on);
+        }
+
         function updateAdaptiveShieldState() {
             const responsive = document.querySelector('[name="responsiveMode"]');
             const shieldInput = document.querySelector('[name="adaptiveShield"]');
@@ -1917,6 +2139,11 @@
                     if (input) input.checked = NEGATIVE_KEYS.includes(k) ? !originalCore[k] : originalCore[k];
                 });
                 updateAdaptiveShieldState();
+                // FriendsMaxHelps: 0 = default (2), negative = off; off keeps the count as -n.
+                const fm = originalCore.FriendsMaxHelps || 0;
+                form.elements['friendsHelp'].checked = fm >= 0;
+                form.elements['friendsMaxHelps'].value = fm === 0 ? 2 : Math.abs(fm);
+                frHelpState();
                 syncSelectSegs();
                 // Trigger warnings after load
                 document.querySelectorAll('[data-warn-below], [data-warn-above]').forEach(i => i.dispatchEvent(new Event('input')));
@@ -1942,6 +2169,11 @@
                 const isUIOn = formData.has(formKey);
                 sets[k] = NEGATIVE_KEYS.includes(k) ? !isUIOn : isUIOn;
             });
+            const form = document.getElementById('gostorm-form');
+            const helps = Math.max(1, parseInt(form.elements['friendsMaxHelps'].value) || 2);
+            const helpOn = form.elements['friendsHelp'].checked;
+            const fmOld = originalCore.FriendsMaxHelps || 0;
+            sets.FriendsMaxHelps = helpOn ? (fmOld === 0 && helps === 2 ? 0 : helps) : -helps;
             const res = await fetch('/api/tentacle/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2074,10 +2306,14 @@
                         : `next ${next.toLocaleDateString('en-GB', { weekday: 'short' })} ${hm}`);
             }
             el.textContent = parts.join(' · ') || 'Not run yet';
-            const failed = !rt.running && rt.last_status && rt.last_status !== 'ok';
+            const failed = !rt.running && rt.last_status && rt.last_status !== 'ok' && rt.last_status !== 'held';
             el.classList.toggle('accent', !!failed);
+            // Held while a library master is active: the saved schedule stays, the job does not run.
+            el.classList.toggle('held', !!rt.held_by);
+            el.closest('.job')?.classList.toggle('held', !!rt.held_by);
+            if (rt.held_by) el.textContent = 'Off: your library comes from ' + rt.held_by;
             const lamp = document.getElementById(id.replace('-meta', '-lamp'));
-            if (lamp) lamp.className = 'lamp ' + (rt.running ? 'run' : failed ? 'err' : rt.last_run ? '' : 'off');
+            if (lamp) lamp.className = 'lamp ' + (rt.running ? 'run' : rt.held_by ? 'off' : failed ? 'err' : rt.last_run ? '' : 'off');
             // Sync button state with API
             const jobMap = { 'sched-movies-meta': 'movies', 'sched-tv-meta': 'tv', 'sched-wl-meta': 'watchlist' };
             const job = jobMap[id];
@@ -2092,11 +2328,32 @@
                     btnEl.className = 'btn sm';
                     btnEl.onclick = () => runSyncNow(job);
                 }
+                btnEl.disabled = !!rt.held_by && !rt.running;
             }
         }
 
         // Status refreshes every 30s; the editable fields are only rewritten while the user
         // has no unsaved schedule edits, so a poll can never undo what they are typing.
+        // A node whose library comes from a friend: notes, hints and read-only fields in 03 and 06.
+        window.applyLibraryMaster = function (m) {
+            const on = !!m;
+            document.querySelectorAll('[data-slave-only]').forEach(e => e.hidden = !on);
+            document.querySelectorAll('[data-slave-text]').forEach(e => e.textContent = on ? e.dataset.slaveText.replaceAll('{m}', m) : '');
+            document.querySelectorAll('[data-slave-hint]').forEach(e => {
+                if (e.dataset.orig === undefined) e.dataset.orig = e.textContent;
+                e.textContent = on ? e.dataset.slaveHint.replaceAll('{m}', m) : e.dataset.orig;
+            });
+            document.querySelectorAll('[data-slave-lamp]').forEach(e => e.className = on ? 'lamp' : 'lamp off');
+            document.querySelectorAll('[data-slave-disabled]').forEach(f => {
+                f.classList.toggle('is-disabled', on);
+                f.querySelectorAll('input').forEach(i => i.readOnly = on); // read-only, not disabled: the saved value stays in the form
+            });
+        };
+        window.openFriendsLibrary = function () {
+            location.hash = '#friends';
+            setTimeout(() => document.getElementById('fr-lib')?.scrollIntoView({ block: 'start' }), 50);
+        };
+
         async function loadScheduler() {
             const [cfgRes, rtRes] = await Promise.all([
                 fetch('/api/config'),
@@ -3333,6 +3590,640 @@
                 loadTLS();
             }
             load();
+        })();
+    </script>
+    <!-- ============ FRIENDS DIALOG (one, reused) ============ -->
+    <dialog class="acc-dialog fr-dialog" id="fr-dialog">
+        <form method="dialog" id="fr-dialog-form" autocomplete="off">
+            <div class="card-head"><span class="title" id="fr-dlg-title"></span><span class="spacer"></span><button type="button" class="key" aria-label="Close" onclick="frClose()">✕</button></div>
+            <div class="card-body" id="fr-dlg-body"></div>
+            <div class="acc-dlg-foot">
+                <span class="small faint" id="fr-dlg-note" style="flex:1"></span>
+                <button type="button" class="btn ghost sm" id="fr-dlg-alt"></button>
+                <button type="submit" class="btn primary sm" id="fr-dlg-ok"></button>
+            </div>
+        </form>
+    </dialog>
+    <script>
+        // =============================================================
+        // 09 Friends (/api/friends). Names and titles come from other nodes: textContent only.
+        // =============================================================
+        (function () {
+            const $ = id => document.getElementById(id);
+            const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+            const lamp = cls => el('span', 'lamp ' + (cls || ''));
+            const dlg = $('fr-dialog');
+            let st = null, onOk = null, onAlt = null, nameSaved = '';
+
+            async function api(method, path, body) {
+                const r = await fetch('/api/friends' + path, {
+                    method, headers: body ? { 'Content-Type': 'application/json' } : {},
+                    body: body ? JSON.stringify(body) : undefined, cache: 'no-store'
+                });
+                if (r.status === 401 && (r.headers.get('WWW-Authenticate') || '').includes('realm="tiramisu"')) {
+                    location.href = '/login?next=' + encodeURIComponent('/control#friends');
+                }
+                const data = r.status === 204 ? {} : await r.json().catch(() => ({}));
+                if (!r.ok) { const e = new Error(data.error || ('HTTP ' + r.status)); e.code = data.error || ''; throw e; }
+                return data;
+            }
+            const ERR = {
+                session_required: 'Sign in to the Control Panel to manage friends.',
+                public_address_unknown: 'Your public address is not known yet: it is read when Tiramisu starts. Try again in a minute.',
+                bad_code: 'This is not an invitation code. Paste the whole code, from TMF1- to the end.',
+                own_invite: 'This is a code you created: send it to your friend instead.',
+                bad_name: 'Choose a name of up to 64 characters, without spaces at the ends.',
+                not_found: 'It no longer exists: the list has been refreshed.',
+                already_decided: 'Already decided: the list has been refreshed.',
+                store: 'The state database could not be written. Check the log.',
+            };
+            const errText = e => ERR[e.code] || e.message;
+
+            function ago(ts) {
+                const s = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+                if (s < 60) return 'just now';
+                if (s < 3600) return Math.floor(s / 60) + ' min ago';
+                if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+                const d = Math.floor(s / 86400);
+                return d === 1 ? 'yesterday' : d + ' days ago';
+            }
+            const hoursLeft = ts => Math.max(1, Math.round((ts - Date.now() / 1000) / 3600));
+            function since(ts) {
+                if (!ts) return '';
+                const d = new Date(ts * 1000);
+                if (d.toDateString() === new Date().toDateString()) return 'since today';
+                return 'since ' + d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+            }
+            // Addresses of other nodes are shown as a.b.x.x:port, as everywhere else in the panel.
+            function mask(addr) {
+                const m = /^(\d+)\.(\d+)\.\d+\.\d+(:\d+)?$/.exec(addr || '');
+                return m ? `${m[1]}.${m[2]}.x.x${m[3] || ''}` : (addr || '');
+            }
+            const mbs = kbps => (kbps / 1024).toFixed(1) + ' MB/s';
+            const film = t => t || 'a film you have';
+            const REASON = { off: 'help is switched off', upload_off: 'uploads are switched off', cap: 'cap reached', busy: 'node busy', unavailable: 'not available' };
+
+            // The address a code carries (TMF1-, base32: 16-byte secret, IPv4, port).
+            function codeAddr(code) {
+                const c = String(code || '').toUpperCase().replace(/\s+/g, '');
+                if (!c.startsWith('TMF1-')) return '';
+                const b32 = c.slice(5).replace(/-/g, ''), A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+                let bits = 0, val = 0; const out = [];
+                for (const ch of b32) {
+                    const i = A.indexOf(ch); if (i < 0) return '';
+                    val = (val << 5) | i; bits += 5;
+                    if (bits >= 8) { out.push((val >>> (bits - 8)) & 255); bits -= 8; }
+                }
+                if (out.length !== 22) return '';
+                return `${out.slice(16, 20).join('.')}:${(out[20] << 8) | out[21]}`;
+            }
+
+            // ---------- what a friend and this node exchange now ----------
+            function nowOf(f) {
+                const a = f.now || {}, links = a.links || [];
+                const link = h => links.find(l => l.hash === h);
+                const moving = links.some(l => l.kbps >= 0.5 || l.up_kbps >= 0.5);
+                if (a.helping_you && a.helping_you.length) {
+                    const h = a.helping_you[0], l = link(h.hash);
+                    return { lamp: 'run friend', title: 'Helping you', detail: [film(h.title), 'fetching ahead', l && l.kbps >= 0.5 ? '↓ ' + mbs(l.kbps) : ''] };
+                }
+                if (a.you_help && a.you_help.length) {
+                    const h = a.you_help[0], l = link(h.hash);
+                    return { lamp: 'run friend', title: 'You help ' + f.name + (h.low_priority ? ' · low priority' : ''),
+                        detail: [film(h.title), l && l.up_kbps >= 0.5 ? '↑ ' + mbs(l.up_kbps) : '', h.low_priority ? 'your own playback comes first' : ''] };
+                }
+                if (a.not_helping) {
+                    const r = a.not_helping;
+                    return { lamp: links.length ? (moving ? 'run friend' : '') : 'off', title: 'Watching ' + film(r.title),
+                        detail: ['you have it · not helping: ' + (REASON[r.reason] || r.reason), 'asked ' + ago(r.at)] };
+                }
+                if (links.length) {
+                    const l = links[0];
+                    return { lamp: moving ? 'run friend' : '', title: moving ? 'Exchanging data' : 'Connected',
+                        detail: [film(l.title), l.kbps >= 0.5 ? '↓ ' + mbs(l.kbps) : '', l.up_kbps >= 0.5 ? '↑ ' + mbs(l.up_kbps) : '', links.length > 1 ? `+${links.length - 1} more` : ''] };
+                }
+                if (f.online === true) {
+                    const l = f.library, al = l && l.state === 'active' && !l.aligned_at;
+                    const what = al ? (l.side === 'slave' ? 'receiving your library' : 'sending you its library') : 'no torrent in common right now';
+                    return { lamp: '', title: 'Online', detail: [what] };
+                }
+                return { lamp: 'off', off: true, title: f.last_seen ? 'Not connected · last contact ' + ago(f.last_seen) : 'Not connected yet',
+                    detail: [f.addr ? 'last address ' + mask(f.addr) : 'address not known yet'], mono: true };
+            }
+
+            // ---------- library roles (side is the friend's: master sends us its library) ----------
+            const LIB_ROLE = { master: 'Master · sends you its library', slave: 'Slave · gets your library' };
+            const REFUSED = { has_master: n => n + ' already gets a library from another friend', has_slaves: n => n + ' sends its library to other friends' };
+            const myMaster = () => (st && st.library && st.library.master) || '';
+            // A node with a master, or deciding on a master's proposal, proposes to nobody (no chains).
+            const mayPropose = () => !myMaster() && !st.friends.some(f => f.library && f.library.side === 'master' && f.library.state === 'offered');
+            const conseq = m => ['Your movie, TV and watchlist syncs turn off. Your saved schedule comes back when you leave.',
+                `Your current titles stay; ${m}'s are added. Later, what it adds or removes is mirrored here.`,
+                "You can't add or remove titles yourself while it lasts: by hand, through the Library API or through MCP.",
+                'Music is not affected: your music sync keeps running.'];
+            function bullets(lines) {
+                const c = el('div', 'fr-conseq');
+                lines.forEach(s => { const r = el('div', 'c'); r.append(lamp('off'), el('span', null, s)); c.appendChild(r); });
+                return c;
+            }
+            function libAct(method, path, after) {
+                return async () => {
+                    try { await api(method, path); if (after) after(); }
+                    catch (e) { alert(libErr(e, path.split('/')[2])); }
+                    load();
+                };
+            }
+            function libErr(e, name) {
+                name = decodeURIComponent(name || '');
+                if (e.code === 'unreachable') return `Can't reach ${name} right now. Try again when it is online.`;
+                if (e.code === 'has_master' || e.code === 'has_slaves') return REFUSED[e.code](name) + '.';
+                return errText(e);
+            }
+            function libraryRows() {
+                const out = [];
+                for (const f of st.friends) {
+                    const l = f.library, path = '/library/' + encodeURIComponent(f.name);
+                    if (!l) continue;
+                    if (l.side === 'slave' && l.state === 'proposed') {
+                        const row = el('div', 'fr-req'), who = el('div', 'who'), t = el('div', 't');
+                        t.append(el('span', 'chip-tag sig-yellow', 'Waiting'), el('span', null, `Waiting for ${f.name} to accept your library`));
+                        who.append(t, el('div', 'small faint', `Proposed ${ago(l.proposed)}. ${f.name} accepts from its own Control Panel; nothing changes until then.`));
+                        const b = el('button', 'btn ghost sm', 'Withdraw'); b.type = 'button'; b.onclick = libAct('DELETE', path);
+                        row.append(who, b);
+                        out.push(row);
+                    } else if (l.side === 'slave' && l.state === 'refused') {
+                        const row = el('div', 'fr-req'), who = el('div', 'who'), t = el('div', 't');
+                        t.append(el('span', 'chip-tag', 'Refused'), el('span', null, (REFUSED[l.refused] || (n => n + ' refused your library'))(f.name)));
+                        who.append(t, el('div', 'small faint', 'Your proposal was refused. Nothing changed on either node.'));
+                        row.appendChild(who);
+                        out.push(row);
+                    } else if (l.side === 'master' && l.state === 'offered') {
+                        const row = el('div', 'fr-req fr-libreq'), h = el('div', 'h'), who = el('div', 'who'), t = el('div', 't');
+                        t.append(el('span', 'chip-tag sig-yellow', 'Request'), el('span', 'd-only', `${f.name} wants to be your library master`), el('span', 'p-only', f.name));
+                        who.append(t, el('div', 'small faint d-only', `Proposed ${ago(l.proposed)} · answer within ${hoursLeft(l.expires)} h`),
+                            el('div', 'small p-only', `Wants to be your library master · ${hoursLeft(l.expires)} h left to answer`));
+                        const btns = () => {
+                            const no = el('button', 'btn ghost sm', 'Decline'); no.type = 'button'; no.onclick = libAct('DELETE', path);
+                            const ok = el('button', 'btn primary sm', 'Accept'); ok.type = 'button'; ok.onclick = libAct('POST', path + '/accept');
+                            return [no, ok];
+                        };
+                        const top = btns(); top.forEach(b => b.classList.add('d-only'));
+                        h.append(who, ...top);
+                        const w = el('div', 'if');
+                        w.append(el('span', 'label', 'If you accept'), bullets(conseq(f.name)));
+                        const ab = el('div', 'ab p-only'); ab.append(...btns());
+                        row.append(h, w, el('div', 'small faint d-only', 'You can leave at any time from Library, below.'), ab);
+                        out.push(row);
+                    }
+                }
+                return out;
+            }
+
+            // ---------- rows ----------
+            function requestRow(r) {
+                const row = el('div', 'fr-req'), who = el('div', 'who'), t = el('div', 't');
+                let chip = 'Request', title = r.declared_name + ' wants to be your friend', sub, btns = [];
+                if (r.direction === 'in' && r.state === 'pending') {
+                    sub = `Used one of your codes · ${ago(r.created)} · answer within ${hoursLeft(r.expires)} h`;
+                    btns = [['Decline', 'ghost', () => decide(r.id, false)], ['Approve', 'primary', () => decide(r.id, true)]];
+                } else if (r.direction === 'in' && r.state === 'approved') {
+                    chip = 'Approved'; title = 'Pairing with ' + r.declared_name;
+                    sub = 'Approved: ' + r.declared_name + ' completes the pairing the next time it is online.';
+                } else if (r.direction === 'out' && r.state === 'pending') {
+                    chip = 'Waiting'; title = 'Waiting for ' + r.declared_name + ' to approve';
+                    sub = `Request sent ${ago(r.created)}. It stays valid until the code expires, in ${hoursLeft(r.expires)} h.`;
+                } else if (r.direction === 'out' && r.state === 'declined') {
+                    chip = 'Declined'; title = r.declared_name + ' declined the request';
+                    sub = 'Ask for a new code to try again.';
+                } else return null;
+                t.append(el('span', 'chip-tag sig-yellow', chip), el('span', null, title));
+                who.append(t, el('div', 'small faint', sub));
+                row.appendChild(who);
+                btns.forEach(([label, kind, fn]) => { const b = el('button', 'btn sm ' + kind, label); b.type = 'button'; b.onclick = fn; row.appendChild(b); });
+                return row;
+            }
+            function friendRow(f) {
+                const n = nowOf(f), row = el('div', 'fr-row' + (n.off ? ' off' : ''));
+                const who = el('div', 'who'), t = el('div', 't');
+                const rmP = el('button', 'btn ghost sm fr-rm-p', 'Remove'); rmP.type = 'button'; rmP.onclick = () => removeFriend(f.name);
+                t.append(lamp(n.lamp), el('b', null, f.name), rmP);
+                who.appendChild(t);
+                const l = f.library;
+                if (l && (l.state === 'active' || l.state === 'released')) who.appendChild(el('div', 'fr-role', LIB_ROLE[l.side]));
+                who.appendChild(el('div', 'small faint since', since(f.since)));
+                const now = el('div', 'now');
+                now.append(el('div', 'ti', n.title), el('div', 'de' + (n.mono ? ' mono' : ''), n.detail.filter(Boolean).join(' · ')));
+                const rm = el('button', 'btn ghost sm', 'Remove'); rm.type = 'button'; rm.onclick = () => removeFriend(f.name);
+                row.append(who, now, el('span', 'spacer'));
+                // No chains: a node with a master proposes to nobody; a friend with a role gets no second one.
+                if ((!l || l.state === 'refused') && mayPropose()) {
+                    const mk = el('button', 'btn sm fr-make', 'Make slave'); mk.type = 'button'; mk.onclick = () => frSendLibrary(f.name);
+                    row.appendChild(mk);
+                    const mkP = el('button', 'btn sm fr-mk-p p-only', 'Make slave'); mkP.type = 'button'; mkP.onclick = () => frSendLibrary(f.name);
+                    t.insertBefore(mkP, rmP);
+                }
+                // A friend that encrypted and now refuses us: it may have gone back to an older version.
+                if (f.secure && f.online === false) {
+                    const rs = el('button', 'btn ghost sm fr-make', 'Reset encryption'); rs.type = 'button'; rs.onclick = () => resetEncryption(f.name);
+                    row.appendChild(rs);
+                }
+                row.appendChild(rm);
+                return row;
+            }
+            function inviteRows(invs) {
+                if (!invs.length) return [];
+                const row = el('div', 'fr-inv');
+                const last = Math.max(...invs.map(i => i.expires));
+                row.append(lamp('off'), el('span', 'n', invs.length === 1 ? '1 code not used yet' : invs.length + ' codes not used yet'),
+                    el('span', 'm', `expires in ${hoursLeft(invs.length === 1 ? invs[0].expires : last)} h`));
+                const b = el('button', 'btn ghost sm', invs.length === 1 ? 'Cancel code' : 'Cancel codes'); b.type = 'button';
+                b.onclick = async () => {
+                    try { for (const i of invs) await api('DELETE', '/invites/' + i.id); } catch (e) { alert(errText(e)); }
+                    load();
+                };
+                row.appendChild(b);
+                return [row];
+            }
+            function explainer() {
+                return [['1', 'Invite', 'Create a single-use code and send it to your friend however you like. It expires in 48 hours.'],
+                    ['2', 'Your friend enters the code', 'Their node contacts yours and asks to join, showing its name.'],
+                    ['3', 'You approve', 'From then on your nodes recognise each other in every swarm you share. Nothing else changes: same port, same peers, same checks.']]
+                    .map(([n, t, d]) => {
+                        const r = el('div', 'fr-step'), c = el('div');
+                        c.append(el('div', 't', t), el('div', 'd', d));
+                        r.append(el('span', 'acc-num', n), c);
+                        return r;
+                    });
+            }
+
+            function renderSelf() {
+                const s = st.self, nm = $('fr-name');
+                if (document.activeElement !== nm) nm.value = s.name;
+                nameSaved = s.name;
+                const port = (s.addr || '').split(':').pop();
+                const nets = (s.reach.networks || []).join('+');
+                let lampCls = 'off', text, hint, phone;
+                if (!s.addr) { text = 'Public address unknown'; hint = 'Read when Tiramisu starts; friends need it to reach you.'; phone = 'public address unknown'; }
+                else if (s.reach.state === 'reachable') {
+                    lampCls = ''; text = `Reachable ${port}${nets ? ' / ' + nets : ''}`;
+                    hint = `${mask(s.addr)} · incoming peer ${s.reach.last ? ago(Date.parse(s.reach.last) / 1000) : 'seen'}`;
+                    phone = `reachable on port ${port}`;
+                } else {
+                    text = `Checking ${port}`;
+                    hint = `${mask(s.addr)} · waiting for an incoming peer` + (s.reach.last ? ` (last one ${ago(Date.parse(s.reach.last) / 1000)})` : '');
+                    phone = `checking port ${port}`;
+                }
+                $('fr-reach-lamp').className = 'lamp ' + lampCls; $('fr-reach-text').textContent = text; $('fr-reach-hint').textContent = hint;
+                $('fr-reach-lamp-p').className = 'lamp ' + lampCls; $('fr-reach-text-p').textContent = s.name + ' · ' + phone;
+            }
+            // ---------- 09.4 Library ----------
+            const clock = ts => new Date(ts * 1000).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            const day = ts => new Date(ts * 1000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+            const dayShort = ts => new Date(ts * 1000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+            function when(ts) {
+                const s = Date.now() / 1000 - ts, d = new Date(ts * 1000), y = new Date(); y.setDate(y.getDate() - 1);
+                if (s < 3600) return ago(ts);
+                if (d.toDateString() === new Date().toDateString()) return clock(ts);
+                if (d.toDateString() === y.toDateString()) return 'yesterday ' + clock(ts);
+                return ago(ts);
+            }
+            function span(mins) {
+                if (mins < 60) return Math.max(1, Math.round(mins)) + ' min';
+                return Math.round(mins / 60) + ' h';
+            }
+            const plural = (n, one, many) => n === 1 ? one : many;
+            const hr = () => el('div', 'fl-hr');
+            function stat(label, value, sub) {
+                const c = el('div', 'fl-stat');
+                c.append(el('span', 'label', label), el('span', 'fl-big', value));
+                if (sub) c.appendChild(el('span', 'small faint', sub));
+                return c;
+            }
+            function bar(frac, thin) {
+                const b = el('div', 'fl-bar' + (thin ? ' thin' : '')), d = el('span');
+                d.style.width = Math.max(2, Math.min(100, frac * 100)) + '%';
+                b.appendChild(d);
+                return b;
+            }
+            function titleOf(r) { return r.title + (r.resolution ? ' · ' + r.resolution : ''); }
+            function renderLibrary() {
+                const card = $('fr-lib'), lib = st.library;
+                card.hidden = !lib;
+                if (!lib) return;
+                const head = $('fr-lib-head'), body = $('fr-lib-body');
+                head.replaceChildren(); body.replaceChildren();
+                if (lib.master) renderLibrarySlave(lib, head, body); else renderLibraryMaster(lib, body);
+            }
+            function renderLibrarySlave(lib, head, body) {
+                const m = lib.master, f = st.friends.find(x => x.name === m) || {}, fl = f.library || {};
+                const lv = el('button', 'btn sm d-only', 'Leave'); lv.type = 'button'; lv.onclick = () => frLeaveLibrary(m);
+                head.appendChild(lv);
+                body.className = 'card-body'; body.style.gap = '20px';
+                const state = lib.aligning ? 'aligning' : f.online === false ? 'offline' : 'sync';
+                const top = el('div', 'fl-status'), t = el('div', 't');
+                top.append(lamp({ aligning: 'run friend', sync: 'friend', offline: 'off' }[state]), t);
+                const recent = lib.recent || [];
+                if (state === 'aligning') {
+                    const a = lib.aligning;
+                    t.append(el('b', null, 'Receiving the library of ' + m), el('span', 'small faint', `First alignment · ${fmt(a.done)} of ${fmt(a.total)} entries · resumes if interrupted`));
+                    const p = el('div', 'fl-prog'), h = el('div', 'h');
+                    const pct = a.total ? Math.floor(a.done * 100 / a.total) : 0;
+                    const tail = [`${pct} %`, a.blocks ? `block ${a.block} of ${a.blocks}` : '', a.rate ? `↓ ${Math.round(a.rate)} entries/s` : ''].filter(Boolean).join('  ·  ');
+                    h.append(el('span', 'fl-big', `${fmt(a.done)} / ${fmt(a.total)}`), el('span', 'mono small faint', tail));
+                    p.append(h, bar(a.total ? a.done / a.total : 0), el('span', 'small faint', 'Titles appear in Plex as their block lands. Playback works meanwhile. If either node stops, the alignment resumes from the last block received.'));
+                    body.append(top, p);
+                } else {
+                    if (state === 'sync') {
+                        t.append(el('b', null, `Library from ${m} · in sync`));
+                        const r = recent[0], at = r ? r.at : fl.last_change;
+                        const what = r ? (r.what === 'added' ? ' · added ' + r.title : r.what === 'removed' ? ' · removed ' + r.title : ' · ' + r.what + ': ' + r.title) : '';
+                        if (at) t.appendChild(el('span', 'small faint', 'Last change ' + ago(at) + what));
+                    } else {
+                        const seen = f.last_seen || f.checked;
+                        const sinceTxt = !seen ? '' : new Date(seen * 1000).toDateString() === new Date().toDateString() ? ' since ' + clock(seen) : ' since ' + dayShort(seen) + ' ' + clock(seen);
+                        t.append(el('b', null, `${m} is offline${sinceTxt}`), el('span', 'small faint', `Your library stays as it is. Changes made meanwhile arrive when ${m} is back.`));
+                    }
+                    const sts = el('div', 'fl-stats d-only');
+                    sts.append(stat('Entries', fmt(lib.entries), `${fmt(lib.films)} films · ${fmt(lib.episodes)} episodes`),
+                        state === 'offline' ? stat('Waiting', '—', `unknown while ${m} is offline`) : stat('Waiting', fmt(fl.waiting || 0), 'changes not yet received'),
+                        stat('Since', fl.since ? day(fl.since) : '—', fl.aligned_at && fl.since ? 'first alignment ' + span((fl.aligned_at - fl.since) / 60) : ''));
+                    const stP = el('div', 'fl-stats p-only');
+                    stP.append(stat('Entries', fmt(lib.entries)), stat('Since', fl.since ? dayShort(fl.since) : '—'));
+                    body.append(top, sts, stP);
+                    if (recent.length) {
+                        const rc = el('div', 'fl-recent d-only');
+                        rc.appendChild(el('span', 'label', 'Recent changes'));
+                        const g = el('div'); g.style.height = '8px'; rc.appendChild(g);
+                        recent.slice(0, 4).forEach(r => {
+                            const row = el('div', 'ch');
+                            row.append(el('span', 's', r.sign), el('span', 'ti', titleOf(r)), el('span', 'w', r.what === 'removed' ? 'removed by ' + m : r.what), el('span', 'at', when(r.at)));
+                            rc.appendChild(row);
+                        });
+                        body.append(el('div', 'fl-hr d-only'), rc);
+                    }
+                }
+                const sy = el('div', 'fl-syncs');
+                [['off', 'Movies, TV and Watchlist syncs off', 'Movies, TV, Watchlist syncs off'], ['', 'Music sync on', 'Music sync on'],
+                    ['off', 'Local additions and removals blocked', 'Local changes blocked']].forEach(([lc, s, sp]) => {
+                    const x = el('span'); x.append(lamp(lc), el('span', 'd-only', s), el('span', 'p-only', sp)); sy.appendChild(x);
+                });
+                const lvP = el('button', 'btn sm fl-leave-p p-only', 'Leave'); lvP.type = 'button'; lvP.onclick = () => frLeaveLibrary(m);
+                body.append(hr(), sy, lvP);
+            }
+            function renderLibraryMaster(lib, body) {
+                body.className = 'card-body flush'; body.style.gap = '';
+                const slaves = lib.slaves || [], n = slaves.length;
+                const intro = el('div', 'fl-intro');
+                intro.append(lamp('friend'), el('span', 'd-only', `You send your library to ${n} ${plural(n, 'friend', 'friends')} · ${fmt(lib.entries)} entries. Your syncs run as usual.`),
+                    el('span', 'p-only', `You send your library to ${n} ${plural(n, 'friend', 'friends')} · ${fmt(lib.entries)} entries.`));
+                const th = el('div', 'fl-thead');
+                th.append(el('span', 'label', 'Slave'), el('span', 'label', 'State'), el('span', 'label', 'Entries'));
+                body.append(intro, th);
+                for (const s of slaves) {
+                    const off = s.state === 'offline', row = el('div', 'fl-slave' + (off ? ' off' : ''));
+                    const who = el('div', 'who'), stc = el('div', 'st');
+                    who.append(lamp({ in_sync: 'friend', behind: 'friend', aligning: 'run friend', offline: 'off' }[s.state] || 'friend'), el('span', null, s.name));
+                    const pct = s.total ? Math.floor(s.entries * 100 / s.total) : 0;
+                    if (s.state === 'aligning') stc.append(el('span', 'ti', `Aligning · ${pct} %`), bar(s.total ? s.entries / s.total : 0, true), el('span', 'small faint', 'first alignment · resumes if interrupted'));
+                    else if (off) stc.append(el('span', 'ti', 'Offline since ' + (s.offline_since ? dayShort(s.offline_since) + ' ' + clock(s.offline_since) : '—')), el('span', 'small faint', `${fmt(s.waiting)} ${plural(s.waiting, 'change waits', 'changes wait')} for it`));
+                    else if (s.state === 'behind') stc.append(el('span', 'ti', 'Catching up'), el('span', 'small faint', `${fmt(s.waiting)} ${plural(s.waiting, 'change', 'changes')} on the way`));
+                    else stc.append(el('span', 'ti', 'In sync'), el('span', 'small faint', s.last_sent ? 'last change sent ' + ago(s.last_sent) : ''));
+                    const rl = el('button', 'btn ghost sm', 'Release'); rl.type = 'button'; rl.onclick = () => frReleaseLibrary(s.name);
+                    const rlP = el('button', 'btn ghost sm p-only', 'Release'); rlP.type = 'button'; rlP.onclick = () => frReleaseLibrary(s.name);
+                    who.appendChild(rlP);
+                    // The phone reads one line per slave, as the table's state and entries together.
+                    const ph = s.state === 'aligning' ? `Aligning · ${pct} % · ${fmt(s.entries)} / ${fmt(s.total)}`
+                        : off ? `Offline since ${s.offline_since ? dayShort(s.offline_since) : '—'} · ${fmt(s.waiting)} ${plural(s.waiting, 'change waits', 'changes wait')}`
+                            : s.state === 'behind' ? `Catching up · ${fmt(s.waiting)} ${plural(s.waiting, 'change', 'changes')} on the way`
+                                : 'In sync' + (s.last_sent ? ' · ' + ago(s.last_sent) : '');
+                    [...stc.children].forEach(c => { if (!c.classList.contains('fl-bar')) c.classList.add('d-only'); });
+                    stc.insertBefore(el('span', 'small p-only', ph), stc.firstChild);
+                    row.append(who, stc, el('span', 'en', `${fmt(s.entries)} / ${fmt(s.total)}`), el('span', 'spacer'), rl);
+                    body.appendChild(row);
+                }
+            }
+
+            function render() {
+                renderSelf();
+                renderLibrary();
+                const list = $('fr-list'), rows = [];
+                const reqs = st.requests.map(requestRow).filter(Boolean).concat(libraryRows());
+                rows.push(...reqs);
+                if (!st.friends.length) {
+                    if (reqs.length) rows.push(el('div', 'fr-thead'));
+                    if (!reqs.length) rows.push(...explainer());
+                } else {
+                    const h = el('div', 'fr-thead');
+                    h.append(el('span', 'label', 'Friend'), el('span', 'label', 'Now'));
+                    rows.push(h, ...st.friends.map(friendRow));
+                }
+                rows.push(...inviteRows(st.invites));
+                if (rows[0] && rows[0].classList.contains('fr-thead') && !st.friends.length) rows.shift();
+                list.replaceChildren(...rows);
+            }
+
+            async function load() {
+                try {
+                    st = await api('GET', '');
+                    window.applyLibraryMaster && window.applyLibraryMaster((st.library && st.library.master) || '');
+                    $('fr-off').hidden = true;
+                    document.querySelectorAll('#sec-friends .card, #sec-friends .fr-actions, #sec-friends .fr-reach-phone').forEach(c => c.hidden = false);
+                    render();
+                } catch (e) {
+                    if (e.code === 'friends_disabled') {
+                        $('fr-off').hidden = false;
+                        document.querySelectorAll('#sec-friends .card:not(.fr-node), #sec-friends .fr-actions, #sec-friends .fr-reach-phone').forEach(c => c.hidden = true);
+                    } else if (!st) $('fr-list').replaceChildren(el('div', 'hist-empty small faint', 'Friends unavailable: ' + errText(e)));
+                    else console.error('[Friends]', e);
+                }
+            }
+            const visible = () => !$('sec-friends').hidden && !document.hidden;
+            setInterval(() => { if (visible() && !dlg.open) load(); }, 5000);
+            window.addEventListener('hashchange', () => { if (visible()) load(); });
+            document.addEventListener('visibilitychange', () => { if (visible()) load(); });
+            load();
+
+            // ---------- node name: saved on its own, not through the change bar ----------
+            const nm = $('fr-name');
+            async function saveName() {
+                const v = nm.value;
+                if (!st || v === nameSaved) return;
+                try { await api('PUT', '/self', { name: v }); nameSaved = v; $('fr-name-hint').textContent = 'Saved. Shown to your friends.'; }
+                catch (e) { $('fr-name-hint').textContent = errText(e); }
+            }
+            nm.addEventListener('change', saveName);
+            nm.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); nm.blur(); } });
+
+            async function decide(id, approve) {
+                try { await api('POST', `/requests/${id}/${approve ? 'approve' : 'decline'}`); } catch (e) { alert(errText(e)); }
+                load();
+            }
+
+            // ---------- dialog ----------
+            function open(title, opts) {
+                $('fr-dlg-title').textContent = title;
+                dlg.classList.toggle('narrow', !!opts.narrow);
+                $('fr-dlg-body').replaceChildren(...opts.body);
+                $('fr-dlg-note').textContent = opts.note || '';
+                const ok = $('fr-dlg-ok'), alt = $('fr-dlg-alt');
+                ok.textContent = opts.ok; ok.className = 'btn sm ' + (opts.okKind || 'primary'); ok.disabled = false;
+                alt.hidden = !opts.alt; alt.textContent = opts.alt || '';
+                onOk = opts.onOk; onAlt = opts.onAlt || frClose;
+                if (!dlg.open) dlg.showModal();
+                (opts.focus || $('fr-dlg-body').querySelector('input'))?.focus();
+            }
+            function errLine() { const e = el('div', 'acc-err'); e.hidden = true; e.append(lamp('err'), el('span')); return e; }
+            function showErr(line, e) { line.lastChild.textContent = typeof e === 'string' ? e : errText(e); line.hidden = false; }
+            window.frClose = () => dlg.close();
+            dlg.addEventListener('close', () => { $('fr-dlg-body').replaceChildren(); onOk = onAlt = null; load(); });
+            $('fr-dlg-alt').onclick = () => onAlt && onAlt();
+            $('fr-dialog-form').addEventListener('submit', async e => {
+                e.preventDefault();
+                if (!onOk) return;
+                $('fr-dlg-ok').disabled = true;
+                try { await onOk(); } finally { if (dlg.open) $('fr-dlg-ok').disabled = false; }
+            });
+
+            // Invite: the code is shown once, with Copy; cancelling it withdraws it.
+            window.frInvite = async function () {
+                let inv;
+                try { inv = await api('POST', '/invite'); }
+                catch (e) { const l = errLine(); showErr(l, e); open('Invite a friend', { body: [l], ok: 'Close', onOk: frClose }); return; }
+                const c = el('div', null); c.style.cssText = 'display:flex;flex-direction:column;gap:12px';
+                const kv = el('dl', 'fr-kv');
+                const exp = new Date(inv.expires * 1000);
+                [['Single use', 'the first node that uses it makes a request'],
+                ['Expires', `in ${hoursLeft(inv.expires)} h · ${exp.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} ${exp.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`],
+                ['Contains', 'a secret and your address ' + mask(codeAddr(inv.code) || (st && st.self.addr) || '')]].forEach(([k, v]) => kv.append(el('dt', null, k), el('dd', null, v)));
+                c.append(el('div', null, 'Send this code to your friend'), el('div', 'small faint', 'They paste it in Friends › Join with a code. When their node asks to join you will see the request here, with its name, and approve it.'), kv);
+                c.firstChild.style.fontWeight = '500';
+                const box = el('div', 'fr-code'), code = el('code', null, inv.code), cp = el('button', 'btn ghost sm', 'Copy');
+                cp.type = 'button'; cp.onclick = () => window.accCopy(inv.code, cp);
+                box.append(code, cp);
+                const l = errLine();
+                open('Invite a friend', {
+                    body: [c, box, l], note: 'The code works until it is used, cancelled or expires.',
+                    ok: 'Done', onOk: frClose, alt: 'Cancel code', focus: cp,
+                    onAlt: async () => { try { await api('DELETE', '/invites/' + inv.id); frClose(); } catch (e) { showErr(l, e); } }
+                });
+            };
+
+            // Join: paste, preview who invites, then send the request.
+            window.frJoin = function (prefill) {
+                const f = el('div', 'field'), lab = el('label', null, 'Invitation code'), box = el('div', 'input mono'), inp = el('input');
+                inp.id = 'fr-code-in'; lab.htmlFor = inp.id; inp.spellcheck = false; inp.placeholder = 'TMF1-…'; inp.value = prefill || '';
+                box.appendChild(inp);
+                if (navigator.clipboard && navigator.clipboard.readText && window.isSecureContext) {
+                    const p = el('button', 'fr-paste', 'Paste'); p.type = 'button';
+                    p.onclick = async () => { try { inp.value = (await navigator.clipboard.readText()).trim(); inp.focus(); } catch (_) { } };
+                    box.appendChild(p);
+                }
+                f.append(lab, box);
+                const hint = el('div', 'hint', 'The code your friend sent you.'); f.appendChild(hint);
+                const l = errLine();
+                open('Join with a code', { body: [f, l], ok: 'Continue', alt: 'Cancel', onOk: () => preview(inp.value, l) });
+            };
+            async function preview(code, line) {
+                const addr = mask(codeAddr(code));
+                let p;
+                try { p = await api('POST', '/preview', { code }); }
+                catch (e) {
+                    if (e.code === 'expired') return joinMsg(code, 'This code has already been used or has expired', 'Codes work once and for 48 hours. Ask your friend for a new one.', 'Close', null);
+                    if (e.code === 'unreachable') return joinMsg(code, addr ? `Can't reach the node at ${addr}` : "Can't reach the inviting node", 'Their node is off or its port is closed, and yours is closed too, so neither can open the connection. Ask them to check Network & VPN, or open your port: then their node can reach you.', 'Try again', () => preview(code, null));
+                    if (line) showErr(line, e); else frJoin(code);
+                    return;
+                }
+                const f = el('div', 'field'), box = el('div', 'input mono'), inp = el('input');
+                inp.value = code.trim(); inp.readOnly = true; box.appendChild(inp);
+                f.append(el('label', null, 'Invitation code'), box);
+                const pv = el('div', 'fr-preview'), c = el('div');
+                c.append(el('div', null, p.declared_name + ' invites you'), el('div', 'small faint', (p.addr || addr ? `Reached at ${mask(p.addr) || addr} · ` : '') + `code valid for another ${hoursLeft(p.expires)} h`));
+                c.firstChild.style.fontWeight = '500';
+                pv.append(lamp(''), c);
+                const nf = el('div', 'field'), nb = el('div', 'input mono'), ni = el('input');
+                ni.id = 'fr-join-name'; ni.value = st ? st.self.name : ''; ni.maxLength = 64; ni.spellcheck = false;
+                const nl = el('label', null, `Name ${p.declared_name} will see`); nl.htmlFor = ni.id;
+                nb.appendChild(ni); nf.append(nl, nb, el('div', 'hint', "Your node's name, the same for every friend. You can change it in This node."));
+                const l = errLine();
+                open('Join with a code', {
+                    body: [f, pv, nf, l], note: p.declared_name + ' approves the request on their side.', ok: 'Send request', alt: 'Cancel', focus: ni,
+                    onOk: async () => {
+                        try {
+                            if (st && ni.value !== st.self.name) await api('PUT', '/self', { name: ni.value });
+                            await api('POST', '/join', { code });
+                            frClose();
+                        } catch (e) { showErr(l, e); }
+                    }
+                });
+            }
+            function joinMsg(code, title, text, okLabel, retry) {
+                const f = el('div', 'field'), box = el('div', 'input mono'), inp = el('input');
+                inp.value = code.trim(); inp.readOnly = true; box.appendChild(inp);
+                f.append(el('label', null, 'Invitation code'), box);
+                const m = el('div', 'fr-msg'), c = el('div');
+                c.append(el('div', 't', title), el('div', 'small faint', text));
+                m.append(lamp('err'), c);
+                open('Join with a code', { body: [f, m], ok: okLabel, alt: retry ? 'Cancel' : '', onOk: retry || frClose, focus: $('fr-dlg-ok') });
+            }
+
+            // ---------- library dialogs ----------
+            const fmt = n => Number(n || 0).toLocaleString('en-US');
+            function libDialog(title, text, label, lines, opts) {
+                const p = el('div', null, text); p.style.color = 'var(--ink2)';
+                const w = el('div', 'if'); w.style.cssText = 'display:flex;flex-direction:column;gap:8px';
+                w.append(el('span', 'label', label), bullets(lines));
+                const l = errLine();
+                open(title, { body: [p, w, l], alt: 'Cancel', focus: $('fr-dlg-alt'), ...opts(l) });
+            }
+            window.frSendLibrary = function (name) {
+                const n = st && st.library && st.library.entries ? `, ${fmt(st.library.entries)} entries,` : '';
+                libDialog(`Send your library to ${name}?`, `${name} gets the films and series of your library${n} and from then on every change you make.`, 'On ' + name,
+                    ['Its movie, TV and watchlist syncs turn off.',
+                        'Its current titles stay and yours are added. Later additions and removals are mirrored.',
+                        "It can't add or remove titles itself while it gets your library. Its music sync keeps running.",
+                        'The first alignment runs in blocks and resumes if interrupted.'],
+                    l => ({ note: name + ' has to accept. Either of you can end it at any time.', ok: 'Send proposal',
+                        onOk: async () => { try { await api('POST', '/library/' + encodeURIComponent(name)); frClose(); } catch (e) { showErr(l, libErr(e, name)); } } }));
+            };
+            window.frLeaveLibrary = function (master) {
+                const n = st && st.library && st.library.entries ? 'The ' + fmt(st.library.entries) + ' titles' : 'The titles';
+                libDialog(`Leave ${master}'s library?`, `${master} stops sending you its changes and is told right away. You stay friends.`, 'On this node',
+                    [n + ' received stay in your library. What to keep is up to you, later.',
+                        'Movie, TV and watchlist syncs come back on, with the configuration you had saved.',
+                        'You can add and remove titles again, by hand, through the Library API and through MCP.'],
+                    l => ({ ok: 'Leave', okKind: 'danger',
+                        onOk: async () => { try { await api('DELETE', '/library/' + encodeURIComponent(master)); frClose(); } catch (e) { showErr(l, libErr(e, master)); } } }));
+            };
+            window.frReleaseLibrary = function (name) {
+                libDialog(`Release ${name}?`, `${name} stops getting your library and is told when it is next online. You stay friends.`, 'On ' + name,
+                    ['The titles it received stay in its library; its owner decides later what to keep.',
+                        'Its movie, TV and watchlist syncs come back on, with the configuration it had saved.',
+                        'It can add and remove titles again.'],
+                    l => ({ ok: 'Release', okKind: 'danger',
+                        onOk: async () => { try { await api('DELETE', '/library/' + encodeURIComponent(name)); frClose(); } catch (e) { showErr(l, libErr(e, name)); } } }));
+            };
+
+            function resetEncryption(name) {
+                const l = errLine();
+                const p = el('div', 'small', `Only if ${name} went back to an older Tiramisu version: your node accepts its control messages in clear again, signed as before, until it encrypts again. The next contact trusts first use again: whoever sits on the network path then could keep the two of you in clear. Nothing else changes.`);
+                p.style.color = 'var(--ink2)';
+                open(`Reset encryption with ${name}?`, {
+                    narrow: true, body: [p, l], ok: 'Reset', alt: 'Cancel', focus: $('fr-dlg-alt'),
+                    onOk: async () => { try { await api('POST', '/reset-encryption/' + encodeURIComponent(name)); frClose(); } catch (e) { showErr(l, e); } }
+                });
+            }
+
+            function removeFriend(name) {
+                const l = errLine();
+                const f = st && st.friends.find(x => x.name === name), lib = f && f.library && f.library.state === 'active' ? f.library : null;
+                const role = !lib ? '' : lib.side === 'slave' ? ` ${name} gets your library: removing it also releases it.` : ` ${name} sends you its library: removing it also leaves it.`;
+                const p = el('div', 'small', `Your node stops recognising ${name}: it becomes a peer like any other, with no priority. If it is online it is told right away; otherwise it finds out the next time it tries. To be friends again you need a new code.` + role);
+                p.style.color = 'var(--ink2)';
+                open(`Remove ${name}?`, {
+                    narrow: true, body: [p, l], ok: 'Remove friend', okKind: 'danger', alt: 'Cancel', focus: $('fr-dlg-alt'),
+                    onOk: async () => { try { await api('DELETE', '/' + encodeURIComponent(name)); frClose(); } catch (e) { showErr(l, e); } }
+                });
+            }
         })();
     </script>
 </body>

@@ -94,6 +94,10 @@ type Config struct {
 	ActiveSession func(hash string) bool
 	// Diagnostics, when set, is what the read-only consistency check reads. *metadb.DB satisfies it.
 	Diagnostics DiagnosticsDB
+	// RowFiles, when set, lists the files of a stored torrent without hydrating it (Mirror).
+	RowFiles func(hash string) ([]FileStat, bool)
+	// LibraryMaster, when set, names the friend this node's video library comes from ("" none).
+	LibraryMaster func() string
 }
 
 // Manager adds and removes library entries on behalf of external clients: it does what
@@ -315,6 +319,9 @@ func (m *Manager) removeTorrent(ctx context.Context, hash string) error {
 func (m *Manager) Add(ctx context.Context, req AddRequest) (*AddResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, errf(http.StatusRequestTimeout, "request cancelled: %v", err)
+	}
+	if err := m.LocalChange(req.Type, true); err != nil {
+		return nil, err
 	}
 	// Registered first so it runs after the unlocks below: dropping a torrent takes its
 	// own hash lock, and nesting that inside the one this add holds is how two adds
@@ -742,7 +749,7 @@ func (m *Manager) addEpisodes(ctx context.Context, req AddRequest, hash, magnet 
 
 // deleteStub removes one stub and drops the FUSE layer's cached state for it.
 func (m *Manager) deleteStub(_ context.Context, path string) error {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := RemoveStub(path); err != nil {
 		return err
 	}
 	if m.cfg.InvalidatePath != nil {
@@ -992,6 +999,10 @@ func (m *Manager) RemoveAny(ctx context.Context, req RemoveRequest) (any, error)
 			return nil, err
 		}
 		return audio, nil
+	}
+	// Video, or no type at all: a slave's library is its master's.
+	if err := m.LocalChange("movie", false); err != nil {
+		return nil, err
 	}
 	resp, err := m.Remove(ctx, req)
 	if err != nil {

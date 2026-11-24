@@ -47,7 +47,7 @@ func (s *Streamer) Torrent(ts *piecestore.TorrentStore, ctl Control) *Torrent {
 	if t := s.tors[ts]; t != nil {
 		return t
 	}
-	t := &Torrent{s: s, ts: ts, ctl: ctl, streams: map[*Stream]struct{}{}, wake: make(chan struct{}, 1), local: map[int]piecestore.Priority{}, pins: map[int]bool{}}
+	t := &Torrent{s: s, ts: ts, ctl: ctl, streams: map[*Stream]struct{}{}, helps: map[*Help]struct{}{}, wake: make(chan struct{}, 1), local: map[int]piecestore.Priority{}, pins: map[int]bool{}}
 	select {
 	case <-s.stop:
 		t.dead = true
@@ -85,6 +85,7 @@ type Torrent struct {
 
 	mu        sync.Mutex
 	streams   map[*Stream]struct{}
+	helps     map[*Help]struct{}
 	dead      bool
 	aggrOn    bool
 	aggrLimit int
@@ -189,6 +190,9 @@ func (t *Torrent) snapshot(now time.Time) (spans []span, streams []*Stream, aggr
 			streams = append(streams, s)
 		}
 	}
+	for h := range t.helps {
+		spans = append(spans, h.span())
+	}
 	clears, t.clears = t.clears, nil
 	return spans, streams, t.aggrOn, t.aggrLimit, clears
 }
@@ -204,6 +208,10 @@ func (t *Torrent) pass(now time.Time) {
 	for _, r := range clears {
 		t.clearDeadlines(r, pieceRange{}, nil)
 	}
+	for _, s := range streams {
+		s.readahead.Store(sh.readahead)
+	}
+	t.fitHelps(spans, sh, np)
 	t.assessRisk(now, streams, sh)
 	plan := spans
 	if t.othersAtRisk() {
@@ -218,5 +226,6 @@ func (t *Torrent) pass(now time.Time) {
 	}
 	t.pin(spans, pl, np) // after the playout deadlines: a blocked read outranks them
 	t.cursors(spans)
-	t.evict(now, tun, spans, sh)
+	t.evict(now, tun, spans, sh, t.reserved(plan))
+	t.reportHelped(spans)
 }

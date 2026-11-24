@@ -58,6 +58,9 @@ func (c *Client) Add(s Spec, onStore func(*piecestore.TorrentStore)) (*Torrent, 
 	if err != nil {
 		return nil, false, err
 	}
+	if t, ok := c.cl.Torrent(ls.InfoHash); ok && t.FriendsOnly() {
+		return nil, false, ErrFriendsOnlyHeld
+	}
 	ls.Storage = forTorrent{s: c.storage, onOpen: onStore}
 	t, isNew, err := c.cl.AddTorrentSpec(ls)
 	if err != nil {

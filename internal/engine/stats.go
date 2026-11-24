@@ -100,7 +100,7 @@ func (t *Torrent) Status() Status {
 	s.BytesWritten, s.BytesWrittenData, s.BytesRead, s.BytesReadData, s.BytesReadUseful = b.BytesWritten, b.BytesWrittenData, b.BytesRead, b.BytesReadData, b.BytesReadUsefulData
 	s.ChunksWritten, s.ChunksRead, s.ChunksReadUseful, s.ChunksReadWasted = b.ChunksWritten, b.ChunksRead, b.ChunksReadUseful, b.ChunksReadWasted
 	s.PiecesDirtyGood, s.PiecesDirtyBad = b.PiecesDirtiedGood, b.PiecesDirtiedBad
-	s.PeerRates = t.rates.sample(t.bt.PeerSnapshots(), t.e.now(), t.e.peerInfo())
+	s.PeerRates = t.peerRates()
 	return s
 }
 

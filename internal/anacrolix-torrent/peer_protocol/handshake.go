@@ -126,6 +126,17 @@ func Handshake(
 ) (
 	res HandshakeResult, err error,
 ) {
+	return HandshakeChoose(sock, ih, peerID, extensions, nil)
+}
+
+// HandshakeChoose is Handshake where the receiving side (ih == nil) may pick its reply peer ID
+// after reading the remote handshake; choose is ignored when initiating.
+func HandshakeChoose(
+	sock io.ReadWriter, ih *metainfo.Hash, peerID [20]byte, extensions PeerExtensionBits,
+	choose func(hash metainfo.Hash, remote [20]byte) [20]byte,
+) (
+	res HandshakeResult, err error,
+) {
 	// Bytes to be sent to the peer. Should never block the sender.
 	postCh := make(chan []byte, 4)
 	// A single error value sent when the writer completes.
@@ -183,6 +194,9 @@ func Handshake(
 	// could prevent them trying to reconnect, falsely believing there was
 	// just a problem.
 	if ih == nil { // We were waiting for the peer to tell us what they wanted.
+		if choose != nil {
+			peerID = choose(res.Hash, res.PeerID)
+		}
 		post(res.Hash[:])
 		post(peerID[:])
 	}

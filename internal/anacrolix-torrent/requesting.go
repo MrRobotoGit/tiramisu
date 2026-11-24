@@ -422,7 +422,7 @@ func (p *Peer) applyRequestState(next desiredRequestState) {
 		if existing != nil && existing != p {
 			diff := int64(current.Requests.GetCardinality()) + 1 - (int64(existing.uncancelledRequests()) - 1)
 			urgent := requestIsUrgent(t.pieceDeadlines[t.pieceIndexOfRequestIndex(req)], now)
-			if !stealPermitted(p.needRequestUpdate, diff, p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived,
+			if !stealPermitted(p.needRequestUpdate, diff, p.lastUsefulChunkReceived, existing.lastUsefulChunkReceived, p.friend,
 				peerStalled(existing.lastUsefulChunkReceived, existing.lastStartedExpectingToReceiveChunks, now),
 				func() bool { return t.stealRequestGraceElapsed(req, existing, urgent) }) {
 				continue

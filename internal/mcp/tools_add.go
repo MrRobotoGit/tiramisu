@@ -110,6 +110,10 @@ func (s *server) addRelease(ctx context.Context, _ *sdk.CallToolRequest, in AddI
 		req.Episode = in.Episode
 	}
 
+	// Refused before the job starts: inside it the refusal would only reach get_job.
+	if err := s.deps.Library.LocalChange(req.Type, true); err != nil {
+		return errResult(err), JobStarted{}, nil
+	}
 	job, err := s.jobs.Start("add", func(ctx context.Context) (any, error) {
 		if matcher != nil {
 			accept, err := matcher(ctx)

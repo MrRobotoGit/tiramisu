@@ -165,6 +165,9 @@ func (s *server) removeEntries(ctx context.Context, _ *sdk.CallToolRequest, in R
 	if in.Prefix == "" && len(in.Paths) == 0 {
 		return errResult(fmt.Errorf("paths or prefix is required")), RemoveOutput{}, nil
 	}
+	if err := s.deps.Library.LocalChange(in.Type, false); err != nil {
+		return errResult(err), RemoveOutput{}, nil // before any path is resolved: not one entry in Failed
+	}
 	entries, unresolved, err := s.resolveEntries(in)
 	if err != nil {
 		return errResult(err), RemoveOutput{}, nil

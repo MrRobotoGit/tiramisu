@@ -9,8 +9,11 @@ const (
 	byteCapPct     = 40      // incomplete pieces requested at once, as a share of the cache
 	aggressivePct  = 80
 	deadlineMax    = 64
-	deadlineMinBps = 64 << 10
+	deadlineMinBps = MinRate
 )
+
+// MinRate is the slowest drain that gets a playout schedule, bytes/s.
+const MinRate = 64 << 10
 
 // shares are the per-stream budgets of one pass; n is the single divisor (active streams).
 type shares struct {
@@ -55,6 +58,9 @@ type span struct {
 	end       int64 // one past the last byte wanted
 	seq       int64 // consumer open order
 	waiting   int64 // when its reader began waiting on the piece of pos; 0: it has not
+	help      *Help // KindHelp: its window, read under the pass
+	hw        HelpWindow
+	early     []int // KindHelp: pieces before First it keeps for the watcher (fitHelps)
 }
 
 func pieceOf(off, pieceLen int64) int { return int(off / pieceLen) }
@@ -138,6 +144,12 @@ func desired(spans []span, sh shares, numPieces int, complete func(int) bool) ma
 					raise(i, levelAt(k, 0)) // Now and Next go to the first incomplete pieces
 				}
 				k++
+			}
+		case KindHelp:
+			for i := sp.hw.First; i <= sp.hw.Last && i < numPieces; i++ {
+				if sp.hw.share(i) && !complete(i) {
+					raise(i, piecestore.PriorityNormal)
+				}
 			}
 		}
 	}

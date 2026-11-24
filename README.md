@@ -59,6 +59,8 @@ The result is 4K HDR Dolby Vision playback that starts in under a second from th
   </tr>
 </table>
 
+<p align="center"><img src="docs/screenshots/ui-network-friends-dark-v3.png" alt="Live swarm in dark mode: the friend alice-nas drawn in violet above the public peers, helping the stream of Dummy Film at 13.9 Mbps, 8% of its download" width="720"><br><sub><b>Friends in the live swarm</b>: a friend helping a stream, in violet (sample data)</sub></p>
+
 <p align="center"><img src="docs/screenshots/ui-piece-map-light-v3.gif" alt="Active streams with the piece map open: a strip of pieces from the playhead to the download frontier, labelled ready, arriving and not requested, with partly filled pieces and deadline underlines, next to the seconds of video ready ahead and their trend over the last 2 minutes"><br><sub><b>Piece map</b>: under each stream, the pieces from the player's read position to the download frontier, scrolling live</sub></p>
 
 <p align="center"><img src="docs/screenshots/ui-mobile-v3.png" alt="Dashboard on a phone, live swarm in dark mode and timeline in light mode" width="520"><br><sub>On a phone: the network view fits the first screen</sub></p>
@@ -71,6 +73,7 @@ The result is 4K HDR Dolby Vision playback that starts in under a second from th
 - **A library that maintains itself.** The built-in sync engine finds new, trending and popular titles on TMDB, picks the best release from Prowlarr or Torrentio, upgrades a 1080p entry to 4K when a better release appears, follows TV series season by season, and adds anything on your Plex Watchlist within the hour.
 - **Music and audiobooks too.** `music/` and `audiobooks/` sit next to `movies/` and `tv/`, read-only, with MusicBrainz or ASIN identities, ready for Plex and Plexamp.
 - **Playback protection.** Adaptive Shield guards against corrupt data and bans bad peers, TailHedge races a second peer when one stalls, PEXChurn frees slots held by useless peers, and the read-ahead adapts to the bitrate.
+- **Friends.** Connect with friends who run Tiramisu, by invitation. A film starts sooner when a friend already has its beginning, and while you watch, friends who have the same film fetch ahead for you. One node can also send its whole library to its friends, so everyone has the same films and series. Your own playback always comes first.
 - **Native Plex and Jellyfin integration.** Playback webhooks switch the stream to Priority Mode, and titles are matched by IMDb id, so localized names still match.
 - **Control Panel and Dashboard.** Every setting in one place, and a live view of the swarm, streams, services, scheduler and logs, on desktop and phone. Each stream shows its piece map: what is ready ahead of the player and where the download frontier is.
 - **Library API and MCP server.** Add or remove titles over HTTP, or let an AI agent (Hermes, OpenClaw, Claude Code) search and file releases with your own scoring profile.
@@ -82,7 +85,7 @@ The result is 4K HDR Dolby Vision playback that starts in under a second from th
 
 ## Contents
 
-[Overview](#overview) · [Screenshots](#screenshots) · [Features](#features) · [How It Fits Together](#how-it-fits-together-plex-jellyfin-and-infuse) · [Requirements](#requirements) · [Quick Install](#quick-install) · [Docker](#docker) · [Sign-in and Tokens](#sign-in-and-tokens) · [Documentation](#documentation) · [FAQ](#faq) · [Contributing and Security](#contributing-and-security) · [Support](#support) · [Acknowledgements](#acknowledgements) · [License](#license)
+[Overview](#overview) · [Screenshots](#screenshots) · [Features](#features) · [How It Fits Together](#how-it-fits-together-plex-jellyfin-and-infuse) · [Requirements](#requirements) · [Quick Install](#quick-install) · [Docker](#docker) · [Sign-in and Tokens](#sign-in-and-tokens) · [Friends](#friends) · [Documentation](#documentation) · [FAQ](#faq) · [Contributing and Security](#contributing-and-security) · [Support](#support) · [Acknowledgements](#acknowledgements) · [License](#license)
 
 ---
 
@@ -252,15 +255,43 @@ Sign-in is meant for your home network, with Tiramisu's own HTTPS or a reverse p
 
 ---
 
+## Friends
+
+<p align="center"><img src="docs/screenshots/ui-friends-light-v3.png" alt="Control Panel, Friends section: this node reachable, helping friends on, three friends with their status lamps, one online and exchanging data, one online, one offline, and a pending request" width="720"><br><sub><b>Control Panel → Friends</b>: this node, your friends and what they can see (sample data)</sub></p>
+
+Two Tiramisu installations can become friends. Friends find each other in the swarms they share, give each other priority and help each other start and play films. There are no accounts, no central server and no new ports: friends are ordinary BitTorrent peers on the peer port you already have open, and every piece they send is checked like a piece from anyone else.
+
+- **By invitation only.** **Control Panel → Friends → Invite a friend** creates a one-time code (`TMF1-…`), valid for 48 hours. Your friend pastes it into **Join with a code**, you approve the request, and the pair is set up. Removing a friend deletes the pair; coming back takes a new code.
+- **Faster cold starts.** When you open a title you have no warmup for, Tiramisu calls your friends at the same moment as the DHT and the trackers, never before. A friend who has the beginning and end of that film on their warmup cache serves them straight from the SSD, even if the torrent is not running on their side. A friend who does not answer costs nothing: the swarm is asked at the same time.
+- **Help while you watch.** When you start a film, friends who have it join the swarm and fetch the part you will need next, at the priority of a library scan. This helps most on swarms with few seeders. Their own playback always comes first, and each node helps at most two friends at a time (**Concurrent helps**), or none if you turn helping off.
+- **Visible in the live swarm.** Friends are drawn in violet, with their name in place of the country, and glow only while data is moving.
+- **What friends can see.** Your node's name and address, and the film you start watching, so that friends who have it can help. Nothing else about your library, your players or your settings, unless you share the library (below). Tiramisu keeps no per-friend traffic history.
+
+### Shared library
+
+<p align="center"><img src="docs/screenshots/ui-friends-library-dark-v3.png" alt="Control Panel, Friends → Library in dark mode on a slave node: library from a friend, in sync, with the number of entries received and a Leave button" width="720"><br><sub><b>Control Panel → Friends → Library</b>: a node that gets its library from a friend (sample data)</sub></p>
+
+A node can send its library to its friends: it becomes the **master**, and each friend that accepts becomes a **slave** with the same films and series. The more two libraries overlap, the more often friends can serve each other's warmup and help each other's playback; with a shared library, every title is on every node.
+
+- **Two confirmations.** The master proposes with **Make slave**, and the friend accepts from its own Control Panel. A slave follows one master; a master can have many slaves, and a node with a master cannot have slaves of its own.
+- **Everything follows the master.** The first alignment sends the whole library in blocks and resumes if interrupted. After that, every title the master adds or removes, from the sync engine, the Library API or an AI agent, reaches the slaves. The stubs keep the same name and the same torrent, so Plex and Jellyfin see the same files.
+- **Light slaves.** On a slave the movie, TV and watchlist syncs are held: no Prowlarr searches, no scoring. Titles cannot be added or removed locally while a master is active, and the Library API (`409 library_from_master`) and the MCP server say why. The titles the slave already had stay next to the master's. Music keeps its own sync.
+- **Leave at any time.** A slave can **Leave** and a master can **Release** a slave; either way you stay friends. The titles received stay on the slave, and its syncs turn back on with the saved configuration.
+- **Trust.** A master can put any torrent in a slave's library: accept only a friend you trust.
+
+At least one of the two nodes must be reachable from the Internet on its peer port (port forward, NAT-PMP, UPnP or a VPN with port forwarding): the **This node** card shows whether peers are reaching yours. Two nodes behind the same router reach each other only if the router supports hairpin NAT. Actions on friends and on the library need a signed-in browser; API tokens can only read. See [Friends](docs/user-guide.md#friends) and [Friends API](docs/api.md#friends).
+
+---
+
 ## Documentation
 
 | Guide | What it covers |
 |-------|----------------|
 | [Installation](docs/installation.md) | Docker in detail, Plex/Jellyfin and Samba setup, building from source |
-| [User Guide](docs/user-guide.md) | First-run steps, webhooks, the Control Panel and the Dashboard |
+| [User Guide](docs/user-guide.md) | First-run steps, webhooks, the Control Panel, Friends and the Dashboard |
 | [Sync Engine](docs/sync-engine.md) | Movies, TV, Watchlist and Music sync, the dead-release reaper, Prowlarr |
 | [Configuration](docs/configuration.md) | Where the configuration lives, every field, history and import, quality scoring, languages, environment variables |
-| [API and MCP Server](docs/api.md) | Sign-in and API tokens, HTTPS, Library API, MCP server for AI agents, HTTP endpoint reference |
+| [API and MCP Server](docs/api.md) | Sign-in and API tokens, HTTPS, Library API, Friends API, MCP server for AI agents, HTTP endpoint reference |
 | [Architecture](docs/architecture.md) | How the FUSE layer, caches and engine work; performance figures |
 | [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes, file locations |
 

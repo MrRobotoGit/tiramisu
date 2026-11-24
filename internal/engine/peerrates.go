@@ -25,6 +25,9 @@ type PeerRate struct {
 	CC     string  `json:"cc,omitempty"`
 	ASN    uint    `json:"asn,omitempty"`
 	Org    string  `json:"org,omitempty"`
+	Friend string  `json:"friend,omitempty"` // the friend's name on a proven friend link
+	// FriendRole is the help running with that friend on this torrent: helping_you or you_help.
+	FriendRole string `json:"friend_role,omitempty"`
 }
 
 // PeerInfoFunc resolves an address to country and network owner (GeoIP).
@@ -45,7 +48,8 @@ func peerID(addr string) string {
 	return fmt.Sprintf("%08x", h.Sum32())
 }
 
-func (p *peerRates) sample(snaps []bt.PeerSnapshot, now time.Time, info PeerInfoFunc) []PeerRate {
+// friend names a proven friend link's peer ID; nil leaves Friend empty.
+func (p *peerRates) sample(snaps []bt.PeerSnapshot, now time.Time, info PeerInfoFunc, friend func(id [20]byte) string) []PeerRate {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.last != nil && now.Sub(p.at) < peerRateWindow {
@@ -68,6 +72,9 @@ func (p *peerRates) sample(snaps []bt.PeerSnapshot, now time.Time, info PeerInfo
 		if info != nil {
 			pr.CC, pr.ASN, pr.Org = info(s.Addr)
 		}
+		if s.Friend && friend != nil {
+			pr.Friend = friend(s.PeerID)
+		}
 		out = append(out, pr)
 	}
 	// Busiest first both ways; ties by id, or a map-ordered list would read as churn.
@@ -77,8 +84,14 @@ func (p *peerRates) sample(snaps []bt.PeerSnapshot, now time.Time, info PeerInfo
 		}
 		return out[i].ID < out[j].ID
 	})
-	if len(out) > peerRateMax {
-		out = out[:peerRateMax]
+	if len(out) > peerRateMax { // friends past the cut stay listed
+		kept := out[:peerRateMax:peerRateMax]
+		for _, pr := range out[peerRateMax:] {
+			if pr.Friend != "" {
+				kept = append(kept, pr)
+			}
+		}
+		out = kept
 	}
 	p.prev, p.sent, p.at, p.last = next, nextSent, now, out
 	return append([]PeerRate(nil), out...)

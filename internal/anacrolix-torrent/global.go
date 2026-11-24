@@ -19,6 +19,9 @@ const (
 	maxMetadataSize uint32 = 16 * 1024 * 1024
 )
 
+// MaxMetadataSize is the largest metainfo the client accepts from a peer.
+func MaxMetadataSize() int { return int(maxMetadataSize) }
+
 func defaultPeerExtensionBytes() PeerExtensionBits {
 	return pp.NewPeerExtensionBytes(pp.ExtensionBitDht, pp.ExtensionBitLtep, pp.ExtensionBitFast)
 }

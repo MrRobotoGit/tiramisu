@@ -33,6 +33,8 @@ type CryptoMethod uint32
 var (
 	// Prime P according to the spec, and G, the generator.
 	p, g big.Int
+	// Bounds of an acceptable remote public key.
+	two, pMinus2 big.Int
 	// The rand.Int max arg for use in newPadLen()
 	newPadLenMax big.Int
 	// For use in initer's hashes
@@ -51,6 +53,8 @@ var (
 func init() {
 	p.SetString("0xFFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DDEF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A63A36210000000000090563", 0)
 	g.SetInt64(2)
+	two.SetInt64(2)
+	pMinus2.Sub(&p, &two)
 	newPadLenMax.SetInt64(maxPadLen + 1)
 }
 
@@ -173,6 +177,10 @@ func (h *handshake) establishS() error {
 	}
 	var Y, S big.Int
 	Y.SetBytes(b[:])
+	// Y outside [2, p-2] forces S to a known value (0, 1 or p-1) on both sides.
+	if Y.Cmp(&two) < 0 || Y.Cmp(&pMinus2) > 0 {
+		return errors.New("degenerate Y")
+	}
 	S.Exp(&Y, &x, &p)
 	sBytes := S.Bytes()
 	copy(h.s[96-len(sBytes):96], sBytes)
@@ -532,6 +540,12 @@ func InitiateHandshake(
 ) (
 	ret io.ReadWriter, method CryptoMethod, err error,
 ) {
+	res := InitiateHandshakeEx(rw, skey, initialPayload, cryptoProvides)
+	return res.ReadWriter, res.CryptoMethod, res.error
+}
+
+// InitiateHandshakeEx is InitiateHandshake that also returns the DH shared secret S.
+func InitiateHandshakeEx(rw io.ReadWriter, skey, initialPayload []byte, cryptoProvides CryptoMethod) (ret HandshakeResult) {
 	h := handshake{
 		conn:           rw,
 		initer:         true,
@@ -539,8 +553,13 @@ func InitiateHandshake(
 		ia:             initialPayload,
 		cryptoProvides: cryptoProvides,
 	}
-	defer perf.ScopeTimerErr(&err)()
-	return h.Do()
+	defer perf.ScopeTimerErr(&ret.error)()
+	ret.ReadWriter, ret.CryptoMethod, ret.error = h.Do()
+	ret.SecretKey = skey
+	if ret.error == nil {
+		ret.S = append([]byte(nil), h.s[:]...)
+	}
+	return
 }
 
 type HandshakeResult struct {
@@ -548,7 +567,12 @@ type HandshakeResult struct {
 	CryptoMethod
 	error
 	SecretKey []byte
+	// S is the 96-byte DH shared secret, equal on both sides; nil on error.
+	S []byte
 }
+
+// Err is the handshake error.
+func (r HandshakeResult) Err() error { return r.error }
 
 func ReceiveHandshake(rw io.ReadWriter, skeys SecretKeyIter, selectCrypto CryptoSelector) (io.ReadWriter, CryptoMethod, error) {
 	res := ReceiveHandshakeEx(rw, skeys, selectCrypto)
@@ -564,6 +588,9 @@ func ReceiveHandshakeEx(rw io.ReadWriter, skeys SecretKeyIter, selectCrypto Cryp
 	}
 	ret.ReadWriter, ret.CryptoMethod, ret.error = h.Do()
 	ret.SecretKey = h.skey
+	if ret.error == nil {
+		ret.S = append([]byte(nil), h.s[:]...)
+	}
 	return
 }
 

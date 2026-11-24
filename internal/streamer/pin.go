@@ -83,7 +83,7 @@ func (t *Torrent) pin(spans []span, pl int64, np int) {
 func (t *Torrent) cursors(spans []span) {
 	var offs []int64
 	for _, sp := range spans {
-		if sp.pos < sp.end {
+		if sp.pos < sp.end && sp.kind != KindHelp { // a help has no reader
 			offs = append(offs, sp.pos)
 		}
 	}

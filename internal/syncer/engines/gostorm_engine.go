@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"tiramisu/internal/engine"
+	"tiramisu/internal/library"
 )
 
 // EngineBackend is the in-process Backend over the engine.
@@ -82,4 +83,19 @@ func (b engineBackend) Hydrated(context.Context) ([]string, error) {
 		out[i] = t.Hash()
 	}
 	return out, nil
+}
+
+// RowFiles reads a stored torrent's files for the library without hydrating it.
+func RowFiles(e engine.API) func(hash string) ([]library.FileStat, bool) {
+	return func(hash string) ([]library.FileStat, bool) {
+		files, ok := e.RowFiles(hash)
+		if !ok {
+			return nil, false
+		}
+		out := make([]library.FileStat, 0, len(files))
+		for _, f := range files {
+			out = append(out, library.FileStat{ID: f.ID, Path: f.Path, Length: f.Length})
+		}
+		return out, true
+	}
 }

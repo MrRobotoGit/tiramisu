@@ -15,6 +15,7 @@ type API interface {
 	Add(link string, meta Meta) (*Torrent, error)
 	AddTorrentFile(data []byte, meta Meta) (*Torrent, error)
 	WaitFiles(ctx context.Context, hash string) ([]File, error)
+	RowFiles(hash string) ([]File, bool)
 	Drop(hash string) bool
 	Remove(hash string) error
 	ListRefs() ([]Ref, error)

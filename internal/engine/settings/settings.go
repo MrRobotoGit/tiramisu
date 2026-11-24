@@ -29,6 +29,7 @@ type Settings struct {
 	DisableUPNP              bool // library UPnP off; NAT-PMP on turns it off too
 	ResponsiveMode           bool
 	AdaptiveShield           bool
+	FriendsMaxHelps          int // friends' playbacks helped at once; 0 = the engine's default, negative = none
 }
 
 const (
@@ -92,7 +93,7 @@ var kinds = map[string]Kind{
 	"DisableUTP": KindReconnect, "DisableDHT": KindReconnect, "DisablePEX": KindReconnect,
 	"DisableUpload": KindReconnect, "DownloadRateLimit": KindReconnect, "UploadRateLimit": KindReconnect,
 	"ConnectionsLimit": KindReconnect, "AggressivePeerManagement": KindReconnect, "PeersListenPort": KindReconnect, "DisableUPNP": KindReconnect,
-	"ResponsiveMode": KindLive, "AdaptiveShield": KindLive,
+	"ResponsiveMode": KindLive, "AdaptiveShield": KindLive, "FriendsMaxHelps": KindLive,
 }
 
 // KindOf classifies a key; ok is false for keys Tentacle does not interpret.

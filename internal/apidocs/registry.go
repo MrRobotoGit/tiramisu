@@ -93,7 +93,7 @@ var Groups = []Group{
 				"  \"already_present\": false\n}",
 			OK: 201,
 			Errors: []Status{{200, "already present"}, {400, "bad request, body over 1 MiB, unknown field (audio)"}, {405, "not POST"},
-				{409, "audio: path or source already taken"}, {422, "no video, episode or source file to use"},
+				{409, `audio: path or source already taken; on a library slave, movie and tv: {"error":"library_from_master","master":"<name>","message":"<the text>"}`}, {422, "no video, episode or source file to use"},
 				{500, "stub or registry write failed"}, {502, "engine refused the torrent"},
 				{503, "state DB, media directory, audio registry or cue sheet unavailable"}, {504, "no metadata in time, or the client hung up"}},
 		},
@@ -185,7 +185,7 @@ var Groups = []Group{
 			Response: "{\n  \"removed\": [\"/…/movies/Dummy_Bunny_2024_2160p_DV_Atmos_REMUX_e7f8a9b0.mkv\"]\n}",
 			OK:       200,
 			Errors: []Status{{400, "bad request"}, {404, "video: no stub at that path or with that hash"}, {405, "not POST"},
-				{409, "audio: the file on disk is not the expected stub, or the prefix spans several torrents"},
+				{409, `audio: the file on disk is not the expected stub, or the prefix spans several torrents; on a library slave, every video removal: {"error":"library_from_master","master":"<name>","message":"<the text>"}`},
 				{500, "a stub could not be deleted"}, {503, "audio registry unavailable"}},
 		},
 		{
@@ -214,8 +214,9 @@ var Groups = []Group{
 			Method: "GET", Path: "/api/scheduler/status", Summary: "Last and next run of every job",
 			Desc: "One entry per job (movies, tv, music, watchlist). last_run is when the job last finished, in the server's time " +
 				"zone; a job that never ran shows 0001-01-01T00:00:00Z. next_run follows the job's schedule and is meaningful " +
-				"only with the scheduler enabled. last_status is ok, failed or stopped (absent before the first run); " +
-				"last_error appears after a failure.",
+				"only with the scheduler enabled. last_status is ok, failed, stopped or held (stopped, or not started, because a library master is active; absent before the first run); " +
+				"last_error appears after a failure. held_by names the friend whose library this node gets: movies, tv and " +
+				"watchlist do not run meanwhile (the saved schedule is kept); absent otherwise.",
 			Example: "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/scheduler/status",
 			Errors:  []Status{{405, "not GET"}},
 			Response: "{\n  \"movies\": {\n    \"last_run\": \"2026-11-17T03:41:12.483920117+01:00\",\n    \"next_run\": \"2026-11-18T03:00:00+01:00\",\n    \"running\": false,\n    \"last_status\": \"ok\"\n  },\n" +
@@ -228,7 +229,8 @@ var Groups = []Group{
 				"switches: a job disabled in the configuration still runs.",
 			Example: "curl -X POST -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/scheduler/movies/run",
 			OK:      202,
-			Errors:  []Status{{404, "not /run or /stop"}, {405, "not POST"}, {409, "unknown job, or already running"}},
+			Errors: []Status{{404, "not /run or /stop"}, {405, "not POST"}, {409, "unknown job, or already running; on a library slave, movies, tv and watchlist answer " +
+				`{"error":"library_from_master","master":"marco-nas","message":"Movies, TV and Watchlist syncs are off while marco-nas sends you its library. Your schedule is kept and comes back when you leave."}`}},
 		},
 		{
 			Method: "POST", Path: "/api/scheduler/{job}/stop", Summary: "Ask a running job to stop",
@@ -254,7 +256,7 @@ var Groups = []Group{
 		{
 			Method: "GET", Path: "/api/torrents", Summary: "Torrents in memory with speed and peers",
 			Desc: "Refreshed every 2.5 s. status is idle, downloading (above 0.01 MiB/s) or streaming (active but not " +
-				"downloading); speed_mbs and up_mbs are MiB/s; each entry of peer_rates carries kbps (download) and up_kbps (upload) in KiB/s. title is the engine's name; clean_title is filled only while a media " +
+				"downloading); speed_mbs and up_mbs are MiB/s; each entry of peer_rates carries kbps (download) and up_kbps (upload) in KiB/s, and friend (the friend's name) on a proven friend link, with friend_role helping_you or you_help while a help runs on that torrent. title is the engine's name; clean_title is filled only while a media " +
 				"server plays it. cache_filled and cache_capacity are the bytes the piece cache in RAM holds for the torrent and its size. An unreachable engine answers [].",
 			Example: "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/torrents",
 			Response: "[\n  {\n    \"hash\": \"e7f8…\",\n    \"title\": \"Dummy.Bunny.2024.2160p.DV.mkv\",\n    \"clean_title\": \"\",\n    \"speed_mbs\": 4.8,\n    \"up_mbs\": 0.15,\n    \"peers\": 31,\n    \"seeders\": 22,\n" +
@@ -361,7 +363,7 @@ var Groups = []Group{
 				"are ignored and values out of range are clamped (ReaderReadAHead 5-100; ConnectionsLimit, CacheSize and " +
 				"TorrentDisconnectTimeout at 0 or below take 25, 128 MiB and 30). action def puts the defaults back. set and def " +
 				"answer 200 with an empty body and are recorded in the history unless nothing changed. TorrentDisconnectTimeout, " +
-				"RetrackersMode, ResponsiveMode, AdaptiveShield and ReaderReadAHead apply live; any other change reconnects the " +
+				"RetrackersMode, ResponsiveMode, AdaptiveShield, FriendsMaxHelps and ReaderReadAHead apply live; any other change reconnects the " +
 				"BitTorrent client, so playback in progress stops. UseDisk and TorrentsSavePath take effect at the next start. " +
 				"While NAT-PMP is on it owns PeersListenPort: set and def keep the forwarded port. Open to API tokens.",
 			ParamsIn: "body",
@@ -419,6 +421,128 @@ var Groups = []Group{
 			Response: "{\"ok\": true}",
 			OK:       200,
 			Errors:   []Status{{405, "not POST"}},
+		},
+	}},
+	{ID: "friends", Name: "Friends", Desc: "Pair with other Tiramisu nodes. Reading is open to API tokens; every action needs a Control Panel session when sign-in is on (tokens get 403). Errors are {\"error\":\"code\"}; 503 friends_disabled when the engine has no state DB.", Endpoints: []Endpoint{
+		{
+			Method: "GET", Path: "/api/friends", Summary: "This node, its friends, requests and open invites",
+			Desc: "Never carries invite codes, pair keys or secrets. reach.state is reachable once an incoming handshake arrived since start, else checking. " +
+				"Requests are pairing requests (in: they used our code, out: we used theirs); declared_name is what the other node says, not verified. " +
+				"now is what a friend and this node exchange at this moment: links (proven peer links with their rates in KiB/s), helping_you (the friend helps our playback), " +
+				"you_help (we help theirs; low_priority while one of our own playbacks is open) and not_helping (its last watch we refused: reason off, upload_off, cap, busy or unavailable). since is when the pairing was made. " +
+				"online is true when the friend answered in the last maintenance period (about a minute) and false after two periods without an answer; it is absent until the first check after start, and checked is the unix time of that verdict. secure is true once the friend has spoken on the encrypted control channel: from then on plaintext with it is refused.",
+			Example: "curl -H 'Authorization: Bearer tmr_…' {{ORIGIN}}/api/friends",
+			Response: "{\n  \"self\": {\"name\": \"anna\", \"addr\": \"81.1.1.1:6881\", \"reach\": {\"state\": \"reachable\", \"last\": \"2026-11-22T10:00:00Z\", \"networks\": [\"tcp4\"]}},\n  \"friends\": [{\"name\": \"bruno\", \"state\": \"paired\", \"role\": \"inviter\", \"addr\": \"82.2.2.2:6881\", \"last_seen\": 1795600000, \"since\": 1795500000, \"online\": true, \"checked\": 1795600000,\n    \"now\": {\"links\": [{\"hash\": \"3f00…\", \"title\": \"Heat (1995)\", \"kbps\": 0, \"up_kbps\": 2150}], \"you_help\": [{\"hash\": \"3f00…\", \"title\": \"Heat (1995)\"}]}}],\n  \"requests\": [{\"id\": 3, \"direction\": \"in\", \"declared_name\": \"carla\", \"state\": \"pending\", \"expires\": 1795700000, \"created\": 1795600000}],\n  \"invites\": [{\"id\": \"0a1b…\", \"state\": \"open\", \"expires\": 1795700000}],\n" +
+				"  \"library\": {\"master\": \"marco-nas\", \"entries\": 4912, \"films\": 3904, \"episodes\": 1008, \"failed\": 0,\n" +
+				"    \"aligning\": {\"done\": 1240, \"total\": 4912, \"block\": 7, \"blocks\": 25, \"rate\": 38.0},\n" +
+				"    \"recent\": [{\"sign\": \"+\", \"title\": \"Dune Part Two (2024)\", \"resolution\": \"2160p\", \"what\": \"added\", \"at\": 1795600000}]}\n}\n\n" +
+				"Each friend has \"library\" when it has a role with this node: {\"side\": \"master\" (it sends its library) or \"slave\" (it gets this node's), " +
+				"\"state\": proposed | offered | active | released | refused, \"since\", \"proposed\", \"expires\", \"refused\": has_master | has_slaves, " +
+				"\"entries\", \"waiting\", \"aligned_at\", \"last_change\"}. On a master, the root \"library\" has \"entries\" (the library its slaves get; \"films\", \"episodes\" and \"failed\" are a slave's only) and lists \"slaves\": " +
+				"[{\"name\", \"state\": aligning | in_sync | behind | offline, \"entries\", \"total\", \"waiting\", \"last_sent\", \"offline_since\"}].",
+			OK:     200,
+			Errors: []Status{{503, "friends_disabled"}},
+		},
+		{
+			Method: "POST", Path: "/api/friends/invite", Summary: "Create a one-time invitation code",
+			Desc:     "Valid 48 hours, carries this node's public address. The code is shown only here.",
+			Example:  "curl -X POST {{ORIGIN}}/api/friends/invite",
+			Response: "{\"id\": \"0a1b…\", \"code\": \"…\", \"expires\": 1795700000}",
+			OK:       200,
+			Errors:   []Status{{403, "no Control Panel session"}, {503, "friends_disabled or public_address_unknown"}},
+		},
+		{
+			Method: "DELETE", Path: "/api/friends/invites/{id}", Summary: "Withdraw an unused invitation",
+			Desc:    "id is the hex id from GET /api/friends or the creation answer. An undecided request on it is dropped.",
+			Example: "curl -X DELETE {{ORIGIN}}/api/friends/invites/0a1b…",
+			OK:      204,
+			Errors:  []Status{{403, "no Control Panel session"}, {404, "not_found (unknown, already used or already decided)"}, {500, "store"}},
+		},
+		{
+			Method: "POST", Path: "/api/friends/preview", Summary: "Read who an invitation comes from",
+			Desc: "Contacts the inviting node (up to about 60 s) without using the code. declared_name is what that node says about itself: " +
+				"the hello is not authenticated, so check it with the person.",
+			ParamsIn: "body",
+			Params:   []Param{{"code", "string", true, "the invitation code"}},
+			Example:  "curl -X POST -d '{\"code\":\"…\"}' {{ORIGIN}}/api/friends/preview",
+			Response: "{\"declared_name\": \"anna\", \"expires\": 1795700000, \"addr\": \"81.1.1.1:6881\"}",
+			OK:       200,
+			Errors:   []Status{{400, "bad_json or bad_code"}, {403, "no Control Panel session"}, {409, "expired (expired or already used)"}, {502, "unreachable"}},
+		},
+		{
+			Method: "POST", Path: "/api/friends/join", Summary: "Use an invitation code",
+			Desc: "Sends the pairing request to the inviting node (up to about 60 s); the inviter decides later. 202 with pending true: the request " +
+				"is saved but the answer was lost, it is retried automatically. The name sent is this node's name (PUT /api/friends/self).",
+			ParamsIn: "body",
+			Params:   []Param{{"code", "string", true, "the invitation code"}},
+			Example:  "curl -X POST -d '{\"code\":\"…\"}' {{ORIGIN}}/api/friends/join",
+			Response: "{\"request_id\": 7}",
+			OK:       202,
+			Errors:   []Status{{400, "bad_json or bad_code"}, {403, "no Control Panel session"}, {409, "expired or own_invite"}, {502, "unreachable"}, {503, "public_address_unknown"}},
+		},
+		{
+			Method: "POST", Path: "/api/friends/requests/{id}/approve", Summary: "Accept an incoming request",
+			Desc:    "Records the decision and answers at once; the delivery to the joiner runs in the background and is retried for 48 hours.",
+			Example: "curl -X POST {{ORIGIN}}/api/friends/requests/3/approve",
+			OK:      202,
+			Errors:  []Status{{400, "bad_id"}, {403, "no Control Panel session"}, {404, "not_found"}, {409, "already_decided the other way"}},
+		},
+		{
+			Method: "POST", Path: "/api/friends/requests/{id}/decline", Summary: "Refuse an incoming request",
+			Desc:    "As approve; the invitation is consumed.",
+			Example: "curl -X POST {{ORIGIN}}/api/friends/requests/3/decline",
+			OK:      202,
+			Errors:  []Status{{400, "bad_id"}, {403, "no Control Panel session"}, {404, "not_found"}, {409, "already_decided the other way"}},
+		},
+		{
+			Method: "DELETE", Path: "/api/friends/{name}", Summary: "Remove a friend",
+			Desc:    "Tells the friend if reachable (up to about 60 s), deletes the pairing and closes its connections.",
+			Example: "curl -X DELETE {{ORIGIN}}/api/friends/bruno",
+			OK:      204,
+			Errors:  []Status{{403, "no Control Panel session"}, {404, "not_found"}},
+		},
+		{
+			Method: "POST", Path: "/api/friends/library/{name}", Summary: "Propose to send this node's library to a friend",
+			Desc: "The friend becomes a library slave only once it accepts from its own Control Panel (within 48 h): its movie, TV and " +
+				"watchlist syncs then stop and its library mirrors this node's. Nothing changes if the friend is unreachable.",
+			Example: "curl -X POST {{ORIGIN}}/api/friends/library/giulia-pi",
+			OK:      202,
+			Errors: []Status{{403, "no Control Panel session"}, {404, "not_found"}, {409, "has_master (the friend, or this node, gets a library from another friend), " +
+				"has_slaves (the friend sends its library to others), library_role (a role with this friend exists)"}, {502, "unreachable"}, {503, "library_disabled"}},
+		},
+		{
+			Method: "POST", Path: "/api/friends/library/{name}/accept", Summary: "Accept a friend's proposal to send its library",
+			Desc:    "This node's movie, TV and watchlist syncs stop and its library receives the friend's, first whole, then every change. Titles already here stay.",
+			Example: "curl -X POST {{ORIGIN}}/api/friends/library/marco-nas/accept",
+			OK:      202,
+			Errors:  []Status{{403, "no Control Panel session"}, {404, "not_found"}, {409, "offer_gone (withdrawn or expired), has_master, has_slaves"}, {502, "unreachable"}, {503, "library_disabled"}},
+		},
+		{
+			Method: "DELETE", Path: "/api/friends/library/{name}", Summary: "End the library role with a friend",
+			Desc: "By state: withdraws a proposal, declines one, leaves the master (received titles stay, the syncs come back with " +
+				"the saved schedule) or releases a slave (told now, or at its next contact).",
+			Example: "curl -X DELETE {{ORIGIN}}/api/friends/library/marco-nas",
+			OK:      204,
+			Errors:  []Status{{403, "no Control Panel session"}, {404, "not_found (no role with this friend)"}},
+		},
+		{
+			Method: "POST", Path: "/api/friends/reset-encryption/{name}", Summary: "Speak in clear again to a friend that encrypted",
+			Desc: "After a first encrypted contact this node refuses plaintext from the friend and never falls back to it, even after a restart " +
+				"(\"secure\": true in GET /api/friends). If the friend went back to an older Tiramisu version, the two nodes refuse each other: " +
+				"this forgets the flag, so the next contact negotiates again (encrypted if the friend can, signed plaintext otherwise). " +
+				"On a friend that is not flagged it does nothing and still answers 204.",
+			Example: "curl -X POST {{ORIGIN}}/api/friends/reset-encryption/bruno",
+			OK:      204,
+			Errors:  []Status{{403, "no Control Panel session"}, {404, "not_found"}},
+		},
+		{
+			Method: "PUT", Path: "/api/friends/self", Summary: "Set this node's name",
+			Desc:     "The name friends see, announced in future invitations and joins. Up to 64 bytes, no control characters.",
+			ParamsIn: "body",
+			Params:   []Param{{"name", "string", true, "the new name"}},
+			Example:  "curl -X PUT -d '{\"name\":\"anna\"}' {{ORIGIN}}/api/friends/self",
+			OK:       204,
+			Errors:   []Status{{400, "bad_json or bad_name"}, {403, "no Control Panel session"}},
 		},
 	}},
 }

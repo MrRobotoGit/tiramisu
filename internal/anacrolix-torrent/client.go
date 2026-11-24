@@ -587,6 +587,9 @@ func (cl *Client) wantConns() bool {
 	if cl.config.AlwaysWantConns {
 		return true
 	}
+	if h := cl.config.Friends; h != nil && h.WantConns() {
+		return true
+	}
 	for _, t := range cl.torrents {
 		if t.wantIncomingConns() {
 			return true
@@ -611,7 +614,8 @@ func (cl *Client) rejectAccepted(conn net.Conn) error {
 		if cl.config.DisableIPv6 && len(rip) == net.IPv6len && rip.To4() == nil {
 			return errors.New("ipv6 disabled")
 		}
-		if cl.rateLimitAccept(rip) {
+		// A friend's IP is never rate limited: its first contact may race the pairing and be a bad accept.
+		if cl.rateLimitAccept(rip) && (cl.config.Friends == nil || !cl.config.Friends.FriendIP(ra)) {
 			return errors.New("source IP accepted rate limited")
 		}
 		if cl.badPeerIPPort(rip, missinggo.AddrPort(ra)) {
@@ -992,9 +996,7 @@ func (cl *Client) incomingPeerPort() int {
 
 func (cl *Client) initiateHandshakes(c *PeerConn, t *Torrent) error {
 	if c.headerEncrypted {
-		var rw io.ReadWriter
-		var err error
-		rw, c.cryptoMethod, err = mse.InitiateHandshake(
+		res := mse.InitiateHandshakeEx(
 			struct {
 				io.Reader
 				io.Writer
@@ -1003,8 +1005,9 @@ func (cl *Client) initiateHandshakes(c *PeerConn, t *Torrent) error {
 			nil,
 			cl.config.CryptoProvides,
 		)
-		c.setRW(rw)
-		if err != nil {
+		c.setRW(res.ReadWriter)
+		c.cryptoMethod, c.mseSecret = res.CryptoMethod, res.S
+		if err := res.Err(); err != nil {
 			return fmt.Errorf("header obfuscation handshake: %w", err)
 		}
 	}
@@ -1043,18 +1046,28 @@ func (cl *Client) forSkeys(f func([]byte) bool) {
 	}
 }
 
-func (cl *Client) handshakeReceiverSecretKeys() mse.SecretKeyIter {
+func (cl *Client) handshakeReceiverSecretKeys(addr PeerRemoteAddr) mse.SecretKeyIter {
+	base := cl.forSkeys
 	if ret := cl.config.Callbacks.ReceiveEncryptedHandshakeSkeys; ret != nil {
-		return ret
+		base = ret
 	}
-	return cl.forSkeys
+	if h := cl.config.Friends; h != nil {
+		return func(f func([]byte) bool) {
+			more := true
+			base(func(k []byte) bool { more = f(k); return more })
+			if more {
+				h.Skeys(addr, f)
+			}
+		}
+	}
+	return base
 }
 
 // Do encryption and bittorrent handshakes as receiver.
-func (cl *Client) receiveHandshakes(c *PeerConn) (t *Torrent, err error) {
+func (cl *Client) receiveHandshakes(c *PeerConn) (t *Torrent, ih metainfo.Hash, err error) {
 	defer perf.ScopeTimerErr(&err)()
 	var rw io.ReadWriter
-	rw, c.headerEncrypted, c.cryptoMethod, err = handleEncryption(c.rw(), cl.handshakeReceiverSecretKeys(), cl.config.HeaderObfuscationPolicy, cl.config.CryptoSelector)
+	rw, c.headerEncrypted, c.cryptoMethod, c.mseSecret, err = handleEncryption(c.rw(), cl.handshakeReceiverSecretKeys(c.RemoteAddr), cl.config.HeaderObfuscationPolicy, cl.config.CryptoSelector)
 	c.setRW(rw)
 	if err == nil || err == mse.ErrNoSecretKeyMatch {
 		if c.headerEncrypted {
@@ -1075,9 +1088,9 @@ func (cl *Client) receiveHandshakes(c *PeerConn) (t *Torrent, err error) {
 		err = errors.New("connection does not have required header obfuscation")
 		return
 	}
-	ih, err := cl.connBtHandshake(c, nil)
+	ih, err = cl.connBtHandshake(c, nil)
 	if err != nil {
-		return nil, fmt.Errorf("during bt handshake: %w", err)
+		return nil, ih, fmt.Errorf("during bt handshake: %w", err)
 	}
 	cl.lock()
 	t = cl.torrents[ih]
@@ -1094,7 +1107,31 @@ func init() {
 }
 
 func (cl *Client) connBtHandshake(c *PeerConn, ih *metainfo.Hash) (ret metainfo.Hash, err error) {
-	res, err := pp.Handshake(c.rw(), ih, cl.peerID, cl.config.Extensions)
+	h := cl.config.Friends
+	var res pp.HandshakeResult
+	switch {
+	case h == nil:
+		res, err = pp.Handshake(c.rw(), ih, cl.peerID, cl.config.Extensions)
+	case ih != nil:
+		id, ok := h.OutgoingPeerID(*ih, c.RemoteAddr)
+		if !ok {
+			id = cl.peerID
+		}
+		res, err = pp.Handshake(c.rw(), ih, id, cl.config.Extensions)
+		if err == nil && ok {
+			c.friendCandidate, c.friendInviter = h.ConfirmOutgoing(*ih, c.RemoteAddr, res.PeerID)
+		}
+	default:
+		res, err = pp.HandshakeChoose(c.rw(), nil, cl.peerID, cl.config.Extensions,
+			func(hash metainfo.Hash, remote [20]byte) [20]byte {
+				id, friend, inviter, ok := h.IncomingPeerID(hash, remote)
+				if !ok {
+					return cl.peerID
+				}
+				c.friendCandidate, c.friendInviter = friend, inviter
+				return id
+			})
+	}
 	if err != nil {
 		return
 	}
@@ -1115,7 +1152,8 @@ func (cl *Client) runReceivedConn(c *PeerConn) {
 	if err != nil {
 		panic(err)
 	}
-	t, err := cl.receiveHandshakes(c)
+	t, ih, err := cl.receiveHandshakes(c)
+	opened := false // t was loaded for this connection
 	if err != nil {
 		cl.logger.LazyLog(log.Debug, func() log.Msg {
 			return log.Fmsg(
@@ -1135,16 +1173,43 @@ func (cl *Client) runReceivedConn(c *PeerConn) {
 		cl.logger.LazyLog(log.Debug, func() log.Msg {
 			return log.Fmsg("received handshake for unloaded torrent")
 		})
-		cl.lock()
-		cl.onBadAccept(c.RemoteAddr)
-		cl.unlock()
-		return
+		// A friend dialling a torrent we lack fails MSE (no key): no penalty from its IP.
+		if h := cl.config.Friends; h != nil && ih == (metainfo.Hash{}) && c.headerEncrypted && h.FriendIP(c.RemoteAddr) {
+			return
+		}
+		// Friends and their control channels skip the bad-accept penalty.
+		if h := cl.config.Friends; h != nil && ih != (metainfo.Hash{}) {
+			if h.TakeUnknown(ih, c.PeerID, c.friendCandidate, c.rw(), c.conn) {
+				return
+			}
+			// Only an MSE candidate: a bare ID match is replayable, so it keeps the penalty.
+			if c.friendCandidate && len(c.mseSecret) == 96 {
+				if h.OpenFriendTorrent(ih, c.PeerID) {
+					cl.lock()
+					t = cl.torrents[ih]
+					cl.unlock()
+					opened = t != nil && t.friendsOnly // a hydration may have taken the hash meanwhile
+				}
+				if t == nil {
+					return
+				}
+			}
+		}
+		if t == nil {
+			cl.lock()
+			cl.onBadAccept(c.RemoteAddr)
+			cl.unlock()
+			return
+		}
 	}
 	torrent.Add("received handshake for loaded torrent", 1)
 	c.conn.SetWriteDeadline(time.Time{})
 	cl.lock()
-	defer cl.unlock()
 	t.runHandshookConnLoggingErr(c)
+	cl.unlock()
+	if opened {
+		t.dropIfIdle() // the connection it was loaded for may have been refused
+	}
 }
 
 // Client lock must be held before entering this.
@@ -1170,6 +1235,13 @@ func (t *Torrent) runHandshookConn(pc *PeerConn) error {
 		return nil
 	}
 	pc.r = deadlineReader{pc.conn, pc.r}
+	// Without MSE there is no secret to bind a proof to.
+	if len(pc.mseSecret) != 96 {
+		pc.friendCandidate = false
+	}
+	if !pc.friendCandidate {
+		pc.mseSecret = nil
+	}
 	completedHandshakeConnectionFlags.Add(pc.connectionFlags(), 1)
 	if connIsIpv6(pc.conn) {
 		torrent.Add("completed handshake over ipv6", 1)
@@ -1178,7 +1250,10 @@ func (t *Torrent) runHandshookConn(pc *PeerConn) error {
 		return fmt.Errorf("adding connection: %w", err)
 	}
 	defer t.dropConnection(pc)
-	pc.addBuiltinLtepProtocols(!cl.config.DisablePEX)
+	pc.addBuiltinLtepProtocols(!cl.config.DisablePEX && !t.friendsOnly)
+	if pc.friendCandidate {
+		pc.addFriendProofProtocol()
+	}
 	for _, cb := range pc.callbacks.PeerConnAdded {
 		cb(pc)
 	}
@@ -1225,6 +1300,10 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 	key := churnCooldownKey(pc.RemoteAddr)
 
 	t.cl.lock()
+	if pc.friend {
+		t.cl.unlock()
+		return
+	}
 	now := time.Now()
 	// giveSecondChance: this reconnect landed on an existing, still-valid cooldown entry that
 	// hasn't used its one second-chance probe yet - a peer's first drop can be a slow bitfield
@@ -1234,7 +1313,8 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 	giveSecondChance := false
 	if entry, ok := t.churnCooldown[key]; ok {
 		if now.Before(entry.until) {
-			if entry.probed {
+			// A candidate still in its proof window gets the probe: it may prove meanwhile.
+			if entry.probed && !(pc.friendCandidate && pc.friendProofWindowAt(now)) {
 				t.logger.WithDefaultLevel(log.Warning).Printf("[PEXChurn] hash=%s dropping peer %v - still in %v cooldown after its second-chance probe also failed", t.infoHash.HexString(), pc.RemoteAddr, churnCooldownDur)
 				t.countChurnDrop(pc)
 				pc.drop()
@@ -1253,8 +1333,8 @@ func (t *Torrent) churnIfUselessForWarmup(pc *PeerConn) {
 	time.Sleep(probeWindow)
 	t.cl.lock()
 	defer t.cl.unlock()
-	if pc.closed.IsSet() || !t.warmupActive.Load() {
-		return // already gone, or warmup finished while we were waiting - nothing to churn
+	if pc.closed.IsSet() || !t.warmupActive.Load() || pc.friend {
+		return // gone, warmup over, or a friend (possibly proven during the window)
 	}
 	begin, end, ok := t.warmupPieceRange(probePieces)
 	if !ok {
@@ -1339,6 +1419,12 @@ func (pc *PeerConn) sendInitialMessages() {
 		})
 	}
 	func() {
+		if t.friendsOnly && !pc.friend {
+			if pc.fastEnabled() {
+				pc.write(pp.Message{Type: pp.HaveNone})
+			}
+			return
+		}
 		if pc.fastEnabled() {
 			if t.haveAllPieces() {
 				pc.write(pp.Message{Type: pp.HaveAll})
@@ -1565,14 +1651,20 @@ func (cl *Client) AddTorrentOpt(opts AddTorrentOpts) (t *Torrent, new bool) {
 	new = true
 
 	t = cl.newTorrentOpt(opts)
+	if opts.FriendsOnly {
+		t.friendsOnly = true
+		t.dataDownloadDisallowed.Set()
+	}
 	cl.eachDhtServer(func(s DhtServer) {
-		if cl.config.PeriodicallyAnnounceTorrentsToDht {
+		if cl.config.PeriodicallyAnnounceTorrentsToDht && !t.friendsOnly {
 			go t.dhtAnnouncer(s)
 		}
 	})
 	cl.torrents[infoHash] = t
 	t.setInfoBytesLocked(opts.InfoBytes)
-	cl.clearAcceptLimits()
+	if !t.friendsOnly { // a friend's load must not lift strangers' bad-accept penalties
+		cl.clearAcceptLimits()
+	}
 	t.updateWantPeersEvent()
 	// Tickle Client.waitAccept, new torrent may want conns.
 	cl.event.Broadcast()
@@ -1584,6 +1676,9 @@ type AddTorrentOpts struct {
 	Storage   storage.ClientImpl
 	ChunkSize pp.Integer
 	InfoBytes []byte
+	// FriendsOnly loads a torrent that serves proven friends only: no announces, no dials, no
+	// PEX, no download; it closes with its last connection.
+	FriendsOnly bool
 }
 
 // Add or merge a torrent spec. Returns new if the torrent wasn't already in the client. See also

@@ -188,6 +188,8 @@ type Torrent struct {
 	// Active peer connections, running message stream loops. TODO: Make this
 	// open (not-closed) connections only.
 	conns               map[*PeerConn]struct{}
+	friendLinks         int  // conns that are proven friends or hold a candidate slot
+	friendsOnly         bool // serves proven friends only; set at creation
 	maxEstablishedConns int
 	// Set of addrs to which we're attempting to connect. Connections are
 	// half-open until all handshakes are completed.
@@ -1703,7 +1705,8 @@ func (t *Torrent) maybeDropMutuallyCompletePeer(
 	// okay?
 	p *PeerConn,
 ) {
-	if !t.cl.config.DropMutuallyCompletePeers {
+	// An unproven candidate can go here when both sides are complete before the proof: accepted.
+	if !t.cl.config.DropMutuallyCompletePeers || p.friend {
 		return
 	}
 	if !t.haveAllPieces() {
@@ -1848,8 +1851,16 @@ func (t *Torrent) withUnclosedConns(f func([]*PeerConn)) {
 	peerConnSlices.Put(sl)
 }
 
-func (t *Torrent) worstBadConnFromSlice(opts worseConnLensOpts, sl []*PeerConn) *PeerConn {
-	wcs := worseConnSlice{conns: sl}
+func (t *Torrent) worstBadConnFromSlice(opts worseConnLensOpts, sl []*PeerConn, now time.Time) *PeerConn {
+	// Friends, and candidates admitted above the limit while they may prove, are never evicted.
+	n := 0
+	for _, c := range sl {
+		if !c.outsideLimitAt(now) {
+			sl[n] = c
+			n++
+		}
+	}
+	wcs := worseConnSlice{conns: sl[:n]}
 	wcs.initKeys(opts)
 	heap.Init(&wcs)
 	for wcs.Len() != 0 {
@@ -1867,7 +1878,7 @@ func (t *Torrent) worstBadConnFromSlice(opts worseConnLensOpts, sl []*PeerConn) 
 		// connection quota and is older than a minute.
 		if wcs.Len() >= (t.maxEstablishedConns+1)/2 {
 			// Give connections 30 seconds to prove themselves (V266: was 1 minute)
-			if time.Since(c.completedHandshake) > 30*time.Second {
+			if now.Sub(c.completedHandshake) > 30*time.Second {
 				return c
 			}
 		}
@@ -1879,9 +1890,9 @@ func (t *Torrent) worstBadConnFromSlice(opts worseConnLensOpts, sl []*PeerConn) 
 // connection is one that usually sends us unwanted pieces, or has been in the worse half of the
 // established connections for more than a minute. This is O(n log n). If there was a way to not
 // consider the position of a conn relative to the total number, it could be reduced to O(n).
-func (t *Torrent) worstBadConn(opts worseConnLensOpts) (ret *PeerConn) {
+func (t *Torrent) worstBadConn(opts worseConnLensOpts, now time.Time) (ret *PeerConn) {
 	t.withUnclosedConns(func(ucs []*PeerConn) {
-		ret = t.worstBadConnFromSlice(opts, ucs)
+		ret = t.worstBadConnFromSlice(opts, ucs, now)
 	})
 	return
 }
@@ -2284,6 +2295,12 @@ func (t *Torrent) deletePeerConn(c *PeerConn) (ret bool) {
 	}
 	_, ret = t.conns[c]
 	delete(t.conns, c)
+	if ret && (c.friend || c.friendSlot) {
+		t.friendLinks--
+	}
+	if ret && t.friendsOnly && len(t.conns) == 0 {
+		go t.dropIfIdle()
+	}
 	// Avoid adding a drop event more than once. Probably we should track whether we've generated
 	// the drop event against the PexConnState instead.
 	if ret {
@@ -2739,8 +2756,15 @@ func (t *Torrent) addPeerConn(c *PeerConn) (err error) {
 	if t.closed.IsSet() {
 		return errors.New("torrent closed")
 	}
+	if t.friendsOnly && !c.friend && !c.friendCandidate {
+		return errors.New("friends-only torrent")
+	}
 	for c0 := range t.conns {
 		if c.PeerID != c0.PeerID {
+			continue
+		}
+		// Friend links resolve duplicates at proof time (friendProven), never on a bare ID.
+		if c.friendCandidate || c0.friendCandidate || c.friend || c0.friend {
 			continue
 		}
 		if !t.cl.config.DropDuplicatePeerIds {
@@ -2753,33 +2777,44 @@ func (t *Torrent) addPeerConn(c *PeerConn) (err error) {
 			return errors.New("existing connection preferred")
 		}
 	}
-	if len(t.conns) >= t.maxEstablishedConns {
-		numOutgoing := t.numOutgoingConns()
-		numIncoming := len(t.conns) - numOutgoing
-		c := t.worstBadConn(worseConnLensOpts{
-			// We've already established that we have too many connections at this point, so we just
-			// need to match what kind we have too many of vs. what we're trying to add now.
-			incomingIsBad: (numIncoming-numOutgoing > 1) && c.outgoing,
-			outgoingIsBad: (numOutgoing-numIncoming > 1) && !c.outgoing,
-		})
-		if c == nil {
-			return errors.New("don't want conn")
+	// One instant for every proof-window check, so a candidate cannot expire midway.
+	now := time.Now()
+	if !c.friend && t.countedConnsAt(now) >= t.maxEstablishedConns && !t.admitFriendCandidate(c, now) {
+		// A loop: candidates whose proof window ran out count again and can leave us over.
+		for t.countedConnsAt(now) >= t.maxEstablishedConns {
+			numOutgoing := t.numOutgoingConns()
+			numIncoming := len(t.conns) - numOutgoing
+			c := t.worstBadConn(worseConnLensOpts{
+				// We've already established that we have too many connections at this point, so we just
+				// need to match what kind we have too many of vs. what we're trying to add now.
+				incomingIsBad: (numIncoming-numOutgoing > 1) && c.outgoing,
+				outgoingIsBad: (numOutgoing-numIncoming > 1) && !c.outgoing,
+			}, now)
+			if c == nil {
+				return errors.New("don't want conn")
+			}
+			t.peerEjectCount.Add(1)
+			if c.utp() {
+				t.peerEjectCountUTP.Add(1)
+			}
+			c.close()
+			t.deletePeerConn(c)
 		}
-		t.peerEjectCount.Add(1)
-		if c.utp() {
-			t.peerEjectCountUTP.Add(1)
-		}
-		c.close()
-		t.deletePeerConn(c)
 	}
-	if len(t.conns) >= t.maxEstablishedConns {
-		panic(len(t.conns))
+	if !c.outsideLimitAt(now) && t.countedConnsAt(now) >= t.maxEstablishedConns {
+		return errors.New("connection limit reached")
 	}
 	t.conns[c] = struct{}{}
+	if c.friend || c.friendSlot {
+		t.friendLinks++
+	}
 	t.cl.event.Broadcast()
 	// We'll never receive the "p" extended handshake parameter.
-	if !t.cl.config.DisablePEX && !c.PeerExtensionBytes.SupportsExtended() {
+	if !t.cl.config.DisablePEX && !t.friendsOnly && !c.PeerExtensionBytes.SupportsExtended() {
 		t.pex.Add(c)
+	}
+	if t.friendsOnly && !c.friend {
+		t.dropUnprovenLater(c)
 	}
 	return nil
 }
@@ -2798,6 +2833,9 @@ func (t *Torrent) newConnsAllowed() bool {
 }
 
 func (t *Torrent) wantAnyConns() bool {
+	if t.friendsOnly {
+		return false
+	}
 	if !t.networkingEnabled.Bool() {
 		return false
 	}
@@ -2807,35 +2845,56 @@ func (t *Torrent) wantAnyConns() bool {
 	if !t.needData() && (!t.seeding() || !t.haveAnyPieces()) {
 		return false
 	}
-	return len(t.conns) < t.maxEstablishedConns
+	return t.countedConns() < t.maxEstablishedConns
+}
+
+// countedConns is the established connections that count against the limit: friends, and
+// candidates admitted above it while they may prove, sit outside it.
+func (t *Torrent) countedConns() int {
+	if t.friendLinks == 0 { // no time read for torrents without friend links
+		return len(t.conns)
+	}
+	return t.countedConnsAt(time.Now())
+}
+
+func (t *Torrent) countedConnsAt(now time.Time) (n int) {
+	if t.friendLinks == 0 {
+		return len(t.conns)
+	}
+	for c := range t.conns {
+		if !c.outsideLimitAt(now) {
+			n++
+		}
+	}
+	return
 }
 
 func (t *Torrent) wantOutgoingConns() bool {
-	if !t.newConnsAllowed() {
+	if t.friendsOnly || !t.newConnsAllowed() {
 		return false
 	}
-	if len(t.conns) < t.maxEstablishedConns {
+	if t.countedConns() < t.maxEstablishedConns {
 		return true
 	}
 	numIncomingConns := len(t.conns) - t.numOutgoingConns()
 	return t.worstBadConn(worseConnLensOpts{
 		incomingIsBad: numIncomingConns-t.numOutgoingConns() > 1,
 		outgoingIsBad: false,
-	}) != nil
+	}, time.Now()) != nil
 }
 
 func (t *Torrent) wantIncomingConns() bool {
 	if !t.newConnsAllowed() {
 		return false
 	}
-	if len(t.conns) < t.maxEstablishedConns {
+	if t.countedConns() < t.maxEstablishedConns {
 		return true
 	}
 	numIncomingConns := len(t.conns) - t.numOutgoingConns()
 	return t.worstBadConn(worseConnLensOpts{
 		incomingIsBad: false,
 		outgoingIsBad: t.numOutgoingConns()-numIncomingConns > 1,
-	}) != nil
+	}, time.Now()) != nil
 }
 
 func (t *Torrent) SetMaxEstablishedConns(max int) (oldMax int) {
@@ -2843,14 +2902,15 @@ func (t *Torrent) SetMaxEstablishedConns(max int) (oldMax int) {
 	defer t.cl.unlock()
 	oldMax = t.maxEstablishedConns
 	t.maxEstablishedConns = max
+	now := time.Now()
 	wcs := worseConnSlice{
-		conns: t.appendConns(nil, func(*PeerConn) bool {
-			return true
+		conns: t.appendConns(nil, func(c *PeerConn) bool {
+			return !c.outsideLimitAt(now)
 		}),
 	}
 	wcs.initKeys(worseConnLensOpts{})
 	heap.Init(&wcs)
-	for len(t.conns) > t.maxEstablishedConns && wcs.Len() > 0 {
+	for t.countedConnsAt(now) > t.maxEstablishedConns && wcs.Len() > 0 {
 		t.dropConnection(heap.Pop(&wcs).(*PeerConn))
 	}
 	t.openNewConns()
@@ -3278,6 +3338,12 @@ func initiateConn(
 	if t.hasPeerConnForAddr(addr) {
 		return
 	}
+	// A friend dial must run MSE: the proof is bound to its shared secret.
+	if h := t.cl.config.Friends; h != nil {
+		if _, ok := h.OutgoingPeerID(t.infoHash, addr); ok {
+			opts.HeaderObfuscationPolicy = HeaderObfuscationPolicy{Preferred: true, RequirePreferred: true}
+		}
+	}
 	attemptKey := &peer
 	t.addHalfOpen(addrStr, attemptKey)
 	go t.cl.outgoingConnection(
@@ -3392,8 +3458,8 @@ func (t *Torrent) DisallowDataUpload() {
 	defer t.cl.unlock()
 	t.dataUploadDisallowed = true
 	for c := range t.conns {
-		// TODO: This doesn't look right. Shouldn't we tickle writers to choke peers or something instead?
 		c.updateRequests("disallow data upload")
+		c.tickleWriter() // the writer chokes once upload is disallowed
 	}
 }
 

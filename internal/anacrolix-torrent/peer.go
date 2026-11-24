@@ -46,6 +46,8 @@ type (
 		cryptoMethod    mse.CryptoMethod
 		Discovery       PeerSource
 		trusted         bool
+		friend          bool // Proven friend: set under the client lock when the tm_fp proof checks out.
+		friendInviter   bool // We are the inviter side of the friend pair.
 		closed          chansync.SetOnce
 		// Cancelled when the Peer is closed. Derived from the Torrent's closedCtx. Lets blocked
 		// storage reads and reservation waits abort on peer close (backported from anacrolix/torrent

@@ -138,6 +138,7 @@ func (e *Engine) Drop(hash string) bool {
 		return false
 	}
 	e.close(t)
+	e.friendsPlaybackEnd(t.hash)
 	return true
 }
 
@@ -154,6 +155,8 @@ func (e *Engine) Remove(hash string) error {
 		defer t.life.Unlock()
 		e.closeLocked(t)
 	}
+	e.dropServed(h)
+	e.friendsPlaybackEnd(h)
 	if e.deps.DB == nil {
 		return nil
 	}

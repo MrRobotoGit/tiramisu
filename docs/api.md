@@ -1,6 +1,6 @@
 # API and MCP Server
 
-The Library API, the MCP server for AI agents, and a quick reference of the HTTP endpoints.
+The Library API, the Friends API, the MCP server for AI agents, and a quick reference of the HTTP endpoints.
 
 [← Back to the README](../README.md) · [Documentation index](README.md)
 
@@ -367,6 +367,65 @@ peer port is the one the VPN forwards, not the one in the form. A restore applie
 Changes to the disconnect timeout, retrackers mode, Responsive mode, Adaptive
 Shield and read-ahead apply live; any other change reconnects the BitTorrent client, and playback
 in progress stops.
+
+---
+
+## Friends
+
+Pairing with other Tiramisu nodes and the shared library, as in
+[Control Panel → Friends](user-guide.md#friends). Every endpoint is also in
+**Reference → API** inside the app.
+
+- **Access.** `GET /api/friends` is open to API tokens. Every action needs a
+  signed-in Control Panel session when sign-in is on: a token gets `403`.
+- **Errors** are `{"error": "<code>"}`. Every route answers `503 friends_disabled`
+  when the engine has no state database.
+- **Never in an answer:** invite codes (except once, when you create one), pair
+  keys or secrets. `declared_name` is what the other node says about itself, not
+  verified.
+
+```bash
+# State: this node, friends, requests, invites, library roles (an API token is enough)
+curl -s -H 'Authorization: Bearer tmr_...' http://127.0.0.1:9080/api/friends | jq
+
+# Invite, then the friend previews and joins with the code (signed-in session)
+curl -X POST http://127.0.0.1:9080/api/friends/invite
+curl -X POST -d '{"code":"TMF1-..."}' http://127.0.0.1:9080/api/friends/preview
+curl -X POST -d '{"code":"TMF1-..."}' http://127.0.0.1:9080/api/friends/join
+curl -X POST http://127.0.0.1:9080/api/friends/requests/3/approve
+```
+
+| Method and path | What it does | OK |
+|---|---|---|
+| `GET /api/friends` | This node (`self`: name, address, `reach.state` *reachable* or *checking*), `friends` (state, `online`, `secure`, `now`: links, `helping_you`, `you_help`, `not_helping`), `requests`, `invites`, `library` | 200 |
+| `POST /api/friends/invite` | One-time code, valid 48 h, with this node's public address; shown only here (`503 public_address_unknown` before the address is known) | 200 |
+| `DELETE /api/friends/invites/{id}` | Withdraw an unused invitation | 204 |
+| `POST /api/friends/preview` | `{"code"}` → the inviting node's `declared_name`, `expires`, `addr`, without using the code (up to about 60 s) | 200 |
+| `POST /api/friends/join` | `{"code"}` → sends the pairing request; `"pending": true` when the answer was lost and it is retried | 202 |
+| `POST /api/friends/requests/{id}/approve` · `/decline` | Records the decision; delivery to the joiner retries in the background for 48 h | 202 |
+| `DELETE /api/friends/{name}` | Tells the friend if reachable, deletes the pair, closes its connections | 204 |
+| `PUT /api/friends/self` | `{"name"}`: the name friends see (up to 64 bytes) | 204 |
+| `POST /api/friends/reset-encryption/{name}` | Forget that a friend speaks the encrypted control channel, so the next contact negotiates again (after the friend went back to an older version) | 204 |
+| `POST /api/friends/library/{name}` | Propose to send this node's library to the friend; it becomes a slave once it accepts | 202 |
+| `POST /api/friends/library/{name}/accept` | Accept a friend's proposal: its library arrives, first whole, then every change | 202 |
+| `DELETE /api/friends/library/{name}` | By state: withdraw or decline a proposal, leave the master, release a slave | 204 |
+
+Library roles answer `409` with `has_master` (a slave follows one master, and a
+node with a master has no slaves), `has_slaves`, `library_role` (a role with that
+friend already exists) or `offer_gone` (withdrawn or expired), and `502
+unreachable` when the friend does not answer: nothing changes then.
+
+**On a slave**, local video changes are refused while the master is active:
+`POST /api/library/add` and `/api/library/remove` for movies and TV, and the
+"Run now" of the movie, TV and watchlist syncs, answer `409` with the master's
+name and a message for the user. The MCP `add_release` and `remove_entries` tools
+refuse with the same message.
+
+```json
+{"error": "library_from_master", "master": "alice-nas", "message": "This library comes from alice-nas. Titles can't be added here while it is your library master. Leave in Friends › Library to add titles yourself."}
+```
+
+Music and audiobooks are not shared and stay writable.
 
 ---
 

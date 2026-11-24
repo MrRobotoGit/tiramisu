@@ -19,7 +19,11 @@ var (
 // FetchPublicIP asks url for our address, bounded by timeout. It keeps only a public address
 // of the wanted family (v4 true = IPv4).
 func FetchPublicIP(client *http.Client, url string, v4 bool, timeout time.Duration) net.IP {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return fetchPublicIP(context.Background(), client, url, v4, timeout)
+}
+
+func fetchPublicIP(ctx context.Context, client *http.Client, url string, v4 bool, timeout time.Duration) net.IP {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -51,12 +55,14 @@ func FetchPublicIP(client *http.Client, url string, v4 bool, timeout time.Durati
 type publicIPCache struct {
 	mu     sync.Mutex
 	v4, v6 net.IP
-	fetch  func(url string, v4 bool) net.IP
+	fetch  func(ctx context.Context, url string, v4 bool) net.IP
 }
 
 func newPublicIPCache() *publicIPCache {
 	c := &http.Client{}
-	return &publicIPCache{fetch: func(url string, v4 bool) net.IP { return FetchPublicIP(c, url, v4, 3*time.Second) }}
+	return &publicIPCache{fetch: func(ctx context.Context, url string, v4 bool) net.IP {
+		return fetchPublicIP(ctx, c, url, v4, 3*time.Second)
+	}}
 }
 
 var publicIPs = newPublicIPCache()
@@ -65,13 +71,13 @@ func (c *publicIPCache) get(ipv6 bool) (net.IP, net.IP) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.v4 == nil {
-		c.v4 = c.fetch(PublicIP4URL, true)
+		c.v4 = c.fetch(context.Background(), PublicIP4URL, true)
 	}
 	if !ipv6 {
 		return c.v4, nil
 	}
 	if c.v6 == nil {
-		c.v6 = c.fetch(PublicIP6URL, false)
+		c.v6 = c.fetch(context.Background(), PublicIP6URL, false)
 	}
 	return c.v4, c.v6
 }
@@ -79,3 +85,17 @@ func (c *publicIPCache) get(ipv6 bool) (net.IP, net.IP) {
 // PublicIPs looks the addresses up, 3s each, IPv6 only when asked. A success is kept for the
 // process; a failure is retried at the next call.
 func PublicIPs(ipv6 bool) (net.IP, net.IP) { return publicIPs.get(ipv6) }
+
+func (c *publicIPCache) fresh(ctx context.Context, ipv6 bool) (v4, v6 net.IP) {
+	v4 = c.fetch(ctx, PublicIP4URL, true)
+	if ipv6 {
+		v6 = c.fetch(ctx, PublicIP6URL, false)
+	}
+	return v4, v6
+}
+
+// FreshPublicIPs looks the addresses up every time, without reading or filling the process
+// cache: the friends layer must notice an address change. A cancelled ctx stops the lookup.
+func FreshPublicIPs(ctx context.Context, ipv6 bool) (net.IP, net.IP) {
+	return publicIPs.fresh(ctx, ipv6)
+}

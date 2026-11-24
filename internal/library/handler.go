@@ -210,6 +210,9 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func writeAPIError(w http.ResponseWriter, err error) {
+	if writeMasterError(w, err) {
+		return
+	}
 	var apiErr *Error
 	if errors.As(err, &apiErr) {
 		writeError(w, apiErr.Status, apiErr.Message)

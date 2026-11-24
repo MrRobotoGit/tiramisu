@@ -21,6 +21,7 @@ func Config(s settings.Settings) engine.Config {
 		AggressivePeerManagement: s.AggressivePeerManagement,
 		DownloadRateLimit:        s.DownloadRateLimit, UploadRateLimit: s.UploadRateLimit,
 		PeersListenPort: s.PeersListenPort, DisableUPNP: s.DisableUPNP, ResponsiveMode: s.ResponsiveMode, AdaptiveShield: s.AdaptiveShield,
+		FriendsMaxHelps: s.FriendsMaxHelps,
 	}
 }
 

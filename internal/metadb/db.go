@@ -340,6 +340,9 @@ CREATE TABLE IF NOT EXISTS metadata_failures (
 	if err := d.execGoStormVersionsSchema(); err != nil {
 		return err
 	}
+	if err := d.execFriendsSchema(); err != nil {
+		return err
+	}
 	return d.execAudioSchema()
 }
 

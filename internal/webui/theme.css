@@ -34,6 +34,7 @@
   --sig-yellow: #7A5600; --sig-yellow-bg: rgba(237, 184, 46, .26);
   --sig-blue: #2F64A8;   --sig-blue-bg: rgba(63, 111, 182, .14);
   --sig-green: #2E7A4C;  --sig-green-bg: rgba(46, 158, 91, .15);
+  --friend: #6B4FBB;
   --accent-hi: #F8B6A4;
   --term: #15181B;
   --term-hi: #FFFFFF;
@@ -62,6 +63,7 @@
   --sig-yellow: #F2C94C; --sig-yellow-bg: rgba(242, 201, 76, .16);
   --sig-blue: #8DB4E8;   --sig-blue-bg: rgba(125, 165, 225, .16);
   --sig-green: #6FD39A;  --sig-green-bg: rgba(61, 203, 116, .14);
+  --friend: #B7A3F5;
   --accent-hi: #FFC2B0;
   --term: #08090A;
   --term-hi: #FFFFFF;
@@ -228,6 +230,9 @@ button, input, select { font: inherit; color: inherit; }
 }
 .lamp.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--ink3); }
 .lamp.err { background: var(--accent); }
+/* Friends: violet, on the Friends page and in the live swarm. */
+.lamp.friend { background: var(--friend); }
+.lamp.friend::after { border-color: var(--friend); }
 /* Engine health in the rail: green when online. Green also marks a completed step (restart, sign-in). */
 #rail-lamp.run { background: var(--ok); }
 #rail-lamp.run::after { border-color: var(--ok); }
@@ -644,6 +649,23 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 .sw-up-edge { fill: none; stroke: var(--sig-blue); stroke-width: .8; opacity: .35; }
 .sw-up-flow { fill: none; stroke: var(--sig-blue); stroke-width: 2.2; stroke-linecap: round; stroke-dasharray: 3 30; animation: sw-up-move 2.6s linear infinite; }
 @keyframes sw-up-move { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 33; } }
+/* Friends lane: a row above the peer field; a violet tube per active friend, labelled on the tube. */
+.sw-head-note { font: 400 11px var(--sans); fill: var(--ink3); paint-order: stroke fill; stroke: var(--panel); stroke-width: 5px; stroke-linejoin: round; }
+.sw-peer.friend { fill: var(--friend); stroke: none; }
+.sw-friend-tube { fill: none; stroke: var(--friend); stroke-width: .6; opacity: .45; }
+.sw-friend-flow { fill: none; stroke: var(--friend); stroke-width: 1.8; stroke-linecap: round; stroke-dasharray: 2.2 30; animation: sw-friend-move 2.6s linear infinite; }
+.sw-friend-flow.up { animation-name: sw-friend-back; }
+@keyframes sw-friend-move { from { stroke-dashoffset: 32.2; } to { stroke-dashoffset: 0; } }
+@keyframes sw-friend-back { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 32.2; } }
+.sw-friend-halo { fill: none; stroke: var(--friend); stroke-width: 1.2; opacity: .4; }
+.sw-name.sw-friend-name { fill: var(--friend); }
+.sw-friend-role { fill: var(--ink2); font-weight: 400; }
+.sw-friend-rate { fill: var(--ink); }
+.sw-share-track { fill: var(--hair2); }
+.sw-share { fill: var(--friend); }
+.sw-birth-ring.friend, .sw-death-ring.friend { stroke: var(--friend); }
+.sw-d-title.friend { color: var(--friend); display: flex; align-items: center; gap: 6px; }
+.sw-d-title.friend::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--friend); }
 /* Library scan: a dotted line to its client node, a dashed ring on the torrents it woke. */
 .sw-scan-edge { fill: none; stroke: var(--ink3); stroke-width: 1.2; stroke-dasharray: 1 4; stroke-linecap: round; }
 .sw-client.scan { fill: var(--panel); stroke: var(--ink2); stroke-dasharray: none; }
@@ -662,7 +684,7 @@ input.danger, .input input.danger { color: var(--accent-ink); }
 @keyframes sw-wave { from { stroke-dashoffset: 34; } to { stroke-dashoffset: -100; } }
 @keyframes sw-drain { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -100; } }
 @media (prefers-reduced-motion: reduce) {
-  .sw-pulse, .sw-peer-flow, .sw-up-flow { animation: none; opacity: 0; }
+  .sw-pulse, .sw-peer-flow, .sw-up-flow, .sw-friend-flow { animation: none; opacity: 0; }
   .sw-born, .sw-dying, .sw-death-ring, .sw-birth-ring, .sw-torrent-pulse, .sw-peer-flow.sw-born, .sw-up-flow.sw-born { animation: none; }
   .sw-torrent-pulse, .sw-birth-ring { opacity: 0; }
   .sw-dying { opacity: 0; }

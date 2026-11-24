@@ -78,6 +78,7 @@ func Boot(o Options) (*Host, error) {
 		logf("[Settings] WARN the stored settings did not apply: %v", err)
 	}
 	st := streamer.New(streamer.Config{Logf: logf, Playing: o.Playing, Tunables: func() streamer.Tunables { return Tunables(m.Current()) }})
+	e.SetStreamer(st)
 	return &Host{Engine: e, Settings: m, Streamer: st, Bridge: bridge.NewNativeClient(e, st), StateDir: o.StateDir, logf: logf}, nil
 }
 

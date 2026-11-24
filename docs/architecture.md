@@ -64,7 +64,7 @@ BitTorrent Peers ←→ anacrolix/torrent fork (peer protocol)
 |------|---------|
 | `:9080` | Control Panel, Metrics, Dashboard, Webhook, Scheduler, Library API, MCP. Plain HTTP, and HTTPS on the same port when turned on ([HTTPS](api.md#https)) |
 
-The engine has no HTTP port of its own. Up to v1.12 the GoStorm engine also served
+The BitTorrent peer port also carries the control channel between [friends](#12-friends-nodes-that-help-each-other): no other port is opened. The engine has no HTTP port of its own. Up to v1.12 the GoStorm engine also served
 a JSON API on `:8090`; since v1.13.0 nothing listens there.
 
 ---
@@ -314,6 +314,64 @@ engine replaced GoStorm, derived from
 Data stays compatible with earlier releases: the same database tables
 (`gostorm_torrents`, `gostorm_kv`, `gostorm_settings_versions`, kept under their
 old names), the same library and the same stubs.
+
+### 12. Friends: nodes that help each other
+
+A cold start waits for the public swarm, and the SSD warmup covers only the
+titles already played. Another Tiramisu node often holds the warmup of exactly
+those titles: two libraries filled with similar scoring profiles tend to pick the
+same releases. Friends turn that overlap into faster starts and steadier playback.
+For the user's side, see [Friends](user-guide.md#friends).
+
+**Pairing and recognition.** A friend is an ordinary BitTorrent peer on the peer
+port already open. There is no tunnel, no account and no extra service. An
+invitation code carries a random secret and the inviter's public address. The
+joining node opens a BitTorrent connection to that address for a torrent that does
+not exist, derived from the secret: to anyone watching it looks like a handshake
+for an unknown torrent. Both sides confirm, and an ephemeral key exchange gives the
+pair a key that the code alone does not reveal. The same key encrypts the control
+channel between the two nodes and lets each one recognise the other in any swarm
+they share: a friend proves itself on every connection, and to everyone else it is
+just another peer. Pieces from a friend go through the same SHA1 check as any
+other.
+
+**Priority, never waiting.** Proven friends come first in unchoking and in the
+order of requests, and they stay outside the connection limit. A friend never
+blocks anything: if it slows down, its requests go back to whoever answers, after
+the same measured grace as for any other peer.
+
+**Cold starts in parallel.** Opening a file with no local warmup adds the
+friends' last known addresses to the torrent at the same moment as the DHT,
+trackers, peer cache and cold boost. A friend that does not answer costs nothing.
+
+**Serving warmup without waking the torrent.** A friend asking for a torrent that
+is not active here gets a read-only torrent: metadata from the state database,
+only the pieces fully contained in the SSD warmup files, each verified the first
+time a friend asks for it, no download and no hydration. Your own playback comes
+first, then your Plex scans and library maintenance, then friends, with a cap on
+the read-only torrents open at once.
+
+**Help during playback.** When a node starts a film, it tells its friends; those
+that have the same torrent join the swarm at scan priority and fetch the part of
+the film just beyond the viewer's own read-ahead, as far as their measured
+capacity can deliver it in time, split between at most two helpers. The window
+follows the viewer's position and the film's bitrate. The pieces fetched stay in
+the helper's warmup as sparse mid-file data, evicted first under quota pressure,
+so they never push out the heads of the helper's own library. Each node helps at
+most `FriendsMaxHelps` friends at once (2 by default).
+
+**Shared library.** A master keeps a feed of its stubs with a sequence number
+that never goes back. Every stub write or removal (sync engine, Library API, MCP)
+passes through one funnel that updates the feed and notifies the slaves over the
+control channel. A slave pulls the feed in blocks from its cursor; acknowledging
+one block asks for the next, so the first alignment of thousands of entries
+resumes where it stopped. For each entry the slave fetches the torrent's metadata
+from the master in chunks, checks it against the infohash and registers it without
+starting the torrent, then writes the stub at the master's path with the same
+hash, index and size. A path already holding a different stub is never
+overwritten, so Plex never sees a file change under the same name. While a master
+is active the slave's movie, TV and watchlist syncs are held and local video
+changes are refused; leaving keeps the titles received and restores the syncs.
 
 ---
 

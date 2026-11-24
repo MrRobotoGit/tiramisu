@@ -44,6 +44,8 @@ type Stream struct {
 
 	// lead: bytes the consumer already holds past Pos (the pump's lead over the player)
 	lead atomic.Int64
+	// readahead: the forward window of the last pass (PlaybackWindow)
+	readahead atomic.Int64
 
 	modePiece  int // piece whose mode is fixed, reader goroutine only
 	responsive bool

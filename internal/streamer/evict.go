@@ -8,10 +8,11 @@ import (
 
 // evict runs the eviction scan of storage.md §3.2: throttled to 1s below 90% of the cache,
 // stranded partials every 5s, then verified pieces outside every window, LRU first.
-func (t *Torrent) evict(now time.Time, tun Tunables, spans []span, sh shares) {
+// reserved counts the bytes the planned helps will still download: room is made for them first.
+func (t *Torrent) evict(now time.Time, tun Tunables, spans []span, sh shares, reserved int64) {
 	c := tun.CacheSize
 	filled := t.ts.Filled()
-	if now.Sub(t.lastScan) < evictThrottle && filled*100 < c*evictPressure {
+	if now.Sub(t.lastScan) < evictThrottle && (filled+reserved)*100 < c*evictPressure {
 		return
 	}
 	t.lastScan = now
@@ -24,6 +25,11 @@ func (t *Torrent) evict(now time.Time, tun Tunables, spans []span, sh shares) {
 			keep = append(keep, edgeWindows(sp, pl, np)...)
 		case KindDemand, KindPrefetch:
 			prot = append(prot, demandWindow(sp, pl, np))
+		case KindHelp:
+			prot = append(prot, piecestore.Window{First: sp.hw.First, Last: sp.hw.Last})
+			for _, k := range sp.early {
+				prot = append(prot, piecestore.Window{First: k, Last: k})
+			}
 		}
 	}
 	keep = append(keep, prot...)
@@ -33,7 +39,7 @@ func (t *Torrent) evict(now time.Time, tun Tunables, spans []span, sh shares) {
 		t.sweep(now, snap, prot)
 		filled = t.ts.Filled()
 	}
-	sel := piecestore.SelectEvictions(snap, keep, c, filled)
+	sel := piecestore.SelectEvictions(snap, keep, c, filled+reserved)
 	if len(sel) == 0 {
 		if filled > c && now.Sub(t.lastStarve) >= starvedLogStep {
 			t.lastStarve = now

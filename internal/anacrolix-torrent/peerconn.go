@@ -77,6 +77,12 @@ type PeerConn struct {
 	peerRequestDataAllocLimiter alloclim.Limiter
 
 	outstandingHolepunchingRendezvous map[netip.AddrPort]struct{}
+
+	// The handshake ID matched a friend's; no privileges until the tm_fp proof (Peer.friend).
+	friendCandidate bool
+	friendSlot      bool   // candidate admitted above the connection limit
+	mseSecret       []byte // MSE shared secret S (96 bytes), nil without MSE
+	fp              friendProofState
 }
 
 func (cn *PeerConn) pexStatus() string {
@@ -890,10 +896,17 @@ func (c *PeerConn) mainReadLoop() (err error) {
 			// We don't clear their requests since it isn't clear in the spec.
 			// We'll probably choke them for this, which will clear them if
 			// appropriate, and is clearly specified.
+			err = c.friendsOnlyCheckDone()
 		case pp.Have:
 			err = c.peerSentHave(pieceIndex(msg.Index))
+			if err == nil {
+				err = c.friendsOnlyCheckDone()
+			}
 		case pp.Bitfield:
 			err = c.peerSentBitfield(msg.Bitfield)
+			if err == nil {
+				err = c.friendsOnlyCheckDone()
+			}
 		case pp.Request:
 			r := newRequestFromMessage(&msg)
 			err = c.onReadRequest(r, true)
@@ -938,6 +951,9 @@ func (c *PeerConn) mainReadLoop() (err error) {
 			c.updateRequests("suggested")
 		case pp.HaveAll:
 			err = c.onPeerSentHaveAll()
+			if err == nil {
+				err = c.friendsOnlyCheckDone()
+			}
 		case pp.HaveNone:
 			err = c.peerSentHaveNone()
 		case pp.Reject:
@@ -1025,11 +1041,15 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 			// This checks the extension is supported internally.
 			c.pex.Init(c)
 		}
+		c.sendFriendNonce()
 		return nil
 	}
 	extensionName, builtin, err := c.LocalLtepProtocolMap.LookupId(id)
 	if err != nil {
 		return
+	}
+	if extensionName == friendProofExt {
+		return c.onFriendProofMsg(payload)
 	}
 	if !builtin {
 		// User should have taken care of this in PeerConnReadExtensionMessage callback.
@@ -1084,6 +1104,12 @@ func (c *PeerConn) uploadAllowed() bool {
 		return false
 	}
 	if c.t.dataUploadDisallowed {
+		return false
+	}
+	if c.friend {
+		return true
+	}
+	if c.t.friendsOnly {
 		return false
 	}
 	if c.t.seeding() {

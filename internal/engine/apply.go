@@ -11,6 +11,7 @@ func LiveOnly(a, b Config) bool {
 	a, b = a.normalized(), b.normalized()
 	a.TorrentDisconnectTimeout, a.RetrackersMode = b.TorrentDisconnectTimeout, b.RetrackersMode
 	a.ResponsiveMode, a.AdaptiveShield = b.ResponsiveMode, b.AdaptiveShield
+	a.FriendsMaxHelps = b.FriendsMaxHelps
 	return a == b
 }
 

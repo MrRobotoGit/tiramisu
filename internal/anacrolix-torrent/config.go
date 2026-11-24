@@ -244,6 +244,8 @@ type ClientConfig struct {
 	// Whether a Client should want conns without delegating to any attached Torrents. This is
 	// useful when torrents might be added dynamically in callbacks for example.
 	AlwaysWantConns bool
+	// Optional hooks for trusted friend nodes; nil leaves every connection path unchanged.
+	Friends FriendHooks
 
 	Extensions PeerExtensionBits
 	// Bits that peers must have set to proceed past handshakes.

@@ -14,6 +14,7 @@ import (
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	"golang.org/x/time/rate"
 )
 
 // Seeder seeds one multi-file torrent over loopback.
@@ -24,10 +25,19 @@ type Seeder struct {
 	Name        string
 	Addr        string // 127.0.0.1:port
 	Payload     []byte // every file concatenated, in info order
+
+	dir string
+	mi  *metainfo.MetaInfo
 }
 
 // NewSeeder writes files of the given sizes under dir/name and seeds them.
 func NewSeeder(t testing.TB, name string, sizes []int, pieceLen int64) *Seeder {
+	t.Helper()
+	return NewSeederRate(t, name, sizes, pieceLen, 0)
+}
+
+// NewSeederRate is NewSeeder with the upload capped at upBytesPerSec (0 = unlimited).
+func NewSeederRate(t testing.TB, name string, sizes []int, pieceLen int64, upBytesPerSec int) *Seeder {
 	t.Helper()
 	dir := t.TempDir()
 	root := filepath.Join(dir, name)
@@ -63,6 +73,19 @@ func NewSeeder(t testing.TB, name string, sizes []int, pieceLen int64) *Seeder {
 	}
 	s.InfoHash = mi.HashInfoBytes().HexString()
 
+	s.dir, s.mi = dir, mi
+	s.Addr = seed(t, dir, mi, upBytesPerSec)
+	return s
+}
+
+// Reseed seeds s again from another client capped at upBytesPerSec and returns its address.
+func Reseed(t testing.TB, s *Seeder, upBytesPerSec int) string {
+	t.Helper()
+	return seed(t, s.dir, s.mi, upBytesPerSec)
+}
+
+func seed(t testing.TB, dir string, mi *metainfo.MetaInfo, upBytesPerSec int) string {
+	t.Helper()
 	cfg := torrent.NewDefaultClientConfig()
 	cfg.ListenPort = 0
 	cfg.NoDHT = true
@@ -74,6 +97,10 @@ func NewSeeder(t testing.TB, name string, sizes []int, pieceLen int64) *Seeder {
 	// default): a leecher pipelining more than 64 blocks would get nothing past the fast set.
 	cfg.MaxAllocPeerRequestDataPerConn = 64 << 20
 	cfg.DataDir = dir
+	if upBytesPerSec > 0 {
+		// The burst must hold one 16 KiB block, or the library panics on upload.
+		cfg.UploadRateLimiter = rate.NewLimiter(rate.Limit(upBytesPerSec), max(upBytesPerSec/4, 64<<10))
+	}
 	cfg.DefaultStorage = storage.NewFileOpts(storage.NewFileClientOpts{ClientBaseDir: dir, PieceCompletion: storage.NewMapPieceCompletion()})
 	cl, err := torrent.NewClient(cfg)
 	if err != nil {
@@ -91,8 +118,7 @@ func NewSeeder(t testing.TB, name string, sizes []int, pieceLen int64) *Seeder {
 			t.Fatal("seeder verification timeout")
 		}
 	}
-	s.Addr = fmt.Sprintf("127.0.0.1:%d", cl.LocalPort())
-	return s
+	return fmt.Sprintf("127.0.0.1:%d", cl.LocalPort())
 }
 
 // TorrentFile builds a single-file .torrent with random content and no seeder.

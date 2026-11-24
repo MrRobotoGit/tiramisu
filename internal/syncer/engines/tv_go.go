@@ -230,7 +230,9 @@ func (e *TVGoEngine) removeStub(ctx context.Context, path, hash string) {
 // removeStubFile drops the stub without touching the engine, for callers that share one
 // torrent across several stubs and drop it once.
 func (e *TVGoEngine) removeStubFile(path string) {
-	os.Remove(path)
+	if err := library.RemoveStub(path); err != nil && e.logger != nil {
+		e.logger.Printf("[TVSync] WARNING: failed to remove %s: %v", filepath.Base(path), err)
+	}
 	if e.invalidatePath != nil {
 		e.invalidatePath(path)
 	}

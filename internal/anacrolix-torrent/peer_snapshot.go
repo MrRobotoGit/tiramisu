@@ -8,6 +8,9 @@ type PeerSnapshot struct {
 	SentBytes   int64 // piece data we uploaded to this peer
 	Seed        bool
 	UTP         bool
+	Friend      bool // a trusted friend node (FriendHooks)
+	PeerID      [20]byte
+	Interested  bool // the peer is interested in our pieces
 }
 
 // PeerSnapshots lists the connected peers (tiramisu: per-peer rates for the swarm view).
@@ -21,7 +24,7 @@ func (t *Torrent) PeerSnapshots() []PeerSnapshot {
 		if c.RemoteAddr != nil {
 			addr = c.RemoteAddr.String()
 		}
-		out = append(out, PeerSnapshot{Addr: addr, UsefulBytes: c._stats.BytesReadUsefulData.Int64(), SentBytes: c._stats.BytesWrittenData.Int64(), Seed: all && known, UTP: c.utp()})
+		out = append(out, PeerSnapshot{Addr: addr, UsefulBytes: c._stats.BytesReadUsefulData.Int64(), SentBytes: c._stats.BytesWrittenData.Int64(), Seed: all && known, UTP: c.utp(), Friend: c.friend, PeerID: [20]byte(c.PeerID), Interested: c.peerInterested})
 	}
 	return out
 }

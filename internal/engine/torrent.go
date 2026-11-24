@@ -57,6 +57,9 @@ type Torrent struct {
 
 	cold coldBoost
 	aggr aggressive
+
+	friendsCold       atomic.Bool // a file was opened without local warmup
+	friendsColdDialed atomic.Bool // the friends were dialled for it
 }
 
 func (t *Torrent) Hash() string { return t.hash }

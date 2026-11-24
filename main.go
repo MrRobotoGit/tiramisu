@@ -39,6 +39,8 @@ import (
 	"tiramisu/internal/engine"
 	engset "tiramisu/internal/engine/settings"
 	"tiramisu/internal/enginehost"
+	"tiramisu/internal/friendlib"
+	"tiramisu/internal/friends"
 	"tiramisu/internal/geoip"
 	"tiramisu/internal/library"
 	"tiramisu/internal/lockmgr"
@@ -1200,6 +1202,10 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	}
 
 	fullPath := filepath.Join(d.physicalPath, name)
+	if err := library.UnlinkAllowed(fullPath); err != nil {
+		logger.Printf("UNLINK refused: %v", err)
+		return syscall.EPERM
+	}
 
 	forceCloseVirtualFile(fullPath)
 	tailFillTargets.Delete(fullPath)
@@ -1214,7 +1220,7 @@ func (d *VirtualDirNode) Unlink(ctx context.Context, name string) syscall.Errno 
 	}
 
 	// Delete physical .mkv file
-	if err := os.Remove(fullPath); err != nil {
+	if err := library.DeleteStub(fullPath); err != nil {
 		logger.Printf("UNLINK ERROR: failed to delete file: %v", err)
 		return vfs.ToErrno(err)
 	}
@@ -1471,6 +1477,9 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 			// the writeWorker synchronously observes real STARTING/COMPLETED transitions.
 			forceTorrentWarmupActive(finalHash, fileIdx)
 		}
+		if !headReady && !isAudio { // no local warmup, UseDisk off included: in parallel with the swarm
+			eng.FriendsColdOpen(finalHash)
+		}
 	}
 
 	activeHandles.Store(h, true)
@@ -1571,22 +1580,21 @@ func (h *MkvHandle) awaitWake(ctx context.Context) syscall.Errno {
 	}
 }
 
-// startNativePump acquires a slot and starts the background pump.
-// Called from Open (proactive) or Read (rescue for late resolution).
-// scanSlotLimit is how many pump slots a not-yet-confirmed playback may find taken before it
-// is denied one. capacity is the semaphore's, fixed at make(): reading the live config here
-// would apply half of a limit change, since the channel itself cannot be resized.
-// The floor of 1 matters because a request cannot reach IsHealthy without pumping first.
-func scanSlotLimit(capacity int, anyHealthyPlayback bool) int {
-	if anyHealthyPlayback {
-		return 5
-	}
-	if n := capacity - 5; n > 1 {
-		return n
-	}
-	return 1
+// anyConfirmedPlayback reports whether any playback is confirmed (IsHealthy).
+func anyConfirmedPlayback() bool {
+	found := false
+	playbackRegistry.Range(func(_, v interface{}) bool {
+		if ps, ok := v.(*PlaybackState); ok && ps.GetStatus() {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
+// startNativePump acquires a slot and starts the background pump.
+// Called from Open (proactive) or Read (rescue for late resolution).
 func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 	// 1. Verify we don't already have a slot or an active pump
 	if h.hasSlot.Load() {
@@ -1606,15 +1614,9 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 	// Without active playback, allow up to MasterConcurrencyLimit-5 (default 20).
 	canTakeSlot := true
 	if !isHealthy {
-		anyHealthyPlayback := false
-		playbackRegistry.Range(func(_, v interface{}) bool {
-			if ps, ok := v.(*PlaybackState); ok && ps.GetStatus() {
-				anyHealthyPlayback = true
-				return false
-			}
-			return true
-		})
-		scanLimit := scanSlotLimit(cap(masterDataSemaphore), anyHealthyPlayback)
+		// capacity is the semaphore's, fixed at make(): the live config would apply half a change.
+		anyHealthyPlayback := anyConfirmedPlayback()
+		scanLimit := engine.ScanSlotLimit(cap(masterDataSemaphore), anyHealthyPlayback)
 		if len(masterDataSemaphore) >= scanLimit {
 			canTakeSlot = false
 			logger.Printf("[StrategicReserve] Denying pump slot to background scan (Saturation: %d/%d, healthyPlayback=%v): %s",
@@ -2367,6 +2369,7 @@ func (h *MkvHandle) boostColdStart(off int64) {
 	if h.hash == "" || off < headerProbeZone || off >= h.size-tailProbeZoneSize(h.size) || h.coldBoostTried.Swap(true) {
 		return
 	}
+	eng.FriendsPlayback(h.hash, fmt.Sprintf("%p", h), "cold-start read", true)
 	go func() {
 		if t := eng.Get(h.hash); t != nil {
 			t.BoostColdStart()
@@ -3652,6 +3655,9 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	if h.released.Swap(true) {
 		return 0
 	}
+	if h.coldBoostTried.Load() {
+		eng.FriendsPlayback(h.hash, fmt.Sprintf("%p", h), "", false)
+	}
 	ttffReleaseClose(h.path)
 	logger.Printf("=== RELEASE VIRTUAL === path=%s", h.path)
 
@@ -4918,6 +4924,7 @@ func handlePlexWebhook(w http.ResponseWriter, r *http.Request) {
 
 		if exactMatch != "" && exactState != nil {
 			exactState.SetHealthy(true)
+			eng.FriendsPlayback(exactState.Hash, exactMatch, "webhook", true)
 			exactState.mu.Lock()
 			exactState.IsStopped = false
 			// Cache webhookImdbID into state for fast IMDB matching in future sessions.
@@ -5075,6 +5082,7 @@ func applyPlexStop(stopMatch string, stopState *PlaybackState, event string) {
 	stopState.IsStopped = true
 	stopState.mu.Unlock()
 	stopState.SetHealthy(false) // persists with IsStopped=true
+	eng.FriendsPlayback(stopState.Hash, stopMatch, "", false)
 	logger.Printf("[PLEX] STOP applied for: %s (Event: %s)", filepath.Base(stopMatch), event)
 
 	if val, ok := activePumps.Load(stopMatch); ok {
@@ -5290,6 +5298,7 @@ func main() {
 	engSets := host.Settings.Current()
 
 	warmup.InitDiskWarmup(gc().DiskWarmupQuotaGB, engSets.UseDisk, engSets.TorrentsSavePath)
+	eng.ServeWarmup(warmup.DiskWarmup)
 	// Fires synchronously from DiskWarmup's single writeWorker goroutine at the exact moment a
 	// head warmup fetch starts/completes - avoids the race where a caller checking IsWarmingUp()
 	// right after WriteChunk() returns could read stale state, since WriteChunk only enqueues and
@@ -5304,6 +5313,7 @@ func main() {
 	go natpmp.NatpmpLoop(backgroundStopChan, gc().NatPMP, logger, host.PeerPort())
 
 	masterDataSemaphore = make(chan struct{}, gc().MasterConcurrencyLimit)
+	eng.SetBackground(masterDataSemaphore, anyConfirmedPlayback)
 	startHandleGC()
 
 	// Initialize global helpers
@@ -5676,6 +5686,8 @@ func main() {
 		Mu: &configMu, Actor: authSvc.Actor, Apply: applyConfig, Logf: logger.Printf,
 		// Also closes them to the internal token, which the middleware lets through.
 		Allowed: func(r *http.Request) bool { return !authSvc.Enabled() || auth.SessionFrom(r) != "" }})
+	friends.Register(http.DefaultServeMux, func() *friends.Manager { return eng.Friends() },
+		func(r *http.Request) bool { return !authSvc.Enabled() || auth.SessionFrom(r) != "" })
 	configBoot.RegisterEngineHistory(http.DefaultServeMux, config.EngineHistoryDeps{
 		Actor: authSvc.Actor, Logf: logger.Printf,
 		Allowed: func(r *http.Request) bool { return !authSvc.Enabled() || auth.SessionFrom(r) != "" },
@@ -5753,6 +5765,8 @@ func main() {
 		}
 		return m.ReleaseIfUnused(ctx, hash)
 	}
+
+	var sched *scheduler.Scheduler // the library wiring below stops its held jobs
 
 	// Sync Scheduler (Fase 1)
 	// Routes are always registered so the Control Panel's manual "Run now" works
@@ -5852,7 +5866,9 @@ func main() {
 			}),
 		}
 
-		sched := scheduler.New(schedCfg, syncers, statePath)
+		sched = scheduler.New(schedCfg, syncers, statePath)
+		sched.SetAfterJob(friendlib.AfterSync)
+		sched.SetHold(eng.Friends().LibraryMaster)
 
 		http.HandleFunc("/api/scheduler/status", sched.ServeStatus)
 		http.HandleFunc("/api/scheduler/", sched.ServeAction)
@@ -5914,6 +5930,8 @@ func main() {
 			},
 			InvalidatePath: invalidateSyncRemovedPath,
 			Diagnostics:    diagnosticsDB(),
+			RowFiles:       engines.RowFiles(eng),
+			LibraryMaster:  eng.Friends().LibraryMaster,
 			// Read-only view of the holes the reaper left, for a client that can decide
 			// what to do about them.
 			Gaps: func() ([]library.Gap, error) {
@@ -5956,6 +5974,9 @@ func main() {
 			MusicSection: gc().Plex.MusicLibraryID,
 		})
 		libraryRef.Store(libMgr)
+		libMgr.GateUnlinks()
+		friendlib.Wire(friendlib.Config{DB: stateDB, Friends: eng.Friends(), Library: libMgr, Root: gc().PhysicalSourcePath,
+			Registry: registry, RegisterInfo: eng.RegisterInfo, InfoBytes: eng.InfoBytes, StopHeld: sched.StopHeld, WaitHeld: sched.WaitHeld, Logf: logger.Printf})
 		if globalTorrentRemover != nil {
 			globalTorrentRemover.SetRelease(libMgr.ReleaseIfUnused)
 		}
@@ -6080,6 +6101,7 @@ func main() {
 		// CRITICAL FIX: Stop all background managers explicitly before os.Exit()
 		// because defer statements are bypassed by os.Exit().
 		backgroundStopOnce.Do(func() { close(backgroundStopChan) })
+		friendlib.Shutdown()
 
 		if globalRateLimiter != nil {
 			globalRateLimiter.Stop()
