@@ -349,7 +349,7 @@ func (cn *PeerConn) fillWriteBuffer() {
 		return
 	}
 	cn.maybeUpdateActualRequestState()
-	if cn.pex.IsEnabled() {
+	if cn.pex.IsEnabled() && !cn.t.isPrivate() { // a magnet learns it is private after PEX began
 		if flow := cn.pex.Share(cn.write); !flow {
 			return
 		}
@@ -927,7 +927,7 @@ func (c *PeerConn) mainReadLoop() (err error) {
 			c.onPeerSentCancel(req)
 		case pp.Port:
 			// Only the first Port message is acted on: a peer must not make us ping per message.
-			if c.sentDhtPing {
+			if c.sentDhtPing || c.t.isPrivate() {
 				break
 			}
 			ipa, ok := tryIpPortFromNetAddr(c.RemoteAddr)
@@ -1036,7 +1036,7 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 			}
 		}
 		c.requestPendingMetadata()
-		if !t.cl.config.DisablePEX {
+		if !t.cl.config.DisablePEX && !t.isPrivate() {
 			t.pex.Add(c) // we learnt enough now
 			// This checks the extension is supported internally.
 			c.pex.Init(c)
@@ -1063,7 +1063,7 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 		}
 		return nil
 	case pp.ExtensionNamePex:
-		if !c.pex.IsEnabled() {
+		if !c.pex.IsEnabled() || t.isPrivate() {
 			return nil // or hang-up maybe?
 		}
 		err = c.pex.Recv(payload)

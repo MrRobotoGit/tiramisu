@@ -1688,6 +1688,7 @@ func (cl *Client) AddTorrentSpec(spec *TorrentSpec) (t *Torrent, new bool, err e
 		InfoHash:  spec.InfoHash,
 		Storage:   spec.Storage,
 		ChunkSize: spec.ChunkSize,
+		InfoBytes: spec.InfoBytes, // known private before the DHT announcer can run
 	})
 	modSpec := *spec
 	if new {

@@ -925,6 +925,11 @@ func (t *Torrent) writePeerStatuses(w io.Writer, peers []*Peer) {
 	}
 }
 
+// isPrivate reports a torrent whose metainfo is flagged private (BEP 27): no DHT, no PEX.
+func (t *Torrent) isPrivate() bool {
+	return t.info != nil && t.info.Private != nil && *t.info.Private
+}
+
 func (t *Torrent) haveInfo() bool {
 	return t.info != nil
 }
@@ -2653,7 +2658,7 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 			// We're also announcing ourselves as a listener, so we don't just want peer addresses.
 			// TODO: We can include the announce_peer step depending on whether we can receive
 			// inbound connections. We should probably only announce once every 15 mins too.
-			if !t.wantAnyConns() {
+			if t.isPrivate() || !t.wantAnyConns() {
 				goto wait
 			}
 			// TODO: Determine if there's a listener on the port we're announcing.
@@ -2810,7 +2815,7 @@ func (t *Torrent) addPeerConn(c *PeerConn) (err error) {
 	}
 	t.cl.event.Broadcast()
 	// We'll never receive the "p" extended handshake parameter.
-	if !t.cl.config.DisablePEX && !t.friendsOnly && !c.PeerExtensionBytes.SupportsExtended() {
+	if !t.cl.config.DisablePEX && !t.friendsOnly && !t.isPrivate() && !c.PeerExtensionBytes.SupportsExtended() {
 		t.pex.Add(c)
 	}
 	if t.friendsOnly && !c.friend {
