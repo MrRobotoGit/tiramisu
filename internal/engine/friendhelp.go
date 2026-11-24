@@ -27,7 +27,7 @@ func (e *Engine) SetStreamer(st *streamer.Streamer) {
 		e.friends.SetHelp(nil)
 		return
 	}
-	e.friends.SetHelp(&friends.HelpHooks{OnWatch: e.onWatch, OnWindow: e.onWindow, OnUnwatch: e.onUnwatch})
+	e.friends.SetHelp(&friends.HelpHooks{OnWatch: e.onWatch, OnWindow: e.onWindow, OnUnwatch: e.onUnwatch, OnBack: e.onFriendBack})
 }
 
 // maxHelps is FriendsMaxHelps: 0 (unset) is the default, negative turns helping off.

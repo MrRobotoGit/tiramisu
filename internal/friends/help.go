@@ -36,6 +36,8 @@ type HelpHooks struct {
 	OnWindow func(friend string, w Window) bool
 	// OnUnwatch ends a session, accepted or refused: the watcher stopped, or the friend was removed.
 	OnUnwatch func(friend string, hash [20]byte, nonce string)
+	// OnBack: friend restarted, moved or answers again, so our playbacks may ask it to help.
+	OnBack func(friend string)
 }
 
 type helpKey struct {
@@ -58,6 +60,13 @@ type helpState struct {
 
 // SetHelp enables (nil disables) helping friends' playbacks.
 func (m *Manager) SetHelp(h *HelpHooks) { m.helpHooks.Store(h) }
+
+// friendBack tells the engine that friend can be asked again.
+func (m *Manager) friendBack(friend string) {
+	if h := m.helpHooks.Load(); h != nil && h.OnBack != nil {
+		h.OnBack(friend)
+	}
+}
 
 func (m *Manager) helpFriends() []*friendEntry {
 	var out []*friendEntry
@@ -102,8 +111,18 @@ func (m *Manager) NotifyWatch(ctx context.Context, hash [20]byte, nonce string) 
 // NotifyWatchAll is NotifyWatch that also lists every friend notified, helping or not: the end of
 // the playback is told to all of them.
 func (m *Manager) NotifyWatchAll(ctx context.Context, hash [20]byte, nonce string) (helpers, notified []string) {
+	return m.NotifyWatchSome(ctx, hash, nonce, nil)
+}
+
+// NotifyWatchSome is NotifyWatchAll limited to the friends want accepts (nil: all).
+func (m *Manager) NotifyWatchSome(ctx context.Context, hash [20]byte, nonce string, want func(friend string) bool) (helpers, notified []string) {
 	seq := m.watchSeq()
-	fs := m.helpFriends()
+	var fs []*friendEntry
+	for _, f := range m.helpFriends() {
+		if want == nil || want(f.name) {
+			fs = append(fs, f)
+		}
+	}
 	ok := make([]bool, len(fs))
 	var wg sync.WaitGroup
 	for i, f := range fs {

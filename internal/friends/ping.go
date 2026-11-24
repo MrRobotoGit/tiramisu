@@ -166,7 +166,7 @@ func (m *Manager) pingRound(ctx context.Context) {
 	}
 	m.mu.Unlock()
 
-	var due []*friendEntry
+	var due, back []*friendEntry
 	m.ping.mu.Lock()
 	live := map[[20]byte]bool{}
 	for _, f := range fs {
@@ -176,7 +176,9 @@ func (m *Manager) pingRound(ctx context.Context) {
 		pp.counted = pp.contacts
 		switch {
 		case contact || activityLive(act[f.name]):
-			m.settleLocked(f, pp, true, false, now)
+			if m.settleLocked(f, pp, true, false, now) {
+				back = append(back, f)
+			}
 		case f.addr == "" || unreachable[f.control] || pp.retry.at.After(now):
 			m.settleLocked(f, pp, false, false, now)
 		default:
@@ -214,26 +216,32 @@ func (m *Manager) pingRound(ctx context.Context) {
 				pp.oldNoted = true
 				m.logf("%q runs an older version without presence checks", f.name)
 			}
-			m.settleLocked(f, pp, res[i] != pingFailed, true, now)
+			if m.settleLocked(f, pp, res[i] != pingFailed, true, now) {
+				back = append(back, f)
+			}
 		}
 		m.ping.mu.Unlock()
+	}
+	for _, f := range back {
+		m.friendBack(f.name)
 	}
 }
 
 // settleLocked records one period's outcome; tried marks a ping that failed, which backs off once
-// the friend is offline.
-func (m *Manager) settleLocked(f *friendEntry, pp *pingPeer, answered, tried bool, now time.Time) {
+// the friend is offline. It reports a friend that answers again after being offline.
+func (m *Manager) settleLocked(f *friendEntry, pp *pingPeer, answered, tried bool, now time.Time) (back bool) {
 	if answered {
-		if pp.known && !pp.online {
+		back = pp.known && !pp.online
+		if back {
 			m.logf("%q answers again", f.name)
 		}
 		pp.known, pp.online, pp.misses, pp.checked = true, true, 0, now.Unix()
 		pp.retry = backoff{}
-		return
+		return back
 	}
 	pp.misses++
 	if pp.misses < 2 {
-		return
+		return false
 	}
 	if pp.known && pp.online {
 		m.logf("%q no longer answers", f.name)
@@ -242,4 +250,5 @@ func (m *Manager) settleLocked(f *friendEntry, pp *pingPeer, answered, tried boo
 	if tried {
 		m.bump(&pp.retry)
 	}
+	return false
 }

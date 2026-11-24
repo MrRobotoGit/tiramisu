@@ -274,6 +274,9 @@ func (m *Manager) serveControl(f *friendEntry, remote [20]byte, rw io.ReadWriter
 		if f.name == m.LibraryMaster() {
 			m.startPull(f.name) // the master is back or moved: catch up
 		}
+		if msg.Back || moved {
+			m.friendBack(f.name)
+		}
 		if msg.Back {
 			// The friend restarted or reconnected: tell it once where we are, so it learns our source.
 			m.goTask(func(ctx context.Context) { m.sendAddrOnce(ctx, f, false) })

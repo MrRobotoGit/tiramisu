@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"slices"
 	"sync"
 	"time"
 
@@ -21,11 +22,13 @@ type watchSession struct {
 	nonce string
 	stop  chan struct{}
 	once  sync.Once
+	wake  chan struct{} // cap 1: a friend is back and can be asked again
 
 	notified map[string]string // friend -> the session nonce it was told (runWatch only)
 
 	mu      sync.Mutex
-	helpers []string // the friends helping now, for the status view
+	helpers []string        // the friends helping now, for the status view
+	back    map[string]bool // friends that restarted, moved or answer again since the last wake
 }
 
 func (w *watchSession) end() { w.once.Do(func() { close(w.stop) }) }
@@ -34,6 +37,28 @@ func (w *watchSession) setHelpers(h []string) {
 	w.mu.Lock()
 	w.helpers = append([]string(nil), h...)
 	w.mu.Unlock()
+}
+
+// markBack queues friend for runWatch; never blocks.
+func (w *watchSession) markBack(friend string) {
+	w.mu.Lock()
+	if w.back == nil {
+		w.back = map[string]bool{}
+	}
+	w.back[friend] = true
+	w.mu.Unlock()
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (w *watchSession) takeBack() map[string]bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	b := w.back
+	w.back = nil
+	return b
 }
 
 func (w *watchSession) helping() []string {
@@ -57,7 +82,7 @@ func (e *Engine) startWatchLocked(hash string) {
 	if err != nil || len(ih) != 20 {
 		return
 	}
-	ws := &watchSession{hash: hash, ih: [20]byte(ih), nonce: newNonce(), stop: make(chan struct{})}
+	ws := &watchSession{hash: hash, ih: [20]byte(ih), nonce: newNonce(), stop: make(chan struct{}), wake: make(chan struct{}, 1)}
 	if e.watching == nil {
 		e.watching = map[string]*watchSession{}
 	}
@@ -73,8 +98,18 @@ func (e *Engine) endWatchLocked(hash string) {
 	}
 }
 
+// onFriendBack lets every playback ask friend again (it restarted, moved or answers again).
+func (e *Engine) onFriendBack(friend string) {
+	e.friendsPlayMu.Lock()
+	defer e.friendsPlayMu.Unlock()
+	for _, ws := range e.watching {
+		ws.markBack(friend)
+	}
+}
+
 // runWatch notifies the friends, then sends the helpers a window on events only: the first one,
-// the read-ahead entering the window, a seek, a change of helpers. At the end it unwatches.
+// the read-ahead entering the window, a seek, a change of helpers. A free place is offered to a
+// friend that comes back, and after a lost helper to the friends not helping. At the end it unwatches.
 func (e *Engine) runWatch(ws *watchSession) {
 	m, ctx, st := e.friends, e.friendsCtx, e.streamer.Load()
 	if st == nil {
@@ -82,13 +117,6 @@ func (e *Engine) runWatch(ws *watchSession) {
 	}
 	defer e.unwatchAll(ctx, ws)
 	helpers := e.askHelpers(ctx, ws, ws.nonce)
-	if len(helpers) == 0 {
-		select {
-		case <-ws.stop:
-		case <-ctx.Done():
-		}
-		return
-	}
 	meter := &deliveryMeter{}
 	e.meters.Store(ws.ih, meter)
 	defer e.meters.CompareAndDelete(ws.ih, meter) // a newer watch of the same film keeps its own
@@ -113,12 +141,31 @@ func (e *Engine) runWatch(ws *watchSession) {
 	for {
 		select {
 		case <-ws.stop:
+			if windows == 0 {
+				return
+			}
 			e.deps.logf("[Friends] watching %s ended: %d windows, %d pieces past the read-ahead from %v; %.1f pieces a window",
 				hash8(ws.hash), windows, meter.total.Load(), helpers, float64(asked)/float64(max(windows, 1)))
 			return
 		case <-ctx.Done():
 			return
+		case <-ws.wake:
+			// A helper that comes back may have restarted and forgotten the session: asked again too.
+			back := ws.takeBack()
+			stay := slices.DeleteFunc(slices.Clone(helpers), func(h string) bool { return back[h] })
+			next := e.recallHelpers(ctx, ws, stay, func(f string) bool { return back[f] })
+			if !slices.Equal(next, helpers) || len(stay) != len(helpers) {
+				helpers, changed = next, true
+				ws.setHelpers(helpers)
+				for f := range back {
+					delete(failed, f)
+				}
+			}
+			continue
 		case <-tick.C:
+		}
+		if len(helpers) == 0 {
+			continue // until a friend comes back
 		}
 		pb, ok := st.PlaybackWindow(ws.hash)
 		if !ok || pb.PieceLen <= 0 {
@@ -164,19 +211,18 @@ func (e *Engine) runWatch(ws *watchSession) {
 			lastLog, logWindows, logPieces = now, windows, got
 		}
 		if len(kept) != len(helpers) {
+			gone := map[string]bool{}
+			for _, h := range helpers {
+				gone[h] = !slices.Contains(kept, h)
+			}
 			helpers, changed = kept, true
 			ws.setHelpers(helpers)
 			if len(helpers) == 0 && !rewatched { // lost them all (a pause past the horizon): ask once more
 				rewatched = true
 				ws.nonce = newNonce()
 				helpers = e.askHelpers(ctx, ws, ws.nonce)
-			}
-			if len(helpers) == 0 {
-				select {
-				case <-ws.stop:
-				case <-ctx.Done():
-				}
-				return
+			} else { // a free place: the others, not those just lost
+				helpers = e.recallHelpers(ctx, ws, helpers, func(f string) bool { return !gone[f] })
 			}
 		}
 	}
@@ -198,6 +244,32 @@ func (e *Engine) askHelpers(ctx context.Context, ws *watchSession, nonce string)
 		helpers = helpers[:friends.MaxHelpers]
 	}
 	e.deps.logf("[Friends] watching %s: helpers %v", hash8(ws.hash), helpers)
+	ws.setHelpers(helpers)
+	return helpers
+}
+
+// recallHelpers asks the friends want accepts and not helping now to help session ws.nonce; it
+// returns helpers grown to at most friends.MaxHelpers, the extra ones told the session is over.
+func (e *Engine) recallHelpers(ctx context.Context, ws *watchSession, helpers []string, want func(string) bool) []string {
+	room := friends.MaxHelpers - len(helpers)
+	if room <= 0 {
+		return helpers
+	}
+	got, notified := e.friends.NotifyWatchSome(ctx, ws.ih, ws.nonce, func(f string) bool {
+		return want(f) && !slices.Contains(helpers, f)
+	})
+	for _, name := range notified {
+		ws.notified[name] = ws.nonce
+	}
+	if len(got) > room {
+		e.friends.NotifyUnwatch(ctx, got[room:], ws.ih, ws.nonce)
+		got = got[:room]
+	}
+	if len(got) == 0 {
+		return helpers
+	}
+	helpers = append(slices.Clip(helpers), got...)
+	e.deps.logf("[Friends] watching %s: %v join, helpers %v", hash8(ws.hash), got, helpers)
 	ws.setHelpers(helpers)
 	return helpers
 }
