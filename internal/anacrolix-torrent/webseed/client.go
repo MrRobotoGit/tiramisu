@@ -157,7 +157,8 @@ func recvPartResult(ctx context.Context, buf io.Writer, part requestPart) error 
 	}
 	switch result.resp.StatusCode {
 	case http.StatusPartialContent:
-		copied, err := io.Copy(buf, body)
+		// One byte past the range is enough to tell an oversized reply: never read it all.
+		copied, err := io.Copy(buf, io.LimitReader(body, part.e.Length+1))
 		if err != nil {
 			return err
 		}
