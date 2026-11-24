@@ -32,10 +32,8 @@ func NewClient(url_ *url.URL, opts NewClientOpts) Client {
 			Transport: &http.Transport{
 				DialContext: opts.DialContext,
 				Proxy:       opts.Proxy,
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true,
-					ServerName:         opts.ServerName,
-				},
+				// Certificates are verified: an announce can carry a private tracker's passkey.
+				TLSClientConfig: &tls.Config{ServerName: opts.ServerName},
 				// This is for S3 trackers that hold connections open.
 				DisableKeepAlives: !opts.AllowKeepAlive,
 			},
