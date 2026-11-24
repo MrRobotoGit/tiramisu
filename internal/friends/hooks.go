@@ -164,19 +164,26 @@ func (f *friendEntry) noteControlSource(addr interface{ String() string }) {
 	ip := ap.Addr().Unmap()
 	for {
 		old := f.ctrlIPs.Load()
-		if old != nil && slices.Contains(*old, ip) {
+		if old != nil && len(*old) > 0 && (*old)[len(*old)-1] == ip {
 			return
 		}
 		var next []netip.Addr
 		if old != nil {
-			next = slices.Clone(*old)
+			next = slices.DeleteFunc(slices.Clone(*old), func(a netip.Addr) bool { return a == ip })
 		}
-		next = append(next, ip)
+		next = append(next, ip) // newest last; the oldest go past the bound
+		if len(next) > maxCtrlIPs {
+			next = next[len(next)-maxCtrlIPs:]
+		}
 		if f.ctrlIPs.CompareAndSwap(old, &next) {
 			return
 		}
 	}
 }
+
+// maxCtrlIPs bounds a friend's remembered sources: a node has a few paths (NAT, CGNAT, VPN,
+// IPv4 and IPv6), not one per address it can rotate through.
+const maxCtrlIPs = 8
 
 // friendByPair is the friend with this pair key.
 func (s *snapshot) friendByPair(key []byte) *friendEntry {

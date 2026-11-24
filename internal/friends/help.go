@@ -193,6 +193,11 @@ func (m *Manager) serveHelp(f *friendEntry, msg Msg, rw io.ReadWriter) {
 		if !reply.OK && m.help.sess[key] == sess {
 			sess.refused = true // kept until its unwatch, so the end of that playback is known
 			delete(m.help.last, key)
+			for k, s := range m.help.sess { // only the newest refusal per friend: it is all the status shows
+				if k.friend == f.name && k != key && s.refused {
+					delete(m.help.sess, k)
+				}
+			}
 		}
 		reply.OK = reply.OK && m.help.sess[key] == sess
 		m.help.mu.Unlock()
