@@ -61,6 +61,25 @@ func (d *deliveryMeter) have(piece int, now time.Time) {
 	d.total.Add(1)
 }
 
+// delivered reports, for the window in flight, the pieces the helpers announced and those asked.
+func (d *deliveryMeter) delivered() (got, pending int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.got, d.pending
+}
+
+// nextLead is how many pieces past R the next window starts. A window the watcher overtook with
+// nothing delivered doubles it, up to limit; one delivered in full halves it; a partial one keeps it.
+func nextLead(lead int, overtaken bool, got, pending, limit int) int {
+	switch {
+	case overtaken && got == 0:
+		lead = max(1, 2*lead)
+	case pending > 0 && got >= pending:
+		lead /= 2
+	}
+	return min(lead, max(limit, 0))
+}
+
 // estimate is C as the window in flight measures it now. A measurement in which nothing arrived
 // goes on into the next window: an interval shorter than a piece's delivery proves nothing.
 func (d *deliveryMeter) estimate(pieceLen int64, now time.Time) float64 {

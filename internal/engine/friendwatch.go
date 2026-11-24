@@ -103,6 +103,7 @@ func (e *Engine) runWatch(ws *watchSession) {
 		lastLog     time.Time
 		windows     int
 		asked       int                 // pieces in all the windows sent
+		lead        int                 // pieces between R and the window: grows while the watcher outruns the helpers
 		logWindows  int                 // windows sent when the last line was logged
 		logPieces   int64               // pieces past R from the helpers then
 		failed      = map[string]bool{} // the last window to this helper did not get through
@@ -130,9 +131,13 @@ func (e *Engine) runWatch(ws *watchSession) {
 			continue
 		}
 		now := time.Now()
+		if sent {
+			got, pending := meter.delivered()
+			lead = nextLead(lead, seek || entered, got, pending, int(e.config().CacheSize/pb.PieceLen))
+		}
 		c := meter.estimate(pb.PieceLen, now)
 		lastPiece := int((pb.FileEnd - 1) / pb.PieceLen)
-		f, l := helpWindow(pb.Pos, pb.ReadEnd, pb.Rate, int64(c), e.config().CacheSize, pb.PieceLen, lastPiece, len(helpers))
+		f, l := helpWindow(pb.Pos, pb.ReadEnd+int64(lead)*pb.PieceLen, pb.Rate, int64(c), e.config().CacheSize, pb.PieceLen, lastPiece, len(helpers))
 		if l < f {
 			continue // the read-ahead reached the end of the file
 		}
