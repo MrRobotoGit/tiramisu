@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"tiramisu/internal/monitor/collector"
 	"tiramisu/internal/monitor/logtail"
@@ -143,13 +147,23 @@ func (h *Handler) KillStream(w http.ResponseWriter, r *http.Request) {
 // the browser from the configured plex_url (which may not be directly reachable
 // from the client network).
 func (h *Handler) PlexThumb(w http.ResponseWriter, r *http.Request) {
-	thumbPath := r.URL.Query().Get("p")
-	if thumbPath == "" || h.collector.PlexURL() == "" {
+	// Only the dashboard's own <img> loads it; browsers that say so are held to that.
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	target, ok := plexThumbURL(h.collector.PlexURL(), r.URL.Query().Get("p"))
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	url := h.collector.PlexURL() + thumbPath + "?X-Plex-Token=" + h.collector.PlexToken()
-	resp, err := http.Get(url) //nolint:noctx
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	req.Header.Set("X-Plex-Token", h.collector.PlexToken())
+	resp, err := thumbClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()
@@ -158,11 +172,49 @@ func (h *Handler) PlexThumb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	if ct := resp.Header.Get("Content-Type"); ct != "" {
-		w.Header().Set("Content-Type", ct)
+	ct, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if !thumbTypes[ct] {
+		http.NotFound(w, r)
+		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	io.Copy(w, resp.Body) //nolint:errcheck
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	io.Copy(w, io.LimitReader(resp.Body, maxThumbBytes)) //nolint:errcheck
+}
+
+const maxThumbBytes = 16 << 20
+
+// Raster images only: an SVG served from this origin could run script.
+var thumbTypes = map[string]bool{"image/jpeg": true, "image/png": true, "image/webp": true, "image/gif": true}
+
+// thumbPath is the shape of a poster path in Plex sessions: no other Plex endpoint is reachable.
+var thumbPath = regexp.MustCompile(`^/library/metadata/[0-9]+/(thumb|art|banner|poster)(/[0-9]+)?$`)
+
+// thumbClient never follows a redirect: the token header must not leave the media server.
+var thumbClient = &http.Client{
+	Timeout:       15 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// plexThumbURL is the media server's URL for a poster path as Plex reports it, or false for
+// anything else: the host is always the configured one.
+func plexThumbURL(base, p string) (string, bool) {
+	if base == "" || !thumbPath.MatchString(p) {
+		return "", false
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	host, user := u.Host, u.User.String()
+	u = u.JoinPath(p)
+	if u.Host != host || u.User.String() != user {
+		return "", false
+	}
+	u.RawQuery, u.Fragment = "", ""
+	return u.String(), true
 }
 
 func atoi(s string) int {
