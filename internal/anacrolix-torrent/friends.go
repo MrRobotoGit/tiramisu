@@ -406,3 +406,26 @@ func (t *Torrent) FriendsHave(pieces []int) []bool {
 	}
 	return out
 }
+
+// SetNoRequestsFrom stops (on) or resumes downloading from the friend presenting id on t; its
+// link stays open and is still served.
+func (t *Torrent) SetNoRequestsFrom(id [20]byte, on bool) {
+	t.cl.lock()
+	defer t.cl.unlock()
+	if on {
+		if t.noRequestFrom == nil {
+			t.noRequestFrom = map[[20]byte]struct{}{}
+		}
+		t.noRequestFrom[id] = struct{}{}
+	} else {
+		delete(t.noRequestFrom, id)
+	}
+	for c := range t.conns {
+		if c.PeerID == id {
+			if on {
+				c.cancelAllRequests()
+			}
+			c.updateRequests("friend requests toggled")
+		}
+	}
+}

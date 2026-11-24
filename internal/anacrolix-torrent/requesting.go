@@ -226,6 +226,13 @@ func (p *Peer) getDesiredRequestState() (desired desiredRequestState) {
 	if t.dataDownloadDisallowed.Bool() {
 		return
 	}
+	if p.friend && len(t.noRequestFrom) != 0 {
+		if pc, ok := p.TryAsPeerConn(); ok {
+			if _, skip := t.noRequestFrom[pc.PeerID]; skip {
+				return
+			}
+		}
+	}
 	input := t.getRequestStrategyInput()
 	requestHeap := desiredPeerRequests{
 		peer:           p,

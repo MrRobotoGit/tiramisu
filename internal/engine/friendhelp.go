@@ -61,6 +61,7 @@ type helping struct {
 	tor        *Torrent
 	release    func()
 	help       *streamer.Help
+	unskip     func() // downloads from the watcher resume
 	timer      *time.Timer
 	done       chan struct{}
 	logState   string
@@ -319,14 +320,16 @@ func (e *Engine) startHelp(hp *helping) {
 		return
 	}
 	h.SetTaken(t.bt.FriendsHave) // pieces the watcher already has are not kept for it
+	unskip := e.skipWatcher(hp, t)
 	hp.mu.Lock()
 	if hp.ended { // ended while starting
 		hp.mu.Unlock()
 		h.Close()
+		unskip()
 		release()
 		return
 	}
-	hp.tor, hp.release, hp.help = t, release, h
+	hp.tor, hp.release, hp.help, hp.unskip = t, release, h, unskip
 	hp.mu.Unlock()
 	for { // the windows that came meanwhile; onWindow applies the later ones itself
 		hp.mu.Lock()
@@ -354,6 +357,21 @@ func (e *Engine) startHelp(hp *helping) {
 		e.endHelp(hp, "engine closed")
 	case <-hp.done:
 	}
+}
+
+// skipWatcher stops downloading this torrent from the watcher during the help: whatever it holds,
+// it needs no help with. The returned func resumes; other torrents are not affected.
+func (e *Engine) skipWatcher(hp *helping, t *Torrent) func() {
+	ih, err := hex.DecodeString(hp.hash)
+	if e.friends == nil || err != nil || len(ih) != 20 || t.bt == nil {
+		return func() {}
+	}
+	id, ok := e.friends.FriendPeerID(hp.friend, [20]byte(ih))
+	if !ok {
+		return func() {}
+	}
+	t.bt.SetNoRequestsFrom(id, true)
+	return func() { t.bt.SetNoRequestsFrom(id, false) }
 }
 
 // writeHelped keeps every verified piece of the share in the SSD warmup as mid pieces.
@@ -417,10 +435,13 @@ func (e *Engine) endHelp(hp *helping, why string) {
 	if hp.timer != nil {
 		hp.timer.Stop()
 	}
-	h, release, nonce := hp.help, hp.release, hp.nonce
+	h, release, unskip, nonce := hp.help, hp.release, hp.unskip, hp.nonce
 	hp.mu.Unlock()
 	if h != nil {
 		h.Close()
+	}
+	if unskip != nil {
+		unskip()
 	}
 	if release != nil {
 		release()

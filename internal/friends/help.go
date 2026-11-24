@@ -281,6 +281,14 @@ func (m *Manager) dropHelps(friend string) {
 	}
 }
 
+// FriendPeerID is the peer ID friend presents on ih.
+func (m *Manager) FriendPeerID(friend string, ih [20]byte) ([20]byte, bool) {
+	if f := m.friendByName(friend); f != nil {
+		return PeerID(f.pair, ih, f.role.Other()), true
+	}
+	return [20]byte{}, false
+}
+
 // FriendAddr is friend's last known address; "" if unknown or not a friend.
 func (m *Manager) FriendAddr(friend string) string {
 	if f := m.friendByName(friend); f != nil {

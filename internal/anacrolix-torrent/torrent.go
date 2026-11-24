@@ -188,8 +188,9 @@ type Torrent struct {
 	// Active peer connections, running message stream loops. TODO: Make this
 	// open (not-closed) connections only.
 	conns               map[*PeerConn]struct{}
-	friendLinks         int  // conns that are proven friends or hold a candidate slot
-	friendsOnly         bool // serves proven friends only; set at creation
+	friendLinks         int                   // conns that are proven friends or hold a candidate slot
+	friendsOnly         bool                  // serves proven friends only; set at creation
+	noRequestFrom       map[[20]byte]struct{} // friend peer IDs we never download from (a help's watcher)
 	maxEstablishedConns int
 	// Set of addrs to which we're attempting to connect. Connections are
 	// half-open until all handshakes are completed.

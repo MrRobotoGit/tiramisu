@@ -46,3 +46,6 @@ func (t *Torrent) DialFriend(addr string, id [20]byte) {
 
 // FriendsHave reports, for each piece, whether a proven friend link announces it.
 func (t *Torrent) FriendsHave(pieces []int) []bool { return t.t.FriendsHave(pieces) }
+
+// SetNoRequestsFrom stops (on) or resumes downloading from the friend presenting id; see the fork.
+func (t *Torrent) SetNoRequestsFrom(id [20]byte, on bool) { t.t.SetNoRequestsFrom(id, on) }
