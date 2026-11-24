@@ -259,7 +259,7 @@ Sign-in is meant for your home network, with Tiramisu's own HTTPS or a reverse p
 
 <p align="center"><img src="docs/screenshots/ui-friends-light-v3.png" alt="Control Panel, Friends section: this node reachable, helping friends on, three friends with their status lamps, one online and exchanging data, one online, one offline, and a pending request" width="720"><br><sub><b>Control Panel → Friends</b>: this node, your friends and what they can see (sample data)</sub></p>
 
-Two Tiramisu installations can become friends. Friends find each other in the swarms they share, give each other priority and help each other start and play films. There are no accounts, no central server and no new ports: friends are ordinary BitTorrent peers on the peer port you already have open, and every piece they send is checked like a piece from anyone else.
+Tiramisu installations can become friends, and a node can have many: each invitation adds one, so a group of friends becomes a small network where every node helps the others. Friends find each other in the swarms they share, give each other priority and help each other start and play films. There are no accounts, no central server and no new ports: friends are ordinary BitTorrent peers on the peer port you already have open, and every piece they send is checked like a piece from anyone else.
 
 - **By invitation only.** **Control Panel → Friends → Invite a friend** creates a one-time code (`TMF1-…`), valid for 48 hours. Your friend pastes it into **Join with a code**, you approve the request, and the pair is set up. Removing a friend deletes the pair; coming back takes a new code.
 - **Faster cold starts.** When you open a title you have no warmup for, Tiramisu calls your friends at the same moment as the DHT and the trackers, never before. A friend who has the beginning and end of that film on their warmup cache serves them straight from the SSD, even if the torrent is not running on their side. A friend who does not answer costs nothing: the swarm is asked at the same time.
@@ -279,7 +279,7 @@ A node can send its library to its friends: it becomes the **master**, and each 
 - **Leave at any time.** A slave can **Leave** and a master can **Release** a slave; either way you stay friends. The titles received stay on the slave, and its syncs turn back on with the saved configuration.
 - **Trust.** A master can put any torrent in a slave's library: accept only a friend you trust.
 
-At least one of the two nodes must be reachable from the Internet on its peer port (port forward, NAT-PMP, UPnP or a VPN with port forwarding): the **This node** card shows whether peers are reaching yours. Two nodes behind the same router reach each other only if the router supports hairpin NAT. Actions on friends and on the library need a signed-in browser; API tokens can only read. See [Friends](docs/user-guide.md#friends) and [Friends API](docs/api.md#friends).
+Of each pair of friends, at least one must be reachable from the Internet on its peer port (port forward, NAT-PMP, UPnP or a VPN with port forwarding): the **This node** card shows whether peers are reaching yours. Two nodes behind the same router reach each other only if the router supports hairpin NAT. Actions on friends and on the library need a signed-in browser; API tokens can only read. See [Friends](docs/user-guide.md#friends) and [Friends API](docs/api.md#friends).
 
 ---
 
