@@ -1916,6 +1916,9 @@ func (t *Torrent) worstBadConnFromSlice(opts worseConnLensOpts, sl []*PeerConn, 
 	heap.Init(&wcs)
 	for wcs.Len() != 0 {
 		c := heap.Pop(&wcs).(*PeerConn)
+		if peerOverdueHook != nil && peerOverdueHook(c, now) {
+			return c
+		}
 		if opts.incomingIsBad && !c.outgoing {
 			return c
 		}
@@ -2845,6 +2848,9 @@ func (t *Torrent) addPeerConn(c *PeerConn) (err error) {
 				return errors.New("don't want conn")
 			}
 			t.peerEjectCount.Add(1)
+			if peerEvictedHook != nil {
+				peerEvictedHook(c, now)
+			}
 			if c.utp() {
 				t.peerEjectCountUTP.Add(1)
 			}

@@ -97,6 +97,8 @@ type (
 		lastRequestUpdate    time.Time
 		peakRequests         maxRequests
 		lastBecameInterested time.Time
+		// firstInterestedAt is when we first became interested in this peer.
+		firstInterestedAt time.Time
 		priorInterest        time.Duration
 
 		lastStartedExpectingToReceiveChunks time.Time
@@ -508,6 +510,9 @@ func (cn *Peer) setInterested(interested bool) bool {
 	cn.requestState.Interested = interested
 	if interested {
 		cn.lastBecameInterested = time.Now()
+		if cn.firstInterestedAt.IsZero() {
+			cn.firstInterestedAt = cn.lastBecameInterested
+		}
 	} else if !cn.lastBecameInterested.IsZero() {
 		cn.priorInterest += time.Since(cn.lastBecameInterested)
 	}
