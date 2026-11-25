@@ -14,13 +14,16 @@ import (
 
 func init() {
 	peerUnchokedHook = (*PeerConn).recordUnchoke
-	peerClosedHook = (*PeerConn).recordNeverUnchoked
+	peerClosedHook = func(cn *PeerConn, now time.Time) {
+		cn.recordNeverUnchoked(now)
+		unchokeSpared.CompareAndDelete(cn.t, cn)
+	}
 	peerOverdueHook = func(cn *PeerConn, now time.Time) bool {
 		return cn.unchokeOverdue(learnedDeadlines.table(now), now)
 	}
 	peerEvictedHook = func(cn *PeerConn, now time.Time) {
 		if cn.unchokeOverdue(learnedDeadlines.table(now), now) {
-			cn.t.unchokeCooldown(cn, now)
+			cn.overdueEvicted(now)
 		}
 	}
 }
@@ -202,9 +205,43 @@ func (cn *PeerConn) recordNeverUnchoked(now time.Time) {
 func (cn *PeerConn) record(d time.Duration, unchoked bool) {
 	key := cn.unchokeKeyOf()
 	unchokeWait.record(key, d, unchoked)
-	if cn.unchokeExplorer() {
+	if _, censored := unchokeCensored.LoadAndDelete(cn); cn.unchokeExplorer() && !censored {
 		unchokeLearn.record(key, d, unchoked)
 	}
+}
+
+// unchokeCensored holds explorers closed at their deadline because another explorer held the
+// spare slot: their waits stop at the deadline, so they stay out of the learning.
+var unchokeCensored sync.Map // *PeerConn -> struct{}
+
+// unchokeSpared holds, per torrent, the explorer kept past its deadline. One at a time: each
+// spared explorer holds a slot that a peer likely to unchoke us could use.
+var unchokeSpared sync.Map // *Torrent -> *PeerConn
+
+// unchokeExploreOne limits the spared explorers to one per torrent; false spares them all.
+var unchokeExploreOne = true
+
+func (cn *PeerConn) spareExplorer() bool {
+	if !unchokeExploreOne {
+		return true
+	}
+	if cur, ok := unchokeSpared.Load(cn.t); ok {
+		if c := cur.(*PeerConn); c != cn && !c.closed.IsSet() {
+			if _, unchoked := unchokeRecorded.Load(c); !unchoked {
+				return false
+			}
+		}
+	}
+	unchokeSpared.Store(cn.t, cn)
+	return true
+}
+
+// overdueEvicted: the connection was closed for a new peer because its unchoke was overdue.
+func (cn *PeerConn) overdueEvicted(now time.Time) {
+	if cn.unchokeExplorer() {
+		unchokeCensored.Store(cn, struct{}{})
+	}
+	cn.t.unchokeCooldown(cn, now)
 }
 
 var learnedDeadlines learnedTable
@@ -260,7 +297,7 @@ func (cn *PeerConn) unchokeOverdue(table map[string]time.Duration, now time.Time
 	if wait <= unchokeWaitBounds[0] { // no deadline is shorter: spare the key until the role is known
 		return false
 	}
-	if table[learnedKey] != 0 && cn.unchokeExplorer() {
+	if table[learnedKey] != 0 && cn.unchokeExplorer() && cn.spareExplorer() {
 		return false
 	}
 	if _, seen := unchokeRecorded.Load(cn); seen {
