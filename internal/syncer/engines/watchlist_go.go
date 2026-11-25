@@ -160,13 +160,15 @@ func (e *WatchlistGoEngine) Run(ctx context.Context) error {
 		}
 
 		mkvCreated := false
+		tried := make(map[string]bool, len(candidates))
 		for _, candidate := range candidates {
-			infoHash := strings.ToLower(candidate.InfoHash)
-			if infoHash == "" {
+			infoHash, src, ok := fetchRelease(ctx, e.prowlarr, candidate.InfoHash, item.Title, candidate.DownloadURL, e.logger.Printf)
+			if !ok || tried[infoHash] {
 				continue
 			}
+			tried[infoHash] = true
 
-			magnet := releaseMagnet(ctx, e.prowlarr, e.gostorm, infoHash, item.Title, candidate.DownloadURL, e.logger.Printf)
+			magnet := releaseMagnetFrom(ctx, e.gostorm, infoHash, item.Title, src, e.logger.Printf)
 			hash, err := e.gostorm.AddTorrent(ctx, magnet, item.Title)
 			if err != nil || hash == "" {
 				continue
@@ -388,23 +390,31 @@ func (e *WatchlistGoEngine) isAlreadyPresent(item WatchlistItem, imdbSet map[str
 }
 
 func (e *WatchlistGoEngine) getStreams(ctx context.Context, imdbID, title string, year int) ([]prowlarr.Stream, error) {
+	var streams []prowlarr.Stream
 	if e.prowlarr != nil {
-		streams, err := e.prowlarr.FetchTorrents(ctx, imdbID, "movie", title, year)
+		// Hashes are resolved for the release the loop picks, not for every candidate.
+		ps, _, err := e.prowlarr.FetchCandidates(ctx, imdbID, "movie", title, year, nil)
 		if err != nil {
 			e.logger.Printf("Prowlarr search failed for %s: %v", title, err)
-			streams = nil
 		}
-		if len(streams) > 0 {
-			return streams, nil
+		for _, s := range ps {
+			if s.InfoHash != "" {
+				return ps, nil
+			}
 		}
+		// Only hashless releases: they may all fail to resolve, so Torrentio is asked
+		// too, as when the unresolved ones were dropped before this point.
+		streams = ps
 	}
 
 	tioStreams, err := e.torrentio.FetchMovieStreams(ctx, imdbID)
 	if err != nil {
+		if len(streams) > 0 {
+			return streams, nil
+		}
 		return nil, err
 	}
 
-	var streams []prowlarr.Stream
 	for _, s := range tioStreams {
 		streams = append(streams, prowlarr.Stream{
 			Name:     s.Name,

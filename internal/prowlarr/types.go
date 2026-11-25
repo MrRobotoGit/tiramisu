@@ -16,6 +16,7 @@ type ProwlarrResult struct {
 	Seeders     int    `json:"seeders"`
 	Leechers    int    `json:"leechers"`
 	InfoHash    string `json:"infoHash"`
+	MagnetUrl   string `json:"magnetUrl"`
 	DownloadUrl string `json:"downloadUrl"`
 	Quality     struct {
 		Quality struct {

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -25,11 +26,20 @@ import (
 // torrentioOptions is the filter both engines and the searchers ask Torrentio for.
 const torrentioOptions = "sort=qualitysize|qualityfilter=480p,720p,scr,cam"
 
+// prowlarrClients holds one client per configuration, shared by the engines and every
+// MCP searcher: the indexer capabilities and what each indexer has shown about IMDb
+// searches are learned once, not per search.
+var prowlarrClients sync.Map // prowlarr.ConfigProwlarr -> *prowlarr.Client
+
 func newProwlarrClient(cfg prowlarr.ConfigProwlarr) *prowlarr.Client {
 	if !cfg.Enabled {
 		return nil
 	}
-	return prowlarr.NewClient(cfg)
+	if c, ok := prowlarrClients.Load(cfg); ok {
+		return c.(*prowlarr.Client)
+	}
+	c, _ := prowlarrClients.LoadOrStore(cfg, prowlarr.NewClient(cfg))
+	return c.(*prowlarr.Client)
 }
 
 // SearchConfig is what a searcher reads: no directories, no DB, no caches.
@@ -87,6 +97,79 @@ func firstLine(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// searchResolveBudget is how many candidates listed without a hash a search resolves,
+// best first. Each costs a round trip through the indexer; the rest are left out, since
+// add_release names a candidate by its hash.
+const searchResolveBudget = 10
+
+// resolveCandidates gives the best hashless candidates their hash, in score order, and
+// drops the ones left without one, the duplicates resolution reveals and the hashes
+// reject refuses. cands must already be sorted best first. failed counts the links that
+// were tried and gave no hash.
+func resolveCandidates(ctx context.Context, pr *prowlarr.Client, cands []Candidate, reject func(string) bool, logf func(string, ...any)) (out []Candidate, failed int) {
+	var picked []int
+	for i, c := range cands {
+		if c.Hash == "" && c.DownloadURL != "" && len(picked) < searchResolveBudget {
+			picked = append(picked, i)
+		}
+	}
+	if len(picked) > 0 && pr != nil {
+		sem := make(chan struct{}, 5)
+		var wg sync.WaitGroup
+		for _, i := range picked {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				if h, _, ok := fetchRelease(ctx, pr, "", cands[i].ReleaseTitle, cands[i].DownloadURL, logf); ok {
+					cands[i].Hash = h
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	out = make([]Candidate, 0, len(cands))
+	seen := make(map[string]bool, len(cands))
+	dropped := 0
+	for _, i := range picked {
+		if cands[i].Hash == "" {
+			failed++
+		}
+	}
+	for _, c := range cands {
+		h := strings.ToLower(c.Hash)
+		if h == "" {
+			dropped++
+			continue
+		}
+		if seen[h] || (reject != nil && reject(h)) {
+			continue
+		}
+		seen[h] = true
+		c.Hash = h
+		out = append(out, c)
+	}
+	if dropped > 0 {
+		logf("[Search] %d candidate(s) without a hash left out (%d link(s) failed, budget %d)", dropped, failed, searchResolveBudget)
+	}
+	return out, failed
+}
+
+// finishCandidates resolves out's candidates. Nothing left because links failed is a
+// degraded search, not proof nothing exists, exactly as before resolution was deferred.
+func finishCandidates(ctx context.Context, pr *prowlarr.Client, out *SearchResult, reject func(string) bool, logf func(string, ...any)) {
+	var failed int
+	out.Candidates, failed = resolveCandidates(ctx, pr, out.Candidates, reject, logf)
+	if len(out.Candidates) == 0 && failed > 0 {
+		out.Complete = false
+		for season, st := range out.Seasons {
+			st.Complete = false
+			out.Seasons[season] = st
+		}
+	}
+}
+
 // MovieSearcher runs getMovieStreams on an engine that holds only what it reads.
 type MovieSearcher struct{ engine *MovieGoEngine }
 
@@ -118,6 +201,10 @@ func (s *MovieSearcher) Search(ctx context.Context, imdb, title string, year int
 			SizeGB: m.SizeGB, Seeders: m.Seeders, Is4K: m.Is4K, Score: m.QualityScore, QualityScore: m.QualityScore,
 		})
 	}
+	finishCandidates(ctx, s.engine.prowlarr, &out, func(h string) bool {
+		_, banned := s.engine.blacklist.Hashes[h]
+		return banned
+	}, s.engine.logger.Printf)
 	return out, nil
 }
 
@@ -180,6 +267,9 @@ func (s *ShowSearcher) Search(ctx context.Context, imdb string, tmdbID int, seas
 			Season: t.Season, Episode: t.EpisodeNum, Score: t.Priority, QualityScore: t.QualityScore,
 		})
 	}
+	finishCandidates(ctx, s.engine.prowlarr, &out, func(h string) bool {
+		return s.engine.isHashBlacklisted(h) || s.engine.isDeadPackHash(h)
+	}, s.engine.logger.Printf)
 	return out, nil
 }
 

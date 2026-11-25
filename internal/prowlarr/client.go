@@ -31,6 +31,14 @@ type Client struct {
 	cfg        ConfigProwlarr
 	httpClient *http.Client
 	searchURL  string
+
+	capsMu     sync.Mutex
+	caps       indexerCaps
+	capsAt     time.Time
+	capsFailAt time.Time
+
+	idTextMu sync.Mutex
+	idText   map[int]*idTextStat // per indexer: does the IMDb id as free text find anything
 }
 
 // NewClient creates a Prowlarr client from the given configuration.
@@ -46,8 +54,8 @@ func NewClient(cfg ConfigProwlarr) *Client {
 			// every slow search would be retried up to three times by catalog.Do.
 			Timeout: searchTimeout + 5*time.Second,
 			Transport: &http.Transport{
-				MaxIdleConns:        10,
-				MaxIdleConnsPerHost: 5,
+				MaxIdleConns:        32,
+				MaxIdleConnsPerHost: 32, // one request per indexer and query, in parallel
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
@@ -85,6 +93,18 @@ func (c *Client) FetchTorrentsFiltered(ctx context.Context, imdbID, contentType,
 // back: complete is false when some queries failed while others answered. The streams
 // are still usable, but "nothing found" cannot be read as "nothing exists".
 func (c *Client) FetchTorrentsStatus(ctx context.Context, imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, bool, error) {
+	return c.fetchStatus(ctx, imdbID, contentType, title, year, keep, true, seasons...)
+}
+
+// FetchCandidates is FetchTorrentsStatus without resolving any hash: a release the
+// indexer listed without one comes back with an empty InfoHash and its DownloadURL,
+// and the caller resolves it only if it picks it (FetchTorrent). Resolving is a round
+// trip per release, so resolving them all paid for every candidate to use one.
+func (c *Client) FetchCandidates(ctx context.Context, imdbID, contentType, title string, year int, keep func(Stream) bool, seasons ...int) ([]Stream, bool, error) {
+	return c.fetchStatus(ctx, imdbID, contentType, title, year, keep, false, seasons...)
+}
+
+func (c *Client) fetchStatus(ctx context.Context, imdbID, contentType, title string, year int, keep func(Stream) bool, resolve bool, seasons ...int) ([]Stream, bool, error) {
 	if c == nil {
 		return []Stream{}, true, nil
 	}
@@ -92,7 +112,7 @@ func (c *Client) FetchTorrentsStatus(ctx context.Context, imdbID, contentType, t
 	if err != nil {
 		return []Stream{}, false, err
 	}
-	streams, unresolved := c.mapToStremioFiltered(ctx, results, keep)
+	streams, unresolved := c.mapStreams(ctx, results, keep, resolve)
 	// A release whose hash never resolved was dropped in silence, and a search that
 	// produced nothing BECAUSE of that is an indexer or proxy failure, not proof the
 	// title is dead: the caller must not condemn a stub on it. One unresolvable result
@@ -127,11 +147,55 @@ func (c *Client) fetchFromProwlarrStatus(ctx context.Context, imdbID, contentTyp
 		err   error
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+
+	// The IMDb id goes as a structured search to the indexers that declare one (Torznab
+	// trackers often do), and as free text to the rest: there it only matches releases
+	// that print the id, and to an id-capable indexer free text is a slow, blind query.
+	caps := c.capabilities(ctx)
+	idIndexers, textIndexers := caps.movieIMDb, caps.movieText
+	if contentType == "series" {
+		idIndexers, textIndexers = caps.tvIMDb, caps.tvText
+	}
+
 	var queries []map[string]string
-	// Primary query: IMDb ID
-	queries = append(queries, mergeParams(baseParams, map[string]string{
-		"query": imdbID,
-	}))
+	if len(idIndexers) > 0 && imdbID != "" {
+		ids := map[string]string{"indexerIds": indexerList(idIndexers)}
+		if contentType == "series" && len(seasons) > 0 {
+			for _, s := range seasons {
+				queries = append(queries, mergeParams(baseParams, mergeParams(ids, map[string]string{
+					"query": fmt.Sprintf("{ImdbId:%s}{Season:%d}", imdbID, s),
+				})))
+			}
+		} else {
+			queries = append(queries, mergeParams(baseParams, mergeParams(ids, map[string]string{
+				"query": fmt.Sprintf("{ImdbId:%s}", imdbID),
+			})))
+		}
+	}
+	switch textID := c.idTextTargets(textIndexers); {
+	case len(idIndexers) == 0 && len(textIndexers) == 0:
+		// Capabilities unknown: every indexer, as free text, as Prowlarr fans it out.
+		queries = append(queries, mergeParams(baseParams, map[string]string{
+			"query": imdbID,
+		}))
+	case len(textID) > 0 && imdbID != "":
+		queries = append(queries, mergeParams(baseParams, map[string]string{
+			"query": imdbID, "indexerIds": indexerList(textID),
+		}))
+	}
+	if len(queries) == 0 && len(textIndexers) > 0 {
+		// Every indexer was dropped from the id and there is no title query: the id as
+		// text is still a search, and some request must run.
+		queries = append(queries, mergeParams(baseParams, map[string]string{
+			"query": imdbID, "indexerIds": indexerList(textIndexers),
+		}))
+	}
+	if len(queries) == 0 {
+		return nil, false, nil // no id and no title: nothing to ask, nothing found
+	}
+	imdbQueries := len(queries)
 
 	// Secondary queries: Title + Season keywords (Series only)
 	if contentType == "series" && len(seasons) > 0 {
@@ -154,12 +218,22 @@ func (c *Client) fetchFromProwlarrStatus(ctx context.Context, imdbID, contentTyp
 		}))
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, searchTimeout)
-	defer cancel()
+	// One request per indexer: Prowlarr answers a multi-indexer search only when its
+	// slowest indexer has, so one indexer stuck on a challenge used to fail them all.
+	// Failures are judged per original query, as when each went to Prowlarr once with
+	// "-2": the IMDb requests (id and free text) are one query, each title query another.
+	queries, origin := splitPerIndexer(queries, append(append([]int(nil), idIndexers...), textIndexers...))
+	group := make([]int, len(origin))
+	logical := 0
+	for i, o := range origin {
+		group[i] = max(0, o-imdbQueries+min(imdbQueries, 1))
+		logical = max(logical, group[i]+1)
+	}
 
+	// All in parallel: a shared cap would fill with the stalled indexer's requests and
+	// starve the others. The indexers get the searches they got from Prowlarr's fan-out.
 	ch := make(chan result, len(queries))
 	for i, params := range queries {
-		i, params := i, params
 		go func() {
 			items, err := c.queryCtx(ctx, params)
 			ch <- result{items: items, idx: i, err: err}
@@ -168,20 +242,34 @@ func (c *Client) fetchFromProwlarrStatus(ctx context.Context, imdbID, contentTyp
 
 	// Collect results preserving q1-first order for dedup
 	collected := make([][]ProwlarrResult, len(queries))
-	failures := 0
+	failed := make([]bool, len(queries))
+	answered := make([]bool, logical)
 	var lastErr error
 	for range queries {
 		r := <-ch
 		collected[r.idx] = r.items
 		if r.err != nil {
-			failures++
 			lastErr = r.err
+			failed[r.idx] = true
+		} else {
+			answered[group[r.idx]] = true
 		}
 	}
-	// A total failure is an error; a partial one still returns its results, but the
-	// caller is told the search was incomplete so "nothing found" is not mistaken for
-	// "nothing exists".
-	if failures == len(queries) {
+	if imdbQueries > 0 && len(textIndexers)+len(idIndexers) > 0 {
+		c.recordIDText(imdbID, queries, group, collected, failed)
+	}
+	// A query fails only when none of its indexers answered, as when Prowlarr fanned it
+	// out and skipped the failing ones: one indexer that is always down must not make
+	// every search partial and keep the reaper off for good. A total failure is an
+	// error; a partial one still returns its results, but the caller is told the search
+	// was incomplete so "nothing found" is not mistaken for "nothing exists".
+	failures := 0
+	for _, ok := range answered {
+		if !ok {
+			failures++
+		}
+	}
+	if failures == logical {
 		return nil, false, fmt.Errorf("all %d Prowlarr queries failed: %w", failures, lastErr)
 	}
 
@@ -194,6 +282,11 @@ func (c *Client) fetchFromProwlarrStatus(ctx context.Context, imdbID, contentTyp
 	seen := make(map[string]bool, len(all))
 	merged := make([]ProwlarrResult, 0, len(all))
 	for _, r := range all {
+		// A malformed hash is treated as missing; some indexers give only the magnet.
+		r.InfoHash = HexHash(r.InfoHash)
+		if r.InfoHash == "" {
+			r.InfoHash = HexHash(library.HashFromMagnet(r.MagnetUrl))
+		}
 		var key string
 		if r.InfoHash != "" {
 			key = strings.ToLower(r.InfoHash)
@@ -330,7 +423,7 @@ func (c *Client) queryCtx(ctx context.Context, params map[string]string) ([]Prow
 	// catalog.Do adds retry (network errors/5xx) with exponential backoff, bounded by ctx's deadline.
 	resp, err := catalog.Do(ctx, c.httpClient, req)
 	if err != nil {
-		log.Printf("[Prowlarr] Error fetching from API: %v", err)
+		log.Printf("[Prowlarr] Error fetching from API (indexers %s, query %q): %v", params["indexerIds"], params["query"], err)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -384,6 +477,12 @@ func (c *Client) toStream(res ProwlarrResult) Stream {
 // It also returns how many kept results had to be dropped because their hash could not
 // be resolved, so the caller can tell an empty answer from a degraded one.
 func (c *Client) mapToStremioFiltered(ctx context.Context, results []ProwlarrResult, keep func(Stream) bool) ([]Stream, int) {
+	return c.mapStreams(ctx, results, keep, true)
+}
+
+// mapStreams is mapToStremioFiltered; with resolve false the releases without a hash
+// are returned as they are, with their DownloadURL, instead of being resolved.
+func (c *Client) mapStreams(ctx context.Context, results []ProwlarrResult, keep func(Stream) bool, resolve bool) ([]Stream, int) {
 	if len(results) == 0 {
 		return []Stream{}, 0
 	}
@@ -410,7 +509,7 @@ func (c *Client) mapToStremioFiltered(ctx context.Context, results []ProwlarrRes
 		if keep != nil && !keep(c.toStream(res)) {
 			continue
 		}
-		if res.InfoHash != "" {
+		if res.InfoHash != "" || (!resolve && res.DownloadUrl != "") {
 			ready = append(ready, res)
 		} else if res.DownloadUrl != "" {
 			needsResolution = append(needsResolution, indexed{i, res})
@@ -456,48 +555,29 @@ func (c *Client) mapToStremioFiltered(ctx context.Context, results []ProwlarrRes
 	return streams, unresolved
 }
 
-// resolveHashFromDownloadURL follows the Prowlarr download proxy URL, which issues a
-// 301 redirect to a magnet link containing the infohash in the Location header.
-// Returns the uppercase hex infohash, or empty string on failure.
+// resolveHashFromDownloadURL fetches what the Prowlarr download link serves and returns
+// the uppercase hex infohash, or "" on failure. A public indexer answers with a redirect
+// to a magnet; a logged-in one (Torznab, private trackers) with the .torrent itself,
+// whose hash is computed in memory.
 //
 // The budget is 20s because Prowlarr proxies this to the indexer: measured 1.8s/13s/>20s
 // on three 1337x URLs. Indexers that return an infoHash inline never reach this path, so
 // a short budget silently dropped only the results that need it most.
 func (c *Client) resolveHashFromDownloadURL(ctx context.Context, downloadURL string) string {
-	ctx, cancel := context.WithTimeout(ctx, resolveHashTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	src, err := c.FetchTorrent(ctx, downloadURL)
 	if err != nil {
 		return ""
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	return strings.ToUpper(HexHash(src.Hash))
+}
 
-	noRedirectClient := &http.Client{
-		Timeout: resolveHashTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	// No retry: a 301 either resolves or does not, and catalog.Do's backoff would spend
-	// the budget on waiting instead of on the one request that matters.
-	resp, err := noRedirectClient.Do(req)
-	if err != nil {
+// HexHash returns h if it is a v1 info hash in hex, "" otherwise: a magnet can carry
+// the base32 form, which nothing downstream reads.
+func HexHash(h string) string {
+	if !reHexHash.MatchString(h) {
 		return ""
 	}
-	resp.Body.Close()
-
-	if resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusFound {
-		return ""
-	}
-
-	location := resp.Header.Get("Location")
-	m := reBtih.FindStringSubmatch(location)
-	if len(m) < 2 {
-		return ""
-	}
-	return strings.ToUpper(m[1])
+	return h
 }
 
 // resolveResolution determines the resolution tag from the API value or falls back to regex.
@@ -522,6 +602,36 @@ func resolveResolution(resVal int, title string) string {
 		return "720p"
 	}
 	return ""
+}
+
+// splitPerIndexer turns each query into one request per target indexer: "-2" means every
+// indexer in all, a list means its own ids. origin[i] is the query request i came from.
+// With all empty (indexers unknown) the queries are returned unchanged and Prowlarr fans
+// them out itself.
+func splitPerIndexer(queries []map[string]string, all []int) (out []map[string]string, origin []int) {
+	if len(all) == 0 {
+		origin = make([]int, len(queries))
+		for i := range origin {
+			origin[i] = i
+		}
+		return queries, origin
+	}
+	for qi, q := range queries {
+		targets := all
+		if ids := q["indexerIds"]; ids != "-2" {
+			targets = nil
+			for _, f := range strings.Split(ids, ",") {
+				if id, err := strconv.Atoi(strings.TrimSpace(f)); err == nil {
+					targets = append(targets, id)
+				}
+			}
+		}
+		for _, id := range targets {
+			out = append(out, mergeParams(q, map[string]string{"indexerIds": strconv.Itoa(id)}))
+			origin = append(origin, qi)
+		}
+	}
+	return out, origin
 }
 
 // mergeParams combines two parameter maps. Second map overrides first on conflicts.

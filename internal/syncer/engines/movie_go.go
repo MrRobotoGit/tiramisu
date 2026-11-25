@@ -668,6 +668,12 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 	// addFailed marks candidates the engine could not even take: their silence is
 	// about us, not about the swarm, so the title must not be condemned for it.
 	addFailed := false
+	tried := make(map[string]bool, len(candidates))
+	// unresolved counts links that gave no hash, resolved the candidates that had one,
+	// whatever the gates then decided. As with the old up-front resolution, failed links
+	// make the search inconclusive only when no candidate had a hash: an indexer that
+	// never resolves must not keep the reaper off for good.
+	unresolved, resolved := 0, 0
 
 	// Try candidates
 	for _, c := range candidates {
@@ -684,15 +690,28 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 			}
 		}
 
-		if e.isInCache(e.noMKVCache, c.Hash, noMKVCacheTTL) {
+		// Cheap hash gates first when the hash is known, so a skipped release costs no
+		// fetch; a hashless one is resolved here, for the release about to be tried.
+		if c.Hash != "" {
+			resolved++
+			if e.skipMovieHash(c.Hash, tried, diskHashes) {
+				continue
+			}
+		}
+		hash, src, ok := fetchRelease(ctx, e.prowlarr, c.Hash, title, c.DownloadURL, e.logger.Printf)
+		if !ok {
+			unresolved++
 			continue
 		}
-
-		if diskHashes[strings.ToLower(c.Hash[len(c.Hash)-8:])] {
+		if c.Hash == "" {
+			resolved++
+		}
+		if c.Hash == "" && e.skipMovieHash(hash, tried, diskHashes) {
 			continue
 		}
+		tried[hash] = true
 
-		magnet := releaseMagnet(ctx, e.prowlarr, e.gostorm, c.Hash, title, c.DownloadURL, e.logger.Printf)
+		magnet := releaseMagnetFrom(ctx, e.gostorm, hash, title, src, e.logger.Printf)
 		hash, confirmed, err := e.gostorm.AddTorrentConfirmed(ctx, magnet, title)
 		if err != nil || hash == "" || !confirmed {
 			// The engine refused the release, or answered without acknowledging it:
@@ -763,7 +782,7 @@ func (e *MovieGoEngine) evaluateTitle(ctx context.Context, imdbID, title, releas
 	// Every candidate was exhausted without a live one: the stub points at a swarm
 	// that cannot serve it. A live candidate would have returned above through the
 	// ordinary upgrade path.
-	e.dropDeadStub(ctx, imdbID, existing, !addFailed && search.Complete, search.HadRaw)
+	e.dropDeadStub(ctx, imdbID, existing, !addFailed && search.Complete && (unresolved == 0 || resolved > 0), search.HadRaw)
 
 	e.setCache(e.recheckCache, imdbID, CacheEntry{Title: title, Reason: "no_better_stream", TS: time.Now().Unix()})
 	return false
@@ -799,16 +818,14 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 	prowlarrOK, torrentioOK := false, false
 
 	if e.prowlarr != nil {
-		// Gate before the hashes are resolved: each resolution is a serialised round
-		// trip through Prowlarr, and the gates below discard most candidates anyway.
-		// blacklist_hash cannot run yet (the hash is what we are avoiding fetching),
-		// so a blacklisted release survives here and is rejected by the same gates a
-		// moment later, in filterMovieStreams.
+		// Releases listed without a hash keep it empty: only the one the loop picks is
+		// resolved, and its hash gates (blacklist, caches, disk) run then. The gate
+		// keeps HadRaw meaning what it did when every hash was resolved up front.
 		keep := func(s prowlarr.Stream) bool {
 			ms, _ := e.classifyMovieStream(s)
 			return ms != nil
 		}
-		ps, complete, err := e.prowlarr.FetchTorrentsStatus(ctx, imdbID, "movie", title, year, keep)
+		ps, complete, err := e.prowlarr.FetchCandidates(ctx, imdbID, "movie", title, year, keep)
 		if err != nil {
 			e.logger.Printf("[MovieSync] Prowlarr search failed: %v", err)
 		} else {
@@ -850,13 +867,34 @@ func (e *MovieGoEngine) getMovieStreams(ctx context.Context, imdbID, title strin
 	}, nil
 }
 
+// skipMovieHash reports a release the loop must not try: already tried under another
+// listing, blacklisted, known to carry no playable file, or already on disk.
+func (e *MovieGoEngine) skipMovieHash(hash string, tried, diskHashes map[string]bool) bool {
+	hash = strings.ToLower(hash)
+	if len(hash) < 8 || tried[hash] {
+		return true
+	}
+	if _, ok := e.blacklist.Hashes[hash]; ok {
+		return true
+	}
+	if e.isInCache(e.noMKVCache, hash, noMKVCacheTTL) {
+		return true
+	}
+	return diskHashes[hash[len(hash)-8:]]
+}
+
 // dedupStreamsByHash keeps the first occurrence of each infohash: the two indexers list the
-// same releases, and a duplicate would be scored and attempted twice.
+// same releases, and a duplicate would be scored and attempted twice. A release still
+// without its hash is keyed by its download link; the loop catches the duplicates its
+// resolution reveals.
 func dedupStreamsByHash(in []prowlarr.Stream) []prowlarr.Stream {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]prowlarr.Stream, 0, len(in))
 	for _, s := range in {
 		k := strings.ToLower(s.InfoHash)
+		if k == "" && s.DownloadURL != "" {
+			k = "url:" + s.DownloadURL
+		}
 		if k == "" {
 			continue
 		}

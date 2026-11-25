@@ -58,6 +58,13 @@ type TVGoEngine struct {
 	// deadPackHashes keeps the releases already known to be silent out of the
 	// candidate list: re-selecting one costs a full metadata wait for nothing.
 	deadPackHashes map[string]bool
+	// Per show, reset by processShow. unresolvedSeasons: a picked release's link gave
+	// no hash; resolvedSeasons: some release has one. A season with the first and not
+	// the second is not conclusively searched. triedHashes stops the same release,
+	// listed by two indexers, from being added twice.
+	unresolvedSeasons map[int]bool
+	resolvedSeasons   map[int]bool
+	triedHashes       map[string]bool
 
 	blacklist     BlacklistData
 	blacklistFile string
@@ -739,6 +746,14 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow, seasons 
 	created := 0
 	seasonsComplete := make(map[int]bool)
 	seasonsEpCount := make(map[int]int)
+	e.unresolvedSeasons = make(map[int]bool)
+	e.resolvedSeasons = make(map[int]bool)
+	e.triedHashes = make(map[string]bool)
+	for _, s := range streams {
+		if s.Hash != "" {
+			e.resolvedSeasons[s.Season] = true
+		}
+	}
 
 	tmdbSeasonEps := make(map[int]int)
 	for _, sd := range details.Seasons {
@@ -812,6 +827,16 @@ func (e *TVGoEngine) processShow(ctx context.Context, show tmdb.TVShow, seasons 
 		count := e.processSingle(ctx, showName, imdbID, stream, show.FirstAirDate, knownTitles)
 		created += count
 		singlesProcessed++
+	}
+
+	// A season whose only releases gave no hash was not searched to the end: the reaper
+	// must not read it as "nothing replaces it". One failing link among releases that
+	// resolved is not enough, or an indexer that never resolves would block it for good.
+	for season := range e.unresolvedSeasons {
+		if st, ok := searched[season]; ok && !e.resolvedSeasons[season] {
+			st.Complete = false
+			searched[season] = st
+		}
 	}
 
 	if created > 0 {
@@ -912,7 +937,9 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		for s := startSeason; s <= endSeason; s++ {
 			targetSeasons = append(targetSeasons, s)
 		}
-		streams, complete, err := e.prowlarr.FetchTorrentsStatus(ctx, imdbID, "series", showName, 0, nil, targetSeasons...)
+		// Releases listed without a hash are resolved only when picked (or to learn
+		// whether a season is covered, below), not all up front.
+		streams, complete, err := e.prowlarr.FetchCandidates(ctx, imdbID, "series", showName, 0, nil, targetSeasons...)
 		if err != nil {
 			e.logger.Printf("Prowlarr search failed for %s: %v", showName, err)
 			streams = nil
@@ -923,6 +950,9 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 		}
 		for _, s := range streams {
 			h := strings.ToLower(s.InfoHash)
+			if h == "" && s.DownloadURL != "" {
+				h = "url:" + s.DownloadURL
+			}
 			if h != "" && !seenHashes[h] {
 				seenHashes[h] = true
 				allStreams = append(allStreams, s)
@@ -936,9 +966,49 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 	// with S03 releases, which are legitimate for the window and would otherwise pass as
 	// "Prowlarr worked" and suppress the fallback for the season that has no results at
 	// all (production: Dark Matter S02, Ted Lasso S04).
+	// A season counts as covered by a release with a hash. One Prowlarr listed only
+	// without hashes gets up to tvCoverResolveTries of its best releases resolved until
+	// one gives a usable hash; otherwise it stays uncovered and the fallback runs, as
+	// when every hash was resolved up front. Links that failed are dropped, as they were
+	// then, so processShow does not fetch them again.
 	covered := make(map[int]bool)
-	for _, c := range e.classifyAndFilter(allStreams, startSeason, endSeason, airedSeasonEps) {
-		covered[c.Season] = true
+	classified := e.classifyAndFilter(allStreams, startSeason, endSeason, airedSeasonEps)
+	for _, c := range classified {
+		if c.Hash != "" {
+			covered[c.Season] = true
+		}
+	}
+	sort.SliceStable(classified, func(i, j int) bool { return classified[i].Priority > classified[j].Priority })
+	coverTries := make(map[int]int)
+	failedLinks := make(map[string]bool)
+	for _, c := range classified {
+		if covered[c.Season] || c.Hash != "" || coverTries[c.Season] >= tvCoverResolveTries {
+			continue
+		}
+		coverTries[c.Season]++
+		h, _, ok := fetchRelease(ctx, e.prowlarr, "", c.Title, c.DownloadURL, e.logger.Printf)
+		if !ok {
+			failedLinks[c.DownloadURL] = true
+			continue
+		}
+		for i := range allStreams {
+			if allStreams[i].InfoHash == "" && allStreams[i].DownloadURL == c.DownloadURL {
+				allStreams[i].InfoHash = h
+			}
+		}
+		// A dead or blacklisted release is filtered out later: it covers nothing.
+		if !e.isHashBlacklisted(h) && !e.isDeadPackHash(h) {
+			covered[c.Season] = true
+		}
+	}
+	if len(failedLinks) > 0 {
+		kept := allStreams[:0]
+		for _, st := range allStreams {
+			if !(st.InfoHash == "" && failedLinks[st.DownloadURL]) {
+				kept = append(kept, st)
+			}
+		}
+		allStreams = kept
 	}
 	var missing []int
 	for s := startSeason; s <= endSeason; s++ {
@@ -1027,6 +1097,11 @@ func (e *TVGoEngine) getStreams(ctx context.Context, imdbID string, tmdbID int, 
 // target season range and TMDB's canonical episode count. Used both to decide whether Prowlarr's
 // results are usable at all (fallback trigger) and to build the final result, so both checks stay
 // in sync.
+// tvCoverResolveTries bounds the links resolved to learn whether Prowlarr covers a
+// season it listed only without hashes: past it the indexer is degraded for that
+// season, and the Torrentio fallback is the cheaper way to fill it.
+const tvCoverResolveTries = 3
+
 func (e *TVGoEngine) classifyAndFilter(streams []prowlarr.Stream, startSeason, endSeason int, tmdbSeasonEps map[int]int) []TVStream {
 	var classified []TVStream
 	for _, s := range streams {
@@ -1244,8 +1319,39 @@ func (e *TVGoEngine) extractSeeders(title string) int {
 	return 0
 }
 
+// pickedMagnet resolves the release about to be added, when the indexer listed it
+// without a hash, and applies the hash gates classifyStream could not run without one.
+func (e *TVGoEngine) pickedMagnet(ctx context.Context, stream TVStream, title string) (string, bool) {
+	if stream.Hash != "" && e.triedHashes[strings.ToLower(stream.Hash)] {
+		return "", false
+	}
+	hash, src, ok := fetchRelease(ctx, e.prowlarr, stream.Hash, title, stream.DownloadURL, e.logger.Printf)
+	if !ok {
+		if e.unresolvedSeasons != nil {
+			e.unresolvedSeasons[stream.Season] = true
+		}
+		return "", false
+	}
+	if e.resolvedSeasons != nil {
+		e.resolvedSeasons[stream.Season] = true
+	}
+	if e.triedHashes != nil {
+		if e.triedHashes[hash] {
+			return "", false
+		}
+		e.triedHashes[hash] = true
+	}
+	if stream.Hash == "" && (e.isHashBlacklisted(hash) || e.isDeadPackHash(hash)) {
+		return "", false
+	}
+	return releaseMagnetFrom(ctx, e.gostorm, hash, title, src, e.logger.Printf), true
+}
+
 func (e *TVGoEngine) processFullpack(ctx context.Context, showName, showIMDB string, stream TVStream, firstAirDate string, knownTitles []string) int {
-	magnet := releaseMagnet(ctx, e.prowlarr, e.gostorm, stream.Hash, stream.Title, stream.DownloadURL, e.logger.Printf)
+	magnet, ok := e.pickedMagnet(ctx, stream, stream.Title)
+	if !ok {
+		return 0
+	}
 	hash, err := e.gostorm.AddTorrent(ctx, magnet, stream.Title)
 	if err != nil || hash == "" {
 		return 0
@@ -1360,7 +1466,10 @@ func (e *TVGoEngine) processSingle(ctx context.Context, showName, showIMDB strin
 		}
 	}
 
-	magnet := releaseMagnet(ctx, e.prowlarr, e.gostorm, stream.Hash, title, stream.DownloadURL, e.logger.Printf)
+	magnet, ok := e.pickedMagnet(ctx, stream, title)
+	if !ok {
+		return 0
+	}
 	hash, err := e.gostorm.AddTorrent(ctx, magnet, title)
 	if err != nil || hash == "" {
 		return 0
