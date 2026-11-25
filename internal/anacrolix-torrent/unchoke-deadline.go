@@ -18,6 +18,11 @@ func init() {
 	peerOverdueHook = func(cn *PeerConn, now time.Time) bool {
 		return cn.unchokeOverdue(learnedDeadlines.table(now), now)
 	}
+	peerEvictedHook = func(cn *PeerConn, now time.Time) {
+		if cn.unchokeOverdue(learnedDeadlines.table(now), now) {
+			cn.t.unchokeCooldown(cn, now)
+		}
+	}
 }
 
 // unchokeFallback is the deadline of a family and role not learned yet; "" covers every other key.
@@ -32,7 +37,7 @@ var unchokeFallback = map[string]time.Duration{
 
 const (
 	learnThreshold    = 0.5
-	learnMinConns     = 30 // waits at least that long needed to learn a deadline
+	learnMinConns     = 30 // explorer waits at least that long needed to learn a deadline
 	learnExploreEvery = 10 // one connection in ten is never evicted, see unchokeExplorer
 	learnRefresh      = 30 * time.Second
 	learnedKey        = "#learned" // marks a learned table; no family/role key starts with "#"
@@ -59,6 +64,9 @@ type unchokeWaitStats struct {
 // unchokeWait holds, per client family and role, how long peers we wanted took to unchoke us and
 // how long we waited on those that never did.
 var unchokeWait = &unchokeWaitStats{m: map[string]*unchokeBucket{}}
+
+// unchokeLearn holds the waits of explorer connections only: what the learned deadlines read.
+var unchokeLearn = &unchokeWaitStats{m: map[string]*unchokeBucket{}}
 
 // unchokeRecorded holds the connections already counted, until they close.
 var unchokeRecorded sync.Map // *PeerConn -> struct{}
@@ -123,17 +131,28 @@ func clientFamily(id PeerID, extV string) string {
 			return "bitcomet"
 		case "AZ":
 			return "vuze"
-		default:
-			return "id:" + code
+		case "XL", "SD":
+			return "xunlei"
 		}
 	}
-	if v := strings.TrimSpace(extV); v != "" {
-		if i := strings.IndexAny(v, " /"); i > 0 {
-			v = v[:i]
+	// The extended handshake's name is chosen by the peer: only known families make a key, so
+	// the stats cannot grow without bound.
+	v := strings.ToLower(strings.TrimSpace(extV))
+	for _, f := range []string{"qbittorrent", "transmission", "utorrent", "deluge", "libtorrent", "bitcomet", "vuze"} {
+		if strings.HasPrefix(v, f) {
+			return f
 		}
-		return "v:" + strings.ToLower(v)
 	}
 	return "other"
+}
+
+// unchokeKeyOf is the connection's key, fixed the first time it is asked: early on the role is
+// unknown until the bitfield arrives and the family until the extended handshake does.
+func (cn *PeerConn) unchokeKeyOf() string {
+	if cn.unchokeKey == "" {
+		cn.unchokeKey = cn.unchokeWaitKey()
+	}
+	return cn.unchokeKey
 }
 
 // unchokeWaitKey is the stats key of a connection: client family and role.
@@ -151,24 +170,41 @@ func (cn *PeerConn) unchokeWaitKey() string {
 	return clientFamily(cn.PeerID, v) + "/" + role
 }
 
-// recordUnchoke counts the first unchoke of a connection, timed from our first interest.
+// interestWait is how long we have wanted this peer: only the time we were interested counts,
+// since peers unchoke only those that are.
+func (cn *PeerConn) interestWait(now time.Time) time.Duration {
+	d := cn.priorInterest
+	if cn.requestState.Interested {
+		d += now.Sub(cn.lastBecameInterested)
+	}
+	return d
+}
+
+// recordUnchoke counts the first unchoke of a connection, timed by our interest.
 func (cn *PeerConn) recordUnchoke(now time.Time) {
 	if _, done := unchokeRecorded.LoadOrStore(cn, struct{}{}); done {
 		return
 	}
-	var d time.Duration
-	if !cn.firstInterestedAt.IsZero() {
-		d = now.Sub(cn.firstInterestedAt)
-	}
-	unchokeWait.record(cn.unchokeWaitKey(), d, true)
+	cn.record(cn.interestWait(now), true)
 }
 
 // recordNeverUnchoked counts a closing connection we were interested in that never unchoked us.
 func (cn *PeerConn) recordNeverUnchoked(now time.Time) {
-	if _, done := unchokeRecorded.LoadAndDelete(cn); done || cn.firstInterestedAt.IsZero() {
+	if _, done := unchokeRecorded.LoadAndDelete(cn); done || cn.lastBecameInterested.IsZero() {
 		return
 	}
-	unchokeWait.record(cn.unchokeWaitKey(), now.Sub(cn.firstInterestedAt), false)
+	cn.record(cn.interestWait(now), false)
+}
+
+// record files a wait under every connection's stats, and under the learning stats only for
+// explorers: the others are closed at their deadline, so their waits past it would read as
+// peers that never unchoke and the learned deadline would confirm itself.
+func (cn *PeerConn) record(d time.Duration, unchoked bool) {
+	key := cn.unchokeKeyOf()
+	unchokeWait.record(key, d, unchoked)
+	if cn.unchokeExplorer() {
+		unchokeLearn.record(key, d, unchoked)
+	}
 }
 
 var learnedDeadlines learnedTable
@@ -183,7 +219,7 @@ func (l *learnedTable) table(now time.Time) map[string]time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.t == nil || now.Sub(l.at) > learnRefresh {
-		l.t, l.at = learnDeadlines(unchokeWait.counts(), unchokeFallback), now
+		l.t, l.at = learnDeadlines(unchokeLearn.counts(), unchokeFallback), now
 	}
 	return l.t
 }
@@ -217,7 +253,11 @@ func learnDeadlines(counts map[string][2][]int64, fallback map[string]time.Durat
 
 // unchokeOverdue: we are interested, the peer never unchoked us, and the wait passed its deadline.
 func (cn *PeerConn) unchokeOverdue(table map[string]time.Duration, now time.Time) bool {
-	if table == nil || cn.friend || !cn.peerChoking || cn.firstInterestedAt.IsZero() {
+	if table == nil || cn.friend || !cn.peerChoking || !cn.requestState.Interested {
+		return false
+	}
+	wait := cn.interestWait(now)
+	if wait <= unchokeWaitBounds[0] { // no deadline is shorter: spare the key until the role is known
 		return false
 	}
 	if table[learnedKey] != 0 && cn.unchokeExplorer() {
@@ -226,11 +266,25 @@ func (cn *PeerConn) unchokeOverdue(table map[string]time.Duration, now time.Time
 	if _, seen := unchokeRecorded.Load(cn); seen {
 		return false
 	}
-	d, ok := table[cn.unchokeWaitKey()]
+	d, ok := table[cn.unchokeKeyOf()]
 	if !ok {
 		d = table[""]
 	}
-	return now.Sub(cn.firstInterestedAt) > d
+	return wait > d
+}
+
+// unchokeCooldownDur keeps a peer closed for an overdue unchoke from being dialled straight back:
+// it would start again at the back of the same full queue.
+const unchokeCooldownDur = 30 * time.Second
+
+func (t *Torrent) unchokeCooldown(cn *PeerConn, now time.Time) {
+	if t == nil || cn.RemoteAddr == nil {
+		return
+	}
+	if t.churnCooldown == nil {
+		t.churnCooldown = make(map[string]churnCooldownEntry)
+	}
+	t.churnCooldown[churnCooldownKey(cn.RemoteAddr)] = churnCooldownEntry{until: now.Add(unchokeCooldownDur), probed: true}
 }
 
 // unchokeExplorer: a connection exempt from the learned deadline. Evicting every connection at

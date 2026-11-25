@@ -39,6 +39,10 @@ type PeerConn struct {
 	// be wrapping WebRTC, uTP, or TCP etc. Used in writing the conn status for peers.
 	connString string
 
+	// unchokeKey is the client family and role this connection is filed under by
+	// unchoke-deadline.go, fixed on first use so its waits stay under one key.
+	unchokeKey string
+
 	// See BEP 3 etc.
 	PeerID             PeerID
 	PeerExtensionBytes pp.PeerExtensionBits
