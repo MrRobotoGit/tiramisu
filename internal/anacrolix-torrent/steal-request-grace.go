@@ -120,6 +120,34 @@ func stealPermitted(reason string, diff int64, stealerLast, holderLast time.Time
 // its requests may be stolen whatever the queue sizes.
 const holderStallAfter = 2 * time.Second
 
+// holderStalled reports whether holder's requests may be taken whatever the queue sizes: it has
+// delivered nothing for holderStallAfter, or for longer than both the stealer would take to serve
+// one more chunk and its own mean latency (a silent peer at the read head costs that much, not 2s).
+func holderStalled(holder, stealer *Peer, chunk int64, now time.Time) bool {
+	expecting := holder.lastStartedExpectingToReceiveChunks
+	if peerStalled(holder.lastUsefulChunkReceived, expecting, now) {
+		return true
+	}
+	if expecting.IsZero() {
+		return false
+	}
+	wait, ok := hedgeEta(stealer, chunk)
+	if !ok {
+		// Rates are sampled after a while: before that, the stealer's own request latency.
+		if wait, ok = stealer.meanLatency(); !ok {
+			return false
+		}
+	}
+	if d, ok := holder.meanLatency(); ok && d > wait {
+		wait = d
+	}
+	last := holder.lastUsefulChunkReceived
+	if expecting.After(last) {
+		last = expecting
+	}
+	return now.Sub(last) > wait
+}
+
 // peerStalled reports a peer expecting chunks that has delivered none for holderStallAfter.
 func peerStalled(lastUseful, expectingSince, now time.Time) bool {
 	if expectingSince.IsZero() {
