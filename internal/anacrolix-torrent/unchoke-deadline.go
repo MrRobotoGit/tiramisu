@@ -4,35 +4,33 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 // A peer that keeps us choked long past the time its client family usually takes to unchoke may
 // give up its connection slot to another peer. The deadline of each client family and role is
 // learned from this process's own waits: the first wait after which fewer than half of the peers
-// still waiting go on to unchoke us. Until enough waits are seen, unchokeFallback applies.
+// still waiting go on to unchoke us. A connection closed before any unchoke, by us or the peer,
+// only says the unchoke had not come yet: it is a censored wait, never a refusal. Until enough
+// waits are seen, unchokeFallback applies.
 
 func init() {
 	peerUnchokedHook = (*PeerConn).recordUnchoke
-	peerClosedHook = func(cn *PeerConn, now time.Time) {
-		cn.recordNeverUnchoked(now)
-		unchokeSpared.CompareAndDelete(cn.t, cn)
-	}
+	peerClosedHook = (*PeerConn).recordNeverUnchoked
 	peerOverdueHook = func(cn *PeerConn, now time.Time) bool {
 		return cn.unchokeOverdue(learnedDeadlines.table(now), now)
 	}
 	peerEvictedHook = func(cn *PeerConn, now time.Time) {
 		if cn.unchokeOverdue(learnedDeadlines.table(now), now) {
-			cn.overdueEvicted(now)
+			cn.t.unchokeCooldown(cn, now)
 		}
 	}
 }
 
 // unchokeFallback is the deadline of a family and role not learned yet; "" covers every other key.
 var unchokeFallback = map[string]time.Duration{
-	"qbittorrent/seed": time.Second, "qbittorrent/leech": time.Second,
-	"utorrent/seed": time.Second, "utorrent/leech": 5 * time.Second,
-	"transmission/seed": 10 * time.Second, "transmission/leech": 5 * time.Second,
+	"qbittorrent/seed": 5 * time.Second, "qbittorrent/leech": time.Second,
+	"utorrent/seed": time.Second, "utorrent/leech": time.Second,
+	"transmission/seed": 60 * time.Second, "transmission/leech": 5 * time.Second,
 	"libtorrent/seed": time.Second, "deluge/seed": time.Second,
 	"bitcomet/leech": 20 * time.Second, "vuze/leech": 5 * time.Second,
 	"": 5 * time.Second,
@@ -40,10 +38,8 @@ var unchokeFallback = map[string]time.Duration{
 
 const (
 	learnThreshold    = 0.5
-	learnMinConns     = 30 // explorer waits at least that long needed to learn a deadline
-	learnExploreEvery = 10 // one connection in ten is never evicted, see unchokeExplorer
+	learnMinConns     = 30 // waits at least that long needed to learn a deadline
 	learnRefresh      = 30 * time.Second
-	learnedKey        = "#learned" // marks a learned table; no family/role key starts with "#"
 )
 
 // unchokeWaitBounds are the histogram bucket upper bounds; the last bucket is open.
@@ -67,9 +63,6 @@ type unchokeWaitStats struct {
 // unchokeWait holds, per client family and role, how long peers we wanted took to unchoke us and
 // how long we waited on those that never did.
 var unchokeWait = &unchokeWaitStats{m: map[string]*unchokeBucket{}}
-
-// unchokeLearn holds the waits of explorer connections only: what the learned deadlines read.
-var unchokeLearn = &unchokeWaitStats{m: map[string]*unchokeBucket{}}
 
 // unchokeRecorded holds the connections already counted, until they close.
 var unchokeRecorded sync.Map // *PeerConn -> struct{}
@@ -199,50 +192,11 @@ func (cn *PeerConn) recordNeverUnchoked(now time.Time) {
 	cn.record(cn.interestWait(now), false)
 }
 
-// record files a wait under every connection's stats, and under the learning stats only for
-// explorers: the others are closed at their deadline, so their waits past it would read as
-// peers that never unchoke and the learned deadline would confirm itself.
+// record files a wait under the connection's key.
 func (cn *PeerConn) record(d time.Duration, unchoked bool) {
-	key := cn.unchokeKeyOf()
-	unchokeWait.record(key, d, unchoked)
-	if _, censored := unchokeCensored.LoadAndDelete(cn); cn.unchokeExplorer() && !censored {
-		unchokeLearn.record(key, d, unchoked)
-	}
+	unchokeWait.record(cn.unchokeKeyOf(), d, unchoked)
 }
 
-// unchokeCensored holds explorers closed at their deadline because another explorer held the
-// spare slot: their waits stop at the deadline, so they stay out of the learning.
-var unchokeCensored sync.Map // *PeerConn -> struct{}
-
-// unchokeSpared holds, per torrent, the explorer kept past its deadline. One at a time: each
-// spared explorer holds a slot that a peer likely to unchoke us could use.
-var unchokeSpared sync.Map // *Torrent -> *PeerConn
-
-// unchokeExploreOne limits the spared explorers to one per torrent; false spares them all.
-var unchokeExploreOne = true
-
-func (cn *PeerConn) spareExplorer() bool {
-	if !unchokeExploreOne {
-		return true
-	}
-	if cur, ok := unchokeSpared.Load(cn.t); ok {
-		if c := cur.(*PeerConn); c != cn && !c.closed.IsSet() {
-			if _, unchoked := unchokeRecorded.Load(c); !unchoked {
-				return false
-			}
-		}
-	}
-	unchokeSpared.Store(cn.t, cn)
-	return true
-}
-
-// overdueEvicted: the connection was closed for a new peer because its unchoke was overdue.
-func (cn *PeerConn) overdueEvicted(now time.Time) {
-	if cn.unchokeExplorer() {
-		unchokeCensored.Store(cn, struct{}{})
-	}
-	cn.t.unchokeCooldown(cn, now)
-}
 
 var learnedDeadlines learnedTable
 
@@ -256,36 +210,63 @@ func (l *learnedTable) table(now time.Time) map[string]time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.t == nil || now.Sub(l.at) > learnRefresh {
-		l.t, l.at = learnDeadlines(unchokeLearn.counts(), unchokeFallback), now
+		l.t, l.at = learnDeadlines(unchokeWait.counts(), unchokeFallback), now
 	}
 	return l.t
 }
 
-// learnDeadlines derives the deadlines from per-key histograms (unchoked by wait, never by wait).
+// learnDeadlines derives the deadlines from per-key histograms (unchoked by wait, closed without
+// an unchoke by wait) with a life table: a wait closed without an unchoke stays at risk until its
+// bucket and then leaves, censored. The deadline is the first bound t where the chance of an
+// unchoke between t and the last bound, for a peer still waiting at t, falls below learnThreshold.
 func learnDeadlines(counts map[string][2][]int64, fallback map[string]time.Duration) map[string]time.Duration {
-	out := make(map[string]time.Duration, len(fallback)+len(counts)+1)
+	out := make(map[string]time.Duration, len(fallback)+len(counts))
 	for k, d := range fallback {
 		out[k] = d
 	}
-	out[learnedKey] = 1
 	for k, c := range counts {
-		u, n := c[0], c[1]
-		for i := 1; i < len(u); i++ {
-			var later, risk int64
-			for j := i; j < len(u); j++ {
-				later += u[j]
-				risk += u[j] + n[j]
-			}
-			if risk < learnMinConns {
-				break
-			}
-			if float64(later)/float64(risk) < learnThreshold {
-				out[k] = unchokeWaitBounds[i-1]
-				break
-			}
+		if d, ok := lifeTableDeadline(c[0], c[1]); ok {
+			out[k] = d
 		}
 	}
 	return out
+}
+
+func lifeTableDeadline(unchoked, censored []int64) (time.Duration, bool) {
+	n := len(unchokeWaitBounds) // buckets up to the last bound; the open one only counts at risk
+	if len(unchoked) <= n || len(censored) <= n {
+		return 0, false
+	}
+	// surv[i]: share of waits still without an unchoke at bound i-1 (surv[0] = 1 at 0s).
+	surv := make([]float64, n+1)
+	surv[0] = 1
+	atRisk := make([]int64, n+1)
+	for i := 0; i < n; i++ {
+		for j := i; j < len(unchoked); j++ {
+			atRisk[i] += unchoked[j] + censored[j]
+		}
+		r := float64(atRisk[i]) - float64(censored[i])/2
+		q := 0.0
+		if r > 0 {
+			q = float64(unchoked[i]) / r
+		}
+		if q > 1 {
+			q = 1
+		}
+		surv[i+1] = surv[i] * (1 - q)
+	}
+	for i := 1; i < n; i++ {
+		if atRisk[i] < learnMinConns {
+			return 0, false // too few waits this long
+		}
+		if surv[i] <= 0 {
+			return 0, false
+		}
+		if later := 1 - surv[n]/surv[i]; later < learnThreshold {
+			return unchokeWaitBounds[i-1], true
+		}
+	}
+	return 0, false
 }
 
 // unchokeOverdue: we are interested, the peer never unchoked us, and the wait passed its deadline.
@@ -294,10 +275,7 @@ func (cn *PeerConn) unchokeOverdue(table map[string]time.Duration, now time.Time
 		return false
 	}
 	wait := cn.interestWait(now)
-	if wait <= unchokeWaitBounds[0] { // no deadline is shorter: spare the key until the role is known
-		return false
-	}
-	if table[learnedKey] != 0 && cn.unchokeExplorer() && cn.spareExplorer() {
+	if wait <= unchokeWaitBounds[0] { // no deadline is shorter: fix the key once the role is known
 		return false
 	}
 	if _, seen := unchokeRecorded.Load(cn); seen {
@@ -322,11 +300,4 @@ func (t *Torrent) unchokeCooldown(cn *PeerConn, now time.Time) {
 		t.churnCooldown = make(map[string]churnCooldownEntry)
 	}
 	t.churnCooldown[churnCooldownKey(cn.RemoteAddr)] = churnCooldownEntry{until: now.Add(unchokeCooldownDur), probed: true}
-}
-
-// unchokeExplorer: a connection exempt from the learned deadline. Evicting every connection at
-// its deadline would hide whether peers unchoke later, and the deadline could only shrink.
-func (cn *PeerConn) unchokeExplorer() bool {
-	h := uint64(uintptr(unsafe.Pointer(cn))) * 0x9E3779B97F4A7C15 // spread allocator-aligned addresses
-	return (h>>32)%learnExploreEvery == 0
 }
