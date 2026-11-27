@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,7 +72,6 @@ type reader interface {
 type shown struct {
 	r          reader
 	from, v, e int64
-	seen       int64 // the frontier the notice was planned on
 }
 
 type session struct {
@@ -145,7 +145,7 @@ func (m *Manager) on() bool { return m.ready.Load() && m.d.Enabled != nil && m.d
 // Open registers handle key on path; the first handle opens the session and its window. Calling
 // it again for the same key (late hash resolution) only completes the session.
 func (m *Manager) Open(key any, path, hash string, fileID int, size int64) {
-	if hash == "" || size <= 0 {
+	if hash == "" || size <= 0 || audioFile(path) {
 		return
 	}
 	m.mu.Lock()
@@ -158,6 +158,15 @@ func (m *Manager) Open(key any, path, hash string, fileID int, size int64) {
 	}
 	s.handles[key] = true
 	m.byKey[key] = path
+}
+
+// audioFile: music never gets the notice, a video file in place of a track.
+func audioFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".alac", ".ape", ".wv", ".dsf", ".aiff":
+		return true
+	}
+	return false
 }
 
 // Release drops handle key; the session ends with its last handle. Keys never opened are ignored.
@@ -245,6 +254,19 @@ func (m *Manager) Serve(path string, dest []byte, off int64) (n int, served bool
 		}
 	}
 	return k, true, limit
+}
+
+// Guard checks n real bytes read into dest at off just before they reach the kernel: a notice
+// started while they were read takes over its range. It returns how many bytes to hand back.
+func (m *Manager) Guard(path string, dest []byte, off int64, n int) int {
+	if n <= 0 {
+		return n
+	}
+	k, ok, limit := m.Serve(path, dest[:n], off)
+	if ok {
+		return k
+	}
+	return min(n, limit)
 }
 
 // pastNotice serves zeros for a read past the notice (the film's Cues and Tags): with the swarm
@@ -511,8 +533,7 @@ func (m *Manager) decide(path string, force bool) {
 		m.fail(path, s, force, err)
 		return
 	}
-	limit := max(sh.from, sh.seen)
-	m.show(path, s, sh, func(s *session) bool { return s.frontier <= limit },
+	m.show(path, s, sh, noRealPast(sh.from),
 		fmt.Sprintf("%s (%d peers) below the film's %.2f MB/s: notice from %d MB", why, m.peers(s.hash),
 			float64(bitrate)/(1<<20), sh.from>>20))
 }
@@ -568,8 +589,7 @@ func (m *Manager) decideDead(path string, s *session, force bool) {
 	if force && samples > 0 {
 		why = "the read gave up during playback"
 	}
-	limit := max(sh.from, sh.seen)
-	m.show(path, s, sh, func(s *session) bool { return s.frontier <= limit }, why+fmt.Sprintf(": notice from %d MB", sh.from>>20))
+	m.show(path, s, sh, noRealPast(sh.from), why+fmt.Sprintf(": notice from %d MB", sh.from>>20))
 }
 
 // leadLeft: the reads that wait are still ahead of the estimated playback position, so the player
@@ -605,6 +625,12 @@ func (m *Manager) waits(path string, s *session, why string) {
 	if !again {
 		m.d.Logf("[Notice] %s: below the bitrate, waiting: %s", filepath.Base(path), why)
 	}
+}
+
+// noRealPast: no real byte at or past from reached a reader; the notice would rewrite film the
+// player already holds (kernel page cache included).
+func noRealPast(from int64) func(*session) bool {
+	return func(s *session) bool { return s.frontier <= from }
 }
 
 // show activates sh unless the session ended or still(s) no longer holds (real bytes past the
@@ -818,7 +844,7 @@ func (m *Manager) buildMP4(s *session, mv *notice.Movie) (*shown, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &shown{r: l, from: v, v: v, e: l.E, seen: frontier}, nil
+	return &shown{r: l, from: v, v: v, e: l.E}, nil
 }
 
 // build plans the notice: from the lowest blocked read in the film's Clusters, else (only
@@ -875,7 +901,7 @@ func (m *Manager) build(path string, s *session, f *notice.Film) (*shown, error)
 			if err != nil {
 				return nil, err
 			}
-			return &shown{r: l, from: v.off, v: l.V, e: l.E, seen: frontier}, nil
+			return &shown{r: l, from: v.off, v: l.V, e: l.E}, nil
 		}
 	}
 	if ok && v.off-start <= maxPrefix {
@@ -885,7 +911,7 @@ func (m *Manager) build(path string, s *session, f *notice.Film) (*shown, error)
 			if err != nil {
 				return nil, err
 			}
-			return &shown{r: l, from: v.off, v: l.V, e: l.E, seen: frontier}, nil
+			return &shown{r: l, from: v.off, v: l.V, e: l.E}, nil
 		}
 	}
 	if i := sort.Search(len(cues), func(i int) bool { return cues[i].Pos >= v.off }); i < len(cues) && cues[i].Pos < v.off+int64(v.n) {
@@ -893,7 +919,7 @@ func (m *Manager) build(path string, s *session, f *notice.Film) (*shown, error)
 		if err != nil {
 			return nil, err
 		}
-		return &shown{r: l, from: v.off, v: l.V, e: l.E, seen: frontier}, nil
+		return &shown{r: l, from: v.off, v: l.V, e: l.E}, nil
 	}
 	return nil, fmt.Errorf("the film before %d MB is not local and no Cue lies in the read", v.off>>20)
 }

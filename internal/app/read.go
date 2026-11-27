@@ -35,9 +35,9 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		return res, errno
 	}
 
-	total := res.Size()
+	total := stallNotices.Guard(h.path, dest, off, res.Size())
 	if !shortAwayFromEOF(total, len(dest), off, h.size) {
-		return res, 0
+		return fuse.ReadResultData(dest[:total]), 0
 	}
 
 	// Short away from EOF: every readInner return site writes into dest, so the bytes
@@ -56,7 +56,7 @@ func (h *MkvHandle) Read(fuseCtx context.Context, dest []byte, off int64) (fuse.
 		if subErrno != 0 || sub == nil {
 			break
 		}
-		m := sub.Size()
+		m := stallNotices.Guard(h.path, dest[total:], off+int64(total), sub.Size())
 		if m == 0 {
 			break
 		}
@@ -129,7 +129,9 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		if hash, fileID, err := resolveTargetFileFn(h.url, h.size, h.path); err == nil {
 			h.hash = hash
 			h.fileID = fileID
-			stallNotices.Open(h, h.path, h.hash, h.fileID, h.size)
+			if !isAudioSectionPath(h.path) {
+				stallNotices.Open(h, h.path, h.hash, h.fileID, h.size)
+			}
 			logger.Printf("[LateResolution] Recovered hash for %s: %s", filepath.Base(h.path), h.hash[:8])
 			go h.pumpOnce.Do(func() {
 				h.startNativePump(h.hash, h.fileID)

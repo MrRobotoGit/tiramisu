@@ -251,7 +251,9 @@ func (n *VirtualMkvNode) Open(ctx context.Context, flags uint32) (fs.FileHandle,
 	}
 
 	activeHandles.Store(h, true)
-	stallNotices.Open(h, h.path, h.hash, h.fileID, h.size)
+	if !isAudio {
+		stallNotices.Open(h, h.path, h.hash, h.fileID, h.size)
+	}
 
 	return h, 0, 0
 }
