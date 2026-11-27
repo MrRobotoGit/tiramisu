@@ -14,7 +14,6 @@ var DHTBootstrapHosts = []string{
 	"dht.transmissionbt.com:6881",
 	"dht.libtorrent.org:25401",
 	"dht.aelitis.com:6881",
-	"router.bitcomet.com:6881",
 	"dht.vuze.com:6881",
 }
 
