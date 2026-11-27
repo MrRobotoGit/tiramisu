@@ -39,6 +39,7 @@ type bankVideo struct {
 	Width, Height int
 	Private       []byte   // avcC / hvcC
 	Frames        [][]byte // one GOP from an IDR, 4-byte NAL lengths
+	Fade          [][]byte // the same GOP fading in from black over fadeFrames; nil in older banks
 }
 
 type bankAudio struct {
@@ -228,17 +229,14 @@ func ClipFor(x Format) (*Clip, error) {
 		return nil, ErrUnsupported
 	}
 	n := int((gopNs + x.FrameDur/2) / x.FrameDur)
-	n = max(min(n, len(v.Frames)), 1)
-	c := &Clip{FrameDur: x.FrameDur, Video: make([][]byte, 0, n)}
-	for _, fr := range v.Frames[:n] {
-		out, err := convertNAL(cropFrame(fr, x.Codec, x.Width, x.Height), 4, x.NALLength)
-		if err != nil {
+	c := &Clip{FrameDur: x.FrameDur}
+	if c.Video, err = clipFrames(v.Frames, n, x); err != nil {
+		return nil, err
+	}
+	if len(v.Fade) > 0 {
+		if c.Fade, err = clipFrames(v.Fade, n, x); err != nil {
 			return nil, err
 		}
-		if x.DVProfile != 0 {
-			out = AppendRPU(out, x.NALLength, RPUFor(x.DVProfile))
-		}
-		c.Video = append(c.Video, out)
 	}
 	for _, a := range x.Audio {
 		var ac AudioClip
@@ -249,6 +247,27 @@ func ClipFor(x Format) (*Clip, error) {
 	}
 	return c, nil
 }
+
+// clipFrames cuts a bank GOP to n frames in the film's framing: SPS cropped, NAL lengths
+// converted, DV RPU appended.
+func clipFrames(gop [][]byte, n int, x Format) ([][]byte, error) {
+	n = max(min(n, len(gop)), 1)
+	out := make([][]byte, 0, n)
+	for _, fr := range gop[:n] {
+		f, err := convertNAL(cropFrame(fr, x.Codec, x.Width, x.Height), 4, x.NALLength)
+		if err != nil {
+			return nil, err
+		}
+		if x.DVProfile != 0 {
+			f = AppendRPU(f, x.NALLength, RPUFor(x.DVProfile))
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// fadeFrames is the fade-in from black: one second at 24 fps, whatever the film's rate.
+const fadeFrames = 24
 
 // gopNs is the clip's GOP: one IDR every ten seconds.
 const gopNs = 10_000_000_000

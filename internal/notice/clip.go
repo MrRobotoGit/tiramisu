@@ -11,7 +11,16 @@ import (
 type Clip struct {
 	FrameDur int64       // ns
 	Video    [][]byte    // Video[0] is an IDR; frames in the film's NAL length framing
+	Fade     [][]byte    // the first GOP where the notice starts: from black to Video; nil = Video
 	Audio    []AudioClip // aligned with Format.Audio; a nil Frame leaves that track without blocks
+}
+
+// gop is the fade GOP when asked for and present, else the static one.
+func (c *Clip) gop(fade bool) [][]byte {
+	if fade && len(c.Fade) > 0 {
+		return c.Fade
+	}
+	return c.Video
 }
 
 type AudioClip struct {

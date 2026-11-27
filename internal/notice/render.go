@@ -70,7 +70,11 @@ func source() *image.Gray {
 }
 
 // Render composes the notice at w×h (contain-fit, centred, black around) in the given transfer.
-func Render(w, h, depth int, tr Transfer) Frame {
+func Render(w, h, depth int, tr Transfer) Frame { return RenderLevel(w, h, depth, tr, 1) }
+
+// RenderLevel is the notice at level a of its brightness (0 black, 1 full), scaled before the
+// transfer so every range and curve fades to its own black.
+func RenderLevel(w, h, depth int, tr Transfer, a float64) Frame {
 	src := source()
 	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
 	scale := math.Min(float64(w)/float64(sw), float64(h)/float64(sh))
@@ -82,7 +86,7 @@ func Render(w, h, depth int, tr Transfer) Frame {
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			sx, sy := (float64(x)+.5-ox)/scale-.5, (float64(y)+.5-oy)/scale-.5
-			fr.Y[y*w+x] = lut[bilinear(src, sx, sy)]
+			fr.Y[y*w+x] = lut[uint8(math.Round(float64(bilinear(src, sx, sy))*a))]
 		}
 	}
 	mid := uint16(1) << (depth - 1)

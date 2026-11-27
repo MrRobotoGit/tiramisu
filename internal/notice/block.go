@@ -8,6 +8,7 @@ import (
 type interval struct {
 	Start, End int64  // absolute byte range
 	Time, Dur  uint64 // Cluster timestamp and content duration, TimestampScale units
+	Fade       bool   // the clip's fade GOP instead of the static one
 }
 
 // placement binds a format's clip to one film: track numbers and TimestampScale.
@@ -104,7 +105,7 @@ func (s *stream) countBefore(t int64, scale uint64) int {
 }
 
 // streams lists the interval's tracks, video first then audio in Clip order (the tie order).
-func streams(c *Clip, pl placement, dur uint64) []stream {
+func streams(c *Clip, pl placement, dur uint64, fade bool) []stream {
 	durNs := float64(dur) * float64(pl.scale)
 	mk := func(step float64, track uint64, video bool, frames [][]byte) stream {
 		s := stream{step: step, n: countBelow(step, durNs), track: track, video: video, frames: frames}
@@ -114,7 +115,7 @@ func streams(c *Clip, pl placement, dur uint64) []stream {
 		}
 		return s
 	}
-	ss := []stream{mk(float64(c.FrameDur), pl.video, true, c.Video)}
+	ss := []stream{mk(float64(c.FrameDur), pl.video, true, c.gop(fade))}
 	for a, ac := range c.Audio {
 		if audioOn(pl, a, ac) {
 			ss = append(ss, mk(ac.FrameDur, pl.audio[a], false, [][]byte{ac.Frame}))
@@ -129,7 +130,7 @@ func intervalSize(c *Clip, pl placement, iv interval) (int64, error) {
 		return 0, err
 	}
 	size := numClusters(iv.Dur, pl.scale) * clusterOverhd
-	for _, s := range streams(c, pl, iv.Dur) {
+	for _, s := range streams(c, pl, iv.Dur, iv.Fade) {
 		size += s.bytesBefore(s.n)
 	}
 	return size, nil
@@ -166,8 +167,14 @@ func newIvPlan(c *Clip, pl placement, iv interval) (*ivPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	if iv.Fade && size > iv.End-iv.Start { // the fade does not fit: the static notice
+		iv.Fade = false
+		if size, err = intervalSize(c, pl, iv); err != nil {
+			return nil, err
+		}
+	}
 	total := iv.End - iv.Start
-	p := &ivPlan{iv: iv, scale: pl.scale, ss: streams(c, pl, iv.Dur), ncl: int(numClusters(iv.Dur, pl.scale))}
+	p := &ivPlan{iv: iv, scale: pl.scale, ss: streams(c, pl, iv.Dur, iv.Fade), ncl: int(numClusters(iv.Dur, pl.scale))}
 	if size > total { // a Cue gap too short for the notice: Clusters without blocks, the image stays
 		p.ss, size = nil, int64(p.ncl)*clusterOverhd
 	}

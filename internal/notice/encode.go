@@ -54,7 +54,8 @@ func fps(frameDur int64) string {
 }
 
 // Video encodes one GOP of the notice in the film's format: frames[0] is an IDR, no B-frames.
-func (e *Encoder) Video(ctx context.Context, x Format) ([][]byte, []byte, error) {
+// fade > 0 opens it with that many frames rising from black.
+func (e *Encoder) Video(ctx context.Context, x Format, fade int) ([][]byte, []byte, error) {
 	dir, err := os.MkdirTemp(e.TmpDir, "notice-")
 	if err != nil {
 		return nil, nil, err
@@ -65,7 +66,12 @@ func (e *Encoder) Video(ctx context.Context, x Format) ([][]byte, []byte, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	err = Render(x.Width, x.Height, x.BitDepth, x.Transfer).WriteRaw(f, x.BitDepth)
+	for k := 0; k < fade && err == nil; k++ {
+		err = RenderLevel(x.Width, x.Height, x.BitDepth, x.Transfer, float64(k)/float64(fade)).WriteRaw(f, x.BitDepth)
+	}
+	if err == nil {
+		err = Render(x.Width, x.Height, x.BitDepth, x.Transfer).WriteRaw(f, x.BitDepth)
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -77,9 +83,10 @@ func (e *Encoder) Video(ctx context.Context, x Format) ([][]byte, []byte, error)
 	if x.BitDepth > 8 {
 		pix = "yuv420p10le"
 	}
-	args := []string{"-stream_loop", "-1", "-f", "rawvideo", "-pix_fmt", pix,
+	// The last raw frame (the notice) is held for the rest of the GOP.
+	args := []string{"-f", "rawvideo", "-pix_fmt", pix,
 		"-s", fmt.Sprintf("%dx%d", x.Width, x.Height), "-r", fps(x.FrameDur), "-i", raw,
-		"-frames:v", fmt.Sprint(n), "-pix_fmt", pix, "-preset", "ultrafast"}
+		"-vf", "tpad=stop_mode=clone:stop=-1", "-frames:v", fmt.Sprint(n), "-pix_fmt", pix, "-preset", "ultrafast"}
 	// Colour goes into the encoder's own VUI: the wrappers do not copy -color_* there reliably.
 	gop := fmt.Sprintf("keyint=%d:min-keyint=%d:bframes=0:scenecut=0:open-gop=0:repeat-headers=1", n, n)
 	for k, v := range map[string]string{"colorprim": x.Primaries, "transfer": x.TRC, "colormatrix": x.Matrix} {

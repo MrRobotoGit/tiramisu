@@ -55,7 +55,7 @@ func timeline(f *Film, cues []Cue, v, splEnd int64, nextTime uint64, fileSize, b
 	var ivs []interval
 	add := func(start, end int64, t, d uint64) {
 		if end > start {
-			ivs = append(ivs, interval{start, end, t, max(d, 1)})
+			ivs = append(ivs, interval{Start: start, End: end, Time: t, Dur: max(d, 1)})
 		}
 	}
 	if len(cues) > 0 {
@@ -200,6 +200,9 @@ func newLayout(f *Film, cues []Cue, prefix []byte, clusterStart int64, t0 *uint6
 	ivs, e, err := timeline(f, cues, l.V, l.spEnd, next, fileSize, bitrate)
 	if err != nil {
 		return nil, err
+	}
+	if len(ivs) > 0 {
+		ivs[0].Fade = true // the notice fades in where it starts
 	}
 	l.ivs, l.E = ivs, e
 	for _, iv := range ivs { // a gap too short for the notice gets empty Clusters or a Void (newIvPlan)

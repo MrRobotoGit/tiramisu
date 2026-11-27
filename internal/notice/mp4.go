@@ -464,6 +464,7 @@ type mp4Sample struct {
 	kind uint8 // sampleZero, sampleVideo, sampleAudio
 	sync bool  // a sync sample of the film: where a seek lands
 	role int32 // video: clip frame, -1 filler only; audio: clip audio index
+	fade bool  // video: role indexes the clip's fade GOP
 }
 
 const (
@@ -521,22 +522,25 @@ func NewMP4Layout(mv *Movie, v int64, x Format, c *Clip) (*MP4Layout, error) {
 	}
 	sort.Slice(l.samples, func(i, j int) bool { return l.samples[i].off < l.samples[j].off })
 	gop := -1 // next clip frame; -1 waits for a sample the IDR fits in
+	fade, started := false, false
 	for i := range l.samples {
 		s := &l.samples[i]
 		if s.kind != sampleVideo {
 			continue
 		}
 		s.role = -1
-		// A seek lands on the film's sync samples: each one restarts the GOP on an IDR.
+		// A seek lands on the film's sync samples: each one restarts the GOP on an IDR. The
+		// first GOP fades in when its IDR fits.
 		if s.sync || gop < 0 || gop >= len(c.Video) {
 			gop = -1
-			if l.fits(len(c.Video[0]), s.size) {
-				s.role, gop = 0, 1
+			fade = !started && len(c.Fade) > 0 && l.fits(len(c.Fade[0]), s.size)
+			if fade || l.fits(len(c.Video[0]), s.size) {
+				s.role, s.fade, gop, started = 0, fade, 1, true
 			}
 			continue
 		}
-		if l.fits(len(c.Video[gop]), s.size) {
-			s.role = int32(gop)
+		if fr := c.gop(fade); l.fits(len(fr[gop]), s.size) {
+			s.role, s.fade = int32(gop), fade
 			gop++
 		}
 	}
@@ -579,7 +583,7 @@ func (l *MP4Layout) sample(dst []byte, s mp4Sample, rel int64) {
 	case s.kind == sampleAudio:
 		head = l.clip.Audio[s.role].Frame
 	case s.kind == sampleVideo && s.role >= 0:
-		head = l.clip.Video[s.role]
+		head = l.clip.gop(s.fade)[s.role]
 	case s.kind == sampleVideo && int(s.size) < l.fillerMin():
 		return
 	case s.kind != sampleVideo:
