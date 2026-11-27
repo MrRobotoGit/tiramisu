@@ -383,6 +383,38 @@ func (c *Client) SearchTVBest(ctx context.Context, query string, firstAirYear st
 	return shows[0], nil
 }
 
+// FindTVByIMDB returns the show behind an IMDB id, one request instead of a name
+// search plus an external-ids lookup.
+func (c *Client) FindTVByIMDB(ctx context.Context, imdbID string) (TVShow, error) {
+	if err := c.limiter.Wait(ctx); err != nil {
+		return TVShow{}, err
+	}
+	urlStr := fmt.Sprintf("%s/find/%s?api_key=%s&external_source=imdb_id",
+		baseURL, url.PathEscape(imdbID), c.apiKey)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return TVShow{}, err
+	}
+	resp, err := catalog.Do(ctx, c.http, req)
+	if err != nil {
+		return TVShow{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return TVShow{}, fmt.Errorf("TMDB answered %d", resp.StatusCode)
+	}
+	var result struct {
+		TVResults []TVShow `json:"tv_results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return TVShow{}, err
+	}
+	if len(result.TVResults) == 0 {
+		return TVShow{}, fmt.Errorf("no TV show for %s", imdbID)
+	}
+	return result.TVResults[0], nil
+}
+
 func (c *Client) fetchDiscoverPage(ctx context.Context, urlStr string) ([]Movie, error) {
 	if err := c.limiter.Wait(ctx); err != nil {
 		return nil, err

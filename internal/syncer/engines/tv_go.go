@@ -328,6 +328,12 @@ func (e *TVGoEngine) Run(ctx context.Context) error {
 		e.processShow(ctx, show)
 	}
 
+	handled := make(map[int]bool, len(shows))
+	for _, s := range shows {
+		handled[s.ID] = true
+	}
+	e.followLibraryShows(ctx, handled)
+
 	// After the loop: a pack that died on an old season is outside the discovery
 	// window, so this is the only pass that reaches it. Before the cleanup, which
 	// deletes anything the registry no longer lists.
