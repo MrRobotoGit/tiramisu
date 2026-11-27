@@ -12,6 +12,7 @@ type Config struct {
 	ChunkSize int                                // default DefaultChunkSize
 	Settings  func() (responsive, adaptive bool) // user ResponsiveMode and AdaptiveShield
 	Logf      func(format string, args ...any)
+	OnCorrupt func(hash string, off, n int64) // a piece failed its hash (TorrentStore.onCorrupt)
 }
 
 // Store maps infohash (lowercase hex) to TorrentStore.
@@ -64,6 +65,7 @@ func (s *Store) Open(hash string, pieceLen, length int64) *TorrentStore {
 	sh := newShield(hash, shieldConfig{enabled: s.cfg.Settings, logf: s.cfg.Logf, now: time.Now, poll: time.Second})
 	s.mu.Lock()
 	t := newTorrentStore(hash, pieceLen, length, s.cfg.Capacity, s.poolLocked(s.chunkSize(pieceLen)), sh)
+	t.onCorrupt = s.cfg.OnCorrupt
 	s.torrents[hash] = t
 	s.mu.Unlock()
 	return t

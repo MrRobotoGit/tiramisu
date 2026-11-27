@@ -32,6 +32,7 @@ type goodput struct {
 	next  int
 	at    time.Time
 	bytes int64
+	seq   int64 // samples taken since the torrent's state began
 }
 
 func (g *goodput) observe(now time.Time, total int64, wanting bool) {
@@ -44,9 +45,27 @@ func (g *goodput) observe(now time.Time, total int64, wanting bool) {
 		return
 	}
 	g.ring[g.next] = float64(total-g.bytes) / el.Seconds()
+	g.seq++
 	g.next = (g.next + 1) % len(g.ring)
 	g.n = min(g.n+1, len(g.ring))
 	g.at, g.bytes = now, total
+}
+
+// delivered is the window's samples taken after sample since, oldest first, from the first one
+// with bytes on: seconds in which the swarm was still connecting measure the bootstrap, not it.
+func (g *goodput) delivered(since int64) []float64 {
+	k := int(min(max(g.seq-since, 0), int64(g.n)))
+	out := make([]float64, 0, k)
+	for i := k - 1; i >= 0; i-- {
+		v := g.ring[(g.next-1-i+2*len(g.ring))%len(g.ring)]
+		if len(out) > 0 || v > 0 {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // quantile is the nearest-rank q-quantile of the window; false with too few samples.
@@ -205,6 +224,49 @@ func (s *Streamer) pausedCh() <-chan struct{} {
 	s.riskMu.Lock()
 	defer s.riskMu.Unlock()
 	return s.riskCh
+}
+
+// torrentFor is the open torrent behind hash, nil when none.
+func (s *Streamer) torrentFor(hash string) *Torrent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for ts, tt := range s.tors {
+		if ts.Hash() == hash && !ts.Closed() {
+			return tt
+		}
+	}
+	return nil
+}
+
+// GoodputSeq is how many 1 s goodput samples hash's torrent has taken: Goodput(hash, since) then
+// counts only the later ones. 0 when no open torrent matches.
+func (s *Streamer) GoodputSeq(hash string) int64 {
+	t := s.torrentFor(hash)
+	if t == nil {
+		return 0
+	}
+	t.passMu.Lock()
+	defer t.passMu.Unlock()
+	return t.gp.seq
+}
+
+// Goodput is the median goodput (bytes/s) the swarm delivered to hash over the samples taken after
+// sample since, from the first one with a delivered byte, within the stall-risk window, and how
+// many back it (the median needs goodputMinSamples); false when no open torrent matches. Seconds
+// with nothing requested are not samples (goodput.observe).
+func (s *Streamer) Goodput(hash string, since int64) (p50 float64, samples int, ok bool) {
+	t := s.torrentFor(hash)
+	if t == nil {
+		return 0, 0, false
+	}
+	t.passMu.Lock()
+	d := t.gp.delivered(since)
+	t.passMu.Unlock()
+	if len(d) >= goodputMinSamples {
+		slices.Sort(d)
+		p50 = d[max(int(math.Ceil(0.5*float64(len(d))))-1, 0)]
+	}
+	return p50, len(d), true
 }
 
 // AtRisk is how many torrents are at risk now: while it is above 0 speculative reads pause.

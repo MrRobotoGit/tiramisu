@@ -66,6 +66,7 @@ func legacyLoadConfig() Config {
 		ProxyListenPort:  8080,
 		MetricsPort:      9080,
 		BlockListEnabled: false,
+		StallNotice:      true,
 
 		EnableTelemetry: true,
 		TelemetryURL:    "https://telemetry.gostream.workers.dev",

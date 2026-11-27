@@ -6,6 +6,7 @@ import (
 
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -628,4 +629,43 @@ func (c *Cache) triggerGlobalEviction(activePath string, activeSessionID int64) 
 		evictShard(s)
 		s.mu.Unlock()
 	}
+}
+
+// Drop forgets every chunk of path overlapping [off, end): bytes of a piece that failed its hash.
+func (c *Cache) Drop(p string, off, end int64) {
+	s := c.getShard(p)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := p + ":"
+	for key, b := range s.buffers {
+		if !strings.HasPrefix(key, prefix) || b.end < off || b.start >= end {
+			continue
+		}
+		delete(s.buffers, key)
+		s.total -= int64(len(b.data))
+		atomic.AddInt64(&c.used, -int64(len(b.data)))
+		c.recycle(b.data)
+		if i := slices.Index(s.order, key); i >= 0 {
+			s.order = slices.Delete(s.order, i, i+1)
+		}
+	}
+}
+
+// CopyAny copies into dest the bytes at off from whichever cached chunk of path holds off,
+// whatever offset that chunk was stored from (CopyTo only looks under off's own chunk key); it
+// returns how many contiguous bytes it copied from that one chunk.
+func (c *Cache) CopyAny(p string, off int64, dest []byte) int {
+	s := c.getShard(p)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if b, ok := s.buffers[c.chunkKey(p, off)]; ok && off >= b.start && off <= b.end {
+		return copy(dest, b.data[off-b.start:])
+	}
+	prefix := p + ":"
+	for key, b := range s.buffers {
+		if off >= b.start && off <= b.end && strings.HasPrefix(key, prefix) {
+			return copy(dest, b.data[off-b.start:])
+		}
+	}
+	return 0
 }

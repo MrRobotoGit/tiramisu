@@ -11,6 +11,7 @@ import (
 	"tiramisu/internal/engine"
 	"tiramisu/internal/mkvinfo"
 	"tiramisu/internal/piecemap"
+	"tiramisu/internal/streampolicy"
 	"tiramisu/internal/warmup"
 )
 
@@ -42,8 +43,16 @@ func (h *MkvHandle) attachToExistingPump(ps *NativePumpState) bool {
 	h.pumpCancel = ps.cancel
 	h.mu.Unlock()
 	atomic.AddInt32(&ps.refCount, 1)
-	globalOpenTracker.Inc(h.hash, h.path)
+	globalOpenTracker.IncFor(h, h.hash, h.path)
 	return true
+}
+
+// announceForNotice forces a tracker announce for a swarm with no peer: the peers it returned and
+// the trackers that answered without error.
+func announceForNotice(hash string, done func(peers, answered int)) {
+	if t := eng.Get(hash); t != nil {
+		t.AnnounceTracked(func(peers, errs, total int, _ []string) { done(peers, total-errs) })
+	}
 }
 
 // terminateOrphanPump cancels and forgets any pump registered for path. The cleanup sweep
@@ -108,7 +117,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		h.nativeReader = ps.reader
 		h.pumpCancel = ps.cancel
 		h.mu.Unlock()
-		globalOpenTracker.Inc(h.hash, h.path)
+		globalOpenTracker.IncFor(h, h.hash, h.path)
 		// Primary reconnect (refCount 0→1): inherit player position.
 		// Secondary handles (Plex probes at arbitrary offsets): no inheritance.
 		if newRefs == 1 {
@@ -140,7 +149,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 			h.nativeReader = ps.reader
 			h.pumpCancel = ps.cancel
 			h.mu.Unlock()
-			globalOpenTracker.Inc(h.hash, h.path)
+			globalOpenTracker.IncFor(h, h.hash, h.path)
 			if newRefs == 1 {
 				becomePrimary(h)
 				if curPos := atomic.LoadInt64(&ps.playerOff); curPos > 0 {
@@ -177,7 +186,7 @@ func (h *MkvHandle) startNativePump(finalHash string, fileIdx int) {
 		}
 		activePumps.Store(h.path, sharedState)
 		h.pumpState = sharedState
-		globalOpenTracker.Inc(h.hash, h.path)
+		globalOpenTracker.IncFor(h, h.hash, h.path)
 		pumpCreationMu.Unlock() // SUCCESS: Shared state registered, global lock released
 
 		logger.Printf("[V264] Native Pump Started (Slot Acquired): %s", filepath.Base(h.path))
@@ -429,13 +438,13 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *bridge.NativeRea
 				off := atomic.LoadInt64(&handle.lastOff)
 				// SSD-tail reads are Cues probes served from disk: following them sent the pump to EOF.
 				if handle.isPrimaryHandle.Load() {
-					if shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize) {
+					if streampolicy.ShouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize) {
 						tailOnly = true
 					} else if off > playerOff {
 						playerOff = off
 					}
 				}
-				if off > anyReaderOff && off < h.size-tailProbeZoneSize(h.size) {
+				if off > anyReaderOff && off < h.size-streampolicy.TailProbeZoneSize(h.size) {
 					anyReaderOff = off
 				}
 			}
@@ -459,7 +468,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *bridge.NativeRea
 			offset = jumpTo
 			pumpedBytes = 0                 // reset grace period so throttle doesn't fire immediately
 			watchSamples = watchSamples[:0] // V752: fresh window after jump — rates across a jump are meaningless
-		} else if pumpStrandedAhead(offset, playerOff, jumpThreshold) {
+		} else if streampolicy.PumpStrandedAhead(offset, playerOff, jumpThreshold) {
 			// V754: the snap above only fires forward, so a pump anchored past the player could
 			// never rejoin it — nativePumpChunk's hard limit parked it in a 100ms sleep for the
 			// whole session while every read fell through to blocking FetchBlock.
@@ -489,7 +498,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *bridge.NativeRea
 			if elapsed >= 9 {
 				pumpRate := float64(lastS.offset-first.offset) / elapsed
 				playerRate := float64(lastS.playerOff-first.playerOff) / elapsed
-				if shouldFireStarvationRevival(playbackConfirmedOrInferred, offset-playerOff, pumpRate, playerRate, now.Sub(lastRevival)) {
+				if streampolicy.ShouldFireStarvationRevival(playbackConfirmedOrInferred, offset-playerOff, pumpRate, playerRate, now.Sub(lastRevival)) {
 					// Same core as V286b: Interrupt unblocks the in-flight chunk read and
 					// the retry path re-issues it with fresh peer selection; ResetShield
 					// clears adaptive state. interruptPending prevents cascade with seeks.
@@ -556,7 +565,7 @@ func (h *MkvHandle) nativePump(ctx context.Context, pumpReader *bridge.NativeRea
 // (tail probes excluded; before confirmation the player is often an attached secondary), the pump
 // fills the warmup head plus one chunk; a real player crosses 2MB within a second.
 func probePumpParked(confirmedOrInferred bool, playerOff, offset, chunkSize int64) bool {
-	if confirmedOrInferred || playerOff >= headerProbeZone {
+	if confirmedOrInferred || playerOff >= streampolicy.HeaderProbeZone {
 		return false
 	}
 	return offset >= warmup.FileSize+chunkSize
@@ -766,7 +775,7 @@ func pieceMapFor(hash string) *piecemap.Map {
 		if c.hash != hash || !c.isPrimaryHandle.Load() {
 			return true
 		}
-		if o := atomic.LoadInt64(&c.lastOff); o > off && !shouldServeTailFromSSD(o, c.size, warmup.TailWarmupSize) {
+		if o := atomic.LoadInt64(&c.lastOff); o > off && !streampolicy.ShouldServeTailFromSSD(o, c.size, warmup.TailWarmupSize) {
 			h, off = c, o
 		}
 		return true

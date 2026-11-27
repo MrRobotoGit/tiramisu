@@ -20,6 +20,7 @@ import (
 	"tiramisu/internal/prowlarr"
 	"tiramisu/internal/ratelimit"
 	"tiramisu/internal/readstats"
+	"tiramisu/internal/stallnotice"
 	syncercache "tiramisu/internal/syncer/cache"
 	"tiramisu/internal/vfs"
 )
@@ -32,6 +33,7 @@ var masterDataSemaphore chan struct{}
 var startTime = time.Now()
 var metaCache *cache.LRUCache
 var raCache = newRaCache()
+var stallNotices = stallnotice.New(stallnotice.Deps{}) // off until Boot: tests and the simulator
 
 // globalProfilingStats counts FUSE reads for /metrics/profiling.
 var globalProfilingStats = &readstats.Stats{}

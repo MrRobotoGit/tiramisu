@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 	"tiramisu/internal/bridge"
+	"tiramisu/internal/streampolicy"
 	"tiramisu/internal/warmup"
 )
 
@@ -153,6 +154,7 @@ type TTFFSession struct {
 	// about the release, and the second fires precisely under the load that would
 	// make a healthy title look dead.
 	readFailed atomic.Bool
+	noticed    atomic.Bool // the session played the stall notice: a failed playback, whatever it served
 	// servedByNet records that a read was served straight from the swarm
 	// (srcFetchBlock). Its counterpart above condemns; this one acquits. Deliberately
 	// not bytesRead: that counts what the player received, and the SSD warmup and the
@@ -189,14 +191,14 @@ func (s *TTFFSession) recordRead(src ttffSource, d time.Duration, n int, off int
 			s.firstDeepReadAt.CompareAndSwap(0, nowN)
 		}
 		if prev := s.lastOff.Load(); prev > 0 {
-			if b := gc(); b != nil && shouldInterruptForSeek(prev, off, b.ReadAheadBudget) {
+			if b := gc(); b != nil && streampolicy.ShouldInterruptForSeek(prev, off, b.ReadAheadBudget) {
 				s.seekCount.Add(1)
 				ttffStats.seekLatency.Add(d)
 			}
 		} else if prev == 0 {
 			// Previous data read was the header at offset 0 — a served read,
 			// not an uninitialized offset (those are seeded -1 by ttffRegister,
-			// and shouldInterruptForSeek ignores prevOff<=0). A jump beyond the
+			// and streampolicy.ShouldInterruptForSeek ignores prevOff<=0). A jump beyond the
 			// read-ahead budget from the header is a real seek.
 			if b := gc(); b != nil && off > b.ReadAheadBudget {
 				s.seekCount.Add(1)
@@ -219,7 +221,7 @@ func (s *TTFFSession) recordRead(src ttffSource, d time.Duration, n int, off int
 
 // ttffIsReal decides at close time whether a session was a real playback
 // (vs a Plex/Samba scan probe). Scanners read almost nothing — even a tail
-// Cues probe stays within one chunk (see tailProbeZoneSize in stream_policy.go);
+// Cues probe stays within one chunk (see streampolicy.TailProbeZoneSize in stream_policy.go);
 // any 1MB+ of data, or a tail/deep read of more than 64KB, is playback.
 func ttffIsReal(tailOrDeep bool, bytesRead int64) bool {
 	if bytesRead >= ttffProbeMinRead {
@@ -258,6 +260,13 @@ func (s *TTFFSession) reportSwarmVerdict() {
 	// counter had gathered, however the session ended afterwards. Without this the
 	// count only ever grows, and a release broken for a day by a tracker outage is
 	// reaped after it has already recovered.
+	if s.noticed.Load() { // the same floor as below: one slow start never condemns a release
+		if opened := s.openedAt.Load(); opened != 0 && time.Since(time.Unix(0, opened)) >= sessionVerdictFloor {
+			logger.Printf("[DeadSwarm] session of %s played the stall notice", filepath.Base(s.path))
+			bridge.ReachabilityOutcome(s.hash, false)
+		}
+		return
+	}
 	if s.servedByNet.Load() {
 		bridge.ReachabilityOutcome(s.hash, true)
 		return
@@ -427,8 +436,9 @@ func ttffRegister(path string, size int64, hash string, headReady, tailReady boo
 	ns.lastOff.Store(-1)
 	if actual, loaded := sessions.LoadOrStore(path, ns); loaded {
 		s := actual.(*TTFFSession)
-		if s.closed.Load() {
-			sessions.Store(path, ns) // resurrect after close
+		if s.closed.Load() || s.noticed.Load() && !stallNotices.Active(path) { // closed, or a notice that ended
+			s.closeSession() // no-op when closed; a noticed session gives its verdict before the fresh start
+			sessions.Store(path, ns)
 			return
 		}
 		if s.firstDataAt.Load() == 0 {
@@ -444,6 +454,7 @@ func ttffRegister(path string, size int64, hash string, headReady, tailReady boo
 // ttffRead records one served read: per-source histogram always; session state
 // when a session exists for the path.
 func ttffRead(path string, src ttffSource, d time.Duration, n int, off int64) {
+	stallNotices.Served(path, off, n)
 	switch src {
 	case srcWarmupHead:
 		ttffStats.warmupHead.Add(d)
@@ -467,13 +478,17 @@ func ttffReadFailed(path string) {
 	}
 }
 
-// ttffReleaseClose closes the session immediately on Release when nothing was
-// ever read (scan probe). Guarded by the open-handle tracker: a probe handle
-// releasing while a player has the same path open (even with 0 bytes read —
-// cold-start Wake window) must not kill the player's session; those sessions
-// are reaped by ttffCleanupLoop instead. Note: at this point the releasing
-// handle is still counted by the tracker (Dec runs later in Release), so only
-// slot-less probes close immediately — exactly the intended behavior.
+// ttffNoticeShown marks the session as one that played the stall notice: a failed playback.
+func ttffNoticeShown(path string) {
+	if val, ok := sessions.Load(path); ok {
+		val.(*TTFFSession).noticed.Store(true)
+	}
+}
+
+// ttffReleaseClose closes the session on Release when nothing was ever read (scan probe). A probe
+// releasing while a player has the path open (even with 0 bytes read: cold-start Wake window) must
+// not kill the player's session, reaped by ttffCleanupLoop instead. The releasing handle is still
+// counted here (ReleaseFor runs later in Release), so only slot-less probes close immediately.
 func ttffReleaseClose(path string) {
 	if globalOpenTracker.IsPathOpen(path) {
 		return

@@ -24,6 +24,9 @@ type TorrentStore struct {
 	// lastData: unix nanos of the last write or verification into any piece (0: none)
 	lastData atomic.Int64
 	received atomic.Int64 // bytes written into pieces
+	// onCorrupt gets the torrent byte range of a piece that failed its hash: copies of its
+	// unverified bytes kept outside the store (read-ahead cache, SSD warmup) are wrong.
+	onCorrupt func(hash string, off, n int64)
 }
 
 func newTorrentStore(hash string, pieceLen, length, capacity int64, pool *ChunkPool, shield *Shield) *TorrentStore {
@@ -92,6 +95,9 @@ func (t *TorrentStore) dataArrived() {
 func (t *TorrentStore) MarkNotComplete(i int) {
 	if p := t.Piece(i); p != nil && p.markNotComplete() && !t.Closed() {
 		t.shield.Corruption(i)
+		if f := t.onCorrupt; f != nil {
+			go f(t.hash, int64(i)*t.pieceLen, p.length) // the engine calls this under its lock
+		}
 	}
 }
 

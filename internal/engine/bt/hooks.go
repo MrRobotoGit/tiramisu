@@ -1,6 +1,10 @@
 package bt
 
-import "github.com/anacrolix/torrent"
+import (
+	"time"
+
+	"github.com/anacrolix/torrent"
+)
 
 // Fork hooks used by Tiramisu (engine.md §4); the types are the fork's plain structs.
 type (
@@ -17,6 +21,7 @@ func (t *Torrent) PieceWindow(first, n int) []PieceWindowState {
 func (t *Torrent) AnnounceTracked(onDone func(peers, errs, total int, failures []string)) {
 	t.t.AnnounceTracked(onDone)
 }
+func (t *Torrent) UnchokeSettle() time.Duration              { return t.t.UnchokeSettle() }
 func (t *Torrent) HedgeTriggerCount() int64                  { return t.t.HedgeTriggerCount() }
 func (t *Torrent) PieceDeadlineCount() int                   { return t.t.PieceDeadlineCount() }
 func (t *Torrent) HedgeCircuitOpen() bool                    { return t.t.HedgeCircuitOpen() }

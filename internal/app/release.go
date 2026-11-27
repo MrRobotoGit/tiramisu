@@ -35,6 +35,8 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 	// without slot, replaced pump) would otherwise leak this entry, and both the live
 	// handle checks (anyLiveHandleFor*) and cleanup's activePaths trust the map.
 	activeHandles.Delete(h)
+	stallNotices.Release(h)
+	globalOpenTracker.ReleaseFor(h) // each increment this handle made, even when its pump entry is gone
 
 	if val, ok := activePumps.Load(h.path); ok {
 		ps := val.(*NativePumpState)
@@ -48,7 +50,6 @@ func (h *MkvHandle) Release(fuseCtx context.Context) syscall.Errno {
 		if !h.hasSlot.Load() {
 			return 0
 		}
-		globalOpenTracker.Dec(h.hash, h.path)
 		if !ownsPumpState(h.pumpState, ps) {
 			logger.Printf("[Pump] Stale handle for %s: pump was replaced, refCount left alone", filepath.Base(h.path))
 			return 0

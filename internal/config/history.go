@@ -19,7 +19,7 @@ var secretKeys = map[string]bool{"plex.token": true, "tmdb_api_key": true, "prow
 
 // liveKeys apply without a restart (applyConfig, or read through gc() on every use); every
 // other key is captured at start-up by the mount, the syncers or the clients.
-var liveKeys = map[string]bool{"blocklist_enabled": true, "blocklist_url": true, "blocklist_filter": true,
+var liveKeys = map[string]bool{"stall_notice": true, "blocklist_enabled": true, "blocklist_url": true, "blocklist_filter": true,
 	"log_level": true, "telemetry": true}
 
 // Diff flattens both documents to dotted keys (arrays compared whole) and lists what differs.

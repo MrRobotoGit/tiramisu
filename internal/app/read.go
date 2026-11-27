@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 	"tiramisu/internal/readstats"
+	"tiramisu/internal/streampolicy"
 	"tiramisu/internal/vfs"
 	"tiramisu/internal/warmup"
 
@@ -111,6 +112,13 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	if off >= h.size {
 		return fuse.ReadResultData(nil), 0
 	}
+	nk, noticed, vLimit := stallNotices.Serve(h.path, dest, off)
+	if dest = dest[:vLimit]; noticed { // a read crossing V takes the film only up to V
+		h.mu.Lock()
+		h.lastActivityTime = now // the orphan-handle GC must not reap a handle playing the notice
+		h.mu.Unlock()
+		return fuse.ReadResultData(dest[:nk]), 0
+	}
 	if errno := h.awaitWake(fuseCtx); errno != 0 {
 		return nil, errno
 	}
@@ -121,6 +129,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 		if hash, fileID, err := resolveTargetFileFn(h.url, h.size, h.path); err == nil {
 			h.hash = hash
 			h.fileID = fileID
+			stallNotices.Open(h, h.path, h.hash, h.fileID, h.size)
 			logger.Printf("[LateResolution] Recovered hash for %s: %s", filepath.Base(h.path), h.hash[:8])
 			go h.pumpOnce.Do(func() {
 				h.startNativePump(h.hash, h.fileID)
@@ -140,7 +149,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 			ps.LastReadAt = now
 			// Tail-zone reads (MKV Cues probes) and unconfirmed reads (Plex background scans)
 			// must never count as real playback progress here.
-			if shouldRecordResumeOff(ps.IsHealthy, h.isPrimaryHandle.Load(), off, h.size) {
+			if streampolicy.ShouldRecordResumeOff(ps.IsHealthy, h.isPrimaryHandle.Load(), off, h.size) {
 				ps.LastSeekOff = off
 			}
 			ps.mu.Unlock()
@@ -243,8 +252,8 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	// restarts and resets the flag (preventing the thrash loop seen in the logs).
 	budget := int64(gc().ReadAheadBudget)
 	seekReader := h.nativeReader // capture: a concurrent Release nils the field
-	if seekReader != nil && !headerRead && shouldInterruptPump(prevOff, off, budget, shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize),
-		prevOff >= 0 && shouldServeTailFromSSD(prevOff, h.size, warmup.TailWarmupSize)) {
+	if seekReader != nil && !headerRead && streampolicy.ShouldInterruptPump(prevOff, off, budget, streampolicy.ShouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize),
+		prevOff >= 0 && streampolicy.ShouldServeTailFromSSD(prevOff, h.size, warmup.TailWarmupSize)) {
 		// Promote to primary on a genuine seek once playback is confirmed/inferred - mirrors the
 		// refCount 0->1 "primary reconnect" promotion at attach time (startNativePump, pump.go): a secondary
 		// (attached) handle doing a real seek during confirmed playback IS the player, and needs
@@ -346,7 +355,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 	// FetchBlock instead of the complete SSD tail file (~16s TTFF on a 36.6GB remux,
 	// 2026-08-06). ReadTail is range-safe: returns (0,nil) when the tail file's coverage
 	// doesn't include the offset.
-	if h.usesWarmup && warmup.DiskWarmup != nil && shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize) {
+	if h.usesWarmup && warmup.DiskWarmup != nil && streampolicy.ShouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize) {
 		n, _ := warmup.DiskWarmup.ReadTail(h.hash, h.fileID, dest, off, h.size)
 		if n > 0 {
 			timing.UsedCache = true
@@ -514,7 +523,7 @@ func (h *MkvHandle) readInner(fuseCtx context.Context, dest []byte, off int64) (
 							}
 							activePumps.Store(h.path, sharedState)
 							h.pumpState = sharedState
-							globalOpenTracker.Inc(h.hash, h.path)
+							globalOpenTracker.IncFor(h, h.hash, h.path)
 
 							logger.Printf("[Pump] Upgraded on-the-fly for confirmed playback: %s", filepath.Base(h.path))
 
@@ -606,6 +615,10 @@ pumpSlotResolved:
 			awaitDone := nativeBridge.AwaitFill(h.hash, h.fileID, off)
 			leaderDone := false
 			for {
+				if k, noticed, _ := stallNotices.Serve(h.path, dest, off); noticed {
+					awaitDone()
+					return fuse.ReadResultData(dest[:k]), 0
+				}
 				if nCopy := raCache.CopyTo(h.path, off, end, dest); nCopy > 0 {
 					awaitDone()
 					fetchFlightDedupCount.Add(1)
@@ -681,8 +694,8 @@ pumpSlotResolved:
 			if belowLeader && limit > int64(target) {
 				buf = buf[:target]
 			}
-			nFetch, err := nativeBridge.FetchAhead(h.hash, h.fileID, off, buf, dest[:target],
-				func(total int, done bool, _ error) {
+			nFetch, noticed, err := stallNotices.Await(fuseCtx, h.path, off, h.isPrimaryHandle.Load(), dest[:target], func(d []byte) (int, error) {
+				return nativeBridge.FetchAhead(h.hash, h.fileID, off, buf, d, func(total int, done bool, _ error) {
 					if total > 0 && !belowLeader {
 						raCache.Put(h.path, off, off+int64(total)-1, buf[:total])
 					}
@@ -695,6 +708,11 @@ pumpSlotResolved:
 					releaseFlight()
 					readBufferPool.Put(bufPtr)
 				})
+			})
+			if noticed { // the fill goes on into buf and releases the flight and the buffer when done
+				fetchHandedOff = true
+				return fuse.ReadResultData(dest[:nFetch]), 0
+			}
 			if err == nil && nFetch > 0 {
 				n = nFetch
 				fetchHandedOff = true
@@ -711,8 +729,14 @@ pumpSlotResolved:
 		}
 	}
 
-	// Terminal once the bounded retries are spent. EAGAIN reads as "try again" to
-	// a scanner, which then blocks or loops on bytes that are never coming.
+	// Terminal once the bounded retries are spent (EAGAIN would make a scanner loop on bytes
+	// that are never coming); inside the stall notice's window the player gets the notice.
+	if k, noticed := stallNotices.Fail(h.path, off, h.isPrimaryHandle.Load(), dest[:target]); noticed {
+		h.mu.Lock()
+		h.lastActivityTime = time.Now()
+		h.mu.Unlock()
+		return fuse.ReadResultData(dest[:k]), 0
+	}
 	ttffReadFailed(h.path)
 	return nil, syscall.EIO
 

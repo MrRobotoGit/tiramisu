@@ -319,6 +319,9 @@ type Config struct {
 	BlockListURL     string `json:"blocklist_url"`
 	// PeerGeoIPEnabled shows each peer's country in the swarm view (DB-IP Lite, downloaded monthly).
 	PeerGeoIPEnabled bool `json:"peer_geoip_enabled"`
+	// StallNotice plays a notice in place of a film whose swarm cannot carry it at startup. On by
+	// default; no Control Panel field: export/import the configuration to turn it off.
+	StallNotice bool `json:"stall_notice"`
 	// BlockListFilter keeps only the ranges whose description matches this regexp.
 	// Empty keeps the whole list. See blockedIP.go for why published lists need it.
 	BlockListFilter string `json:"blocklist_filter"`
@@ -503,6 +506,7 @@ func defaults() Config {
 		ProxyListenPort:  8080,
 		MetricsPort:      9080,
 		BlockListEnabled: false,
+		StallNotice:      true,
 
 		EnableTelemetry: true,
 		TelemetryURL:    "https://telemetry.gostream.workers.dev",

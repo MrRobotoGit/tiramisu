@@ -82,3 +82,45 @@ func TestReadAheadCacheEvictionKeepsPlayerNextChunk(t *testing.T) {
 		t.Fatalf("over budget: %dMB", used/mb)
 	}
 }
+
+func TestDropForgetsOverlappingChunksOfPathOnly(t *testing.T) {
+	c := newTest(&config.Config{ReadAheadBudget: 1 << 30}, nil)
+	p, other := "/a.mkv", "/b.mkv"
+	c.pieceLens.Store(p, int64(100))
+	c.pieceLens.Store(other, int64(100))
+	for i := int64(0); i < 4; i++ {
+		c.Put(p, i*100, i*100+99, make([]byte, 100))
+	}
+	c.Put(other, 100, 199, make([]byte, 100))
+	c.Drop(p, 150, 250) // chunks 1 and 2
+	for i, want := range []bool{true, false, false, true} {
+		if got := c.Covered(p, int64(i)*100, int64(i)*100+99); got != want {
+			t.Errorf("chunk %d cached %v, want %v", i, got, want)
+		}
+	}
+	if !c.Covered(other, 100, 199) {
+		t.Error("another path lost its chunk")
+	}
+	if _, _, n := c.Stats(); n != 3 {
+		t.Errorf("%d entries, want 3", n)
+	}
+}
+
+// A chunk stored from an offset in an earlier key still serves the bytes it holds.
+func TestCopyAnyFindsChunkStoredFromEarlierKey(t *testing.T) {
+	c := newTest(&config.Config{ReadAheadBudget: 1 << 30}, nil)
+	p := "/a.mkv"
+	c.pieceLens.Store(p, int64(100))
+	data := make([]byte, 250)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	c.Put(p, 50, 299, data) // keyed under chunk 0, holds 50..299
+	dest := make([]byte, 10)
+	if n := c.CopyTo(p, 220, 229, dest); n != 0 {
+		t.Fatalf("CopyTo found it after all (%d): the test no longer shows the gap", n)
+	}
+	if n := c.CopyAny(p, 220, dest); n != 10 || dest[0] != 170 {
+		t.Fatalf("CopyAny: n=%d first=%d", n, dest[0])
+	}
+}

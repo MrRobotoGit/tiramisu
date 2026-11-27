@@ -65,7 +65,7 @@ type MkvHandle struct {
 	pumpOnce        sync.Once
 	isPrimaryHandle atomic.Bool  // pump creator, primary reconnects (refCount 0→1), proven readers
 	seqAdvances     atomic.Int32 // consecutive sequential streaming reads, feeds the promotion below
-	headerChainEnd  atomic.Int64 // end of the last header read skipped by isHeaderRead, 0 if none
+	headerChainEnd  atomic.Int64 // end of the last header read skipped by streampolicy.IsHeaderRead, 0 if none
 	released        atomic.Bool  // Release ran once (orphan GC or kernel)
 	seqRun          atomic.Int32 // consecutive streaming advances, primary or not (feeds streamedOnce)
 	streamedOnce    atomic.Bool  // read sequentially like a player at least once

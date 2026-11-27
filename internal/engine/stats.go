@@ -139,6 +139,15 @@ func (t *Torrent) ActivePeers() int {
 	return t.bt.Stats().ActivePeers
 }
 
+// UnchokeSettle is how long until the connected peers that still keep us choked reach their
+// client's usual unchoke wait (0: none waiting).
+func (t *Torrent) UnchokeSettle() time.Duration {
+	if t.bt == nil {
+		return 0
+	}
+	return t.bt.UnchokeSettle()
+}
+
 // ListStreaming lists the hydrated torrents being streamed: consumers held or data flowing.
 func (e *Engine) ListStreaming() []*Torrent {
 	var out []*Torrent

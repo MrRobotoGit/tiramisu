@@ -75,6 +75,17 @@ func (c *NativeClient) ActivePeers(hash string) int {
 	return t.ActivePeers()
 }
 
+// UnchokeSettle is how long until the torrent's choking peers reach their usual unchoke wait.
+func (c *NativeClient) UnchokeSettle(hash string) time.Duration {
+	if c.eng == nil {
+		return 0
+	}
+	if t := c.eng.Get(hash); t != nil {
+		return t.UnchokeSettle()
+	}
+	return 0
+}
+
 // metadataWait bounds the wait for the metainfo in Wake (T11).
 var metadataWait = 45 * time.Second
 
@@ -481,6 +492,9 @@ func (r *NativeReader) IsIdle(d time.Duration) bool {
 
 // fetchBlockTimeout bounds a demand read end to end (V283, T4), under the smbd watchdog.
 var fetchBlockTimeout = 8 * time.Second
+
+// FetchTimeout bounds one fetch of the read path (a FetchAhead fill included).
+func FetchTimeout() time.Duration { return fetchBlockTimeout }
 
 // streamRangeFn opens [offset, offset+length) into pw and closes pw when it ends; a var so
 // FetchAhead can be exercised without a torrent.

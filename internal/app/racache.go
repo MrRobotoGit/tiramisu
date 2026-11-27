@@ -2,6 +2,7 @@ package app
 
 import (
 	"sync/atomic"
+	"tiramisu/internal/streampolicy"
 
 	"tiramisu/internal/racache"
 	"tiramisu/internal/warmup"
@@ -25,7 +26,7 @@ func handleReaders(path string) []racache.Reader {
 		h, ok := key.(*MkvHandle)
 		if ok && h.path == path {
 			off := atomic.LoadInt64(&h.lastOff)
-			rs = append(rs, racache.Reader{Off: off, Primary: h.isPrimaryHandle.Load(), Tail: shouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize)})
+			rs = append(rs, racache.Reader{Off: off, Primary: h.isPrimaryHandle.Load(), Tail: streampolicy.ShouldServeTailFromSSD(off, h.size, warmup.TailWarmupSize)})
 		}
 		return true
 	})

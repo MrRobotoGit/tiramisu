@@ -11,8 +11,9 @@ import "sync"
 // consultabile dall'esterno senza accedere a activePumps.
 type OpenTracker struct {
 	mu     sync.RWMutex
-	byHash map[string]int32 // torrent hash (lowercase hex40) → handle count
-	byPath map[string]int32 // file path (assoluto) → handle count
+	byHash map[string]int32    // torrent hash (lowercase hex40) → handle count
+	byPath map[string]int32    // file path (assoluto) → handle count
+	byKey  map[any][][2]string // handle → the (hash, path) of each IncFor not yet released
 }
 
 // New restituisce un OpenTracker pronto all'uso.
@@ -20,6 +21,27 @@ func New() *OpenTracker {
 	return &OpenTracker{
 		byHash: make(map[string]int32),
 		byPath: make(map[string]int32),
+		byKey:  make(map[any][][2]string),
+	}
+}
+
+// IncFor is Inc on behalf of handle key: ReleaseFor undoes each of key's increments exactly once,
+// whatever happened to the pump the handle attached to.
+func (t *OpenTracker) IncFor(key any, hash, path string) {
+	t.mu.Lock()
+	t.byKey[key] = append(t.byKey[key], [2]string{hash, path})
+	t.mu.Unlock()
+	t.Inc(hash, path)
+}
+
+// ReleaseFor decrements every increment IncFor recorded for key; a second call does nothing.
+func (t *OpenTracker) ReleaseFor(key any) {
+	t.mu.Lock()
+	incs := t.byKey[key]
+	delete(t.byKey, key)
+	t.mu.Unlock()
+	for _, hp := range incs {
+		t.Dec(hp[0], hp[1])
 	}
 }
 

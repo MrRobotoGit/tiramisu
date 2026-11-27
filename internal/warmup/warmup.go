@@ -1,7 +1,9 @@
 package warmup
 
 import (
+	"context"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -94,6 +96,7 @@ type warmupWrite struct {
 	buf    *[]byte // pooled buffer pointer — returned to warmupWritePool after write
 	len    int     // actual data length within buf
 	off    int64
+	cut    bool // truncate the head at off (DropRange), in order with the queued writes
 }
 
 // cachedHandle holds an open file descriptor with last-access tracking.
@@ -173,6 +176,7 @@ type DiskWarmupCache struct {
 	touched      sync.Map   // path -> time.Time of the last mtime refresh on read
 	mids         sync.Map   // mid path -> *midFile (coverage, from the .cov file)
 	midWriting   sync.Map   // mid path -> true while a piece is written to it
+	floors       sync.Map   // head path -> int64: coverage capped there until the head is cut (DropRange)
 	writeCh      chan warmupWrite
 
 	headMax    int64 // head cap; 0 = FileSize
@@ -298,6 +302,10 @@ func (d *DiskWarmupCache) scanExisting(dropHeads bool) (total int64, dropped, re
 			if _, serr := os.Stat(filepath.Join(dir, strings.TrimSuffix(name, tailDoneSuffix))); serr != nil {
 				os.Remove(filepath.Join(dir, name)) // orphan marker
 			}
+			continue
+		}
+		if strings.HasSuffix(name, ".played") {
+			os.Remove(filepath.Join(dir, name)) // marker of a reverted eviction policy
 			continue
 		}
 		if strings.HasSuffix(name, tailSuffix) {
@@ -497,6 +505,10 @@ func (d *DiskWarmupCache) writeWorker() {
 		case <-d.stop:
 			return
 		case w := <-d.writeCh:
+			if w.cut {
+				d.cutHead(w.hash, w.fileID, w.off)
+				continue
+			}
 			d.processWrite(w.hash, w.fileID, (*w.buf)[:w.len], w.off)
 			warmupWritePool.Put(w.buf)
 		}
@@ -519,7 +531,7 @@ func (d *DiskWarmupCache) WriteChunk(hash string, fileID int, data []byte, off i
 	}
 
 	select {
-	case d.writeCh <- warmupWrite{hash, fileID, bufPtr, len(data), off}:
+	case d.writeCh <- warmupWrite{hash: hash, fileID: fileID, buf: bufPtr, len: len(data), off: off}:
 	default:
 		warmupWritePool.Put(bufPtr)
 	}
@@ -632,6 +644,14 @@ func (d *DiskWarmupCache) tailPath(hash string, fileID int) string {
 // result as coverage (pump start offset, warmup gates, ReadAt clamp), which holds only
 // because processWrite refuses writes that would leave a hole.
 func (d *DiskWarmupCache) GetAvailableRange(hash string, fileID int) int64 {
+	n := d.availableRange(hash, fileID)
+	if v, ok := d.floors.Load(d.filePath(hash, fileID)); ok {
+		n = min(n, v.(int64))
+	}
+	return n
+}
+
+func (d *DiskWarmupCache) availableRange(hash string, fileID int) int64 {
 	path := d.filePath(hash, fileID)
 	if val, ok := d.missing.Load(path); ok {
 		// The negative cache must expire: a file absent at one Open is routinely created
@@ -720,6 +740,16 @@ func (d *DiskWarmupCache) ReadAt(hash string, fileID int, buf []byte, off int64)
 	if off > d.headCap() {
 		return 0, nil
 	}
+	return d.readHead(hash, fileID, buf, off)
+}
+
+// ReadCovered reads any bytes the head file covers, the boundary chunk past headCap included
+// (ReadAt keeps the read path to the head proper).
+func (d *DiskWarmupCache) ReadCovered(hash string, fileID int, buf []byte, off int64) (int, error) {
+	return d.readHead(hash, fileID, buf, off)
+}
+
+func (d *DiskWarmupCache) readHead(hash string, fileID int, buf []byte, off int64) (int, error) {
 	path := d.filePath(hash, fileID)
 
 	ch, err := d.getHandle(path)
@@ -847,6 +877,44 @@ func (d *DiskWarmupCache) ReadTail(hash string, fileID int, buf []byte, absolute
 		d.touch(path)
 	}
 	return n, err
+}
+
+// DropRange drops the SSD copies of [off, end) of a file, bytes of a piece that failed its
+// hash: the head is capped at off at once and cut there in order with the queued writes; a tail
+// window holding any of them is removed whole (its coverage is in memory only).
+func (d *DiskWarmupCache) DropRange(hash string, fileID int, off, end, fileSize int64) {
+	if d == nil || end <= off {
+		return
+	}
+	if head := d.filePath(hash, fileID); off < d.headCap() {
+		if v, ok := d.floors.Load(head); !ok || off < v.(int64) {
+			d.floors.Store(head, off)
+		}
+		select {
+		case d.writeCh <- warmupWrite{hash: hash, fileID: fileID, off: off, cut: true}:
+		case <-d.stop:
+		}
+	}
+	if tailStart := max(fileSize-TailWarmupSize, 0); end > tailStart && fileExists(d.tailPath(hash, fileID)) {
+		d.Invalidate(hash, fileID, Tail)
+	}
+}
+
+// cutHead truncates a head file at off and lifts the coverage cap DropRange set.
+func (d *DiskWarmupCache) cutHead(hash string, fileID int, off int64) {
+	path := d.filePath(hash, fileID)
+	defer d.floors.CompareAndDelete(path, off) // a lower cut still queued keeps its cap
+	size := d.headSize(path)
+	if size <= off {
+		return
+	}
+	ch, err := d.getHandle(path)
+	if err != nil || ch.closed.Load() || ch.f.Truncate(off) != nil {
+		return
+	}
+	atomic.AddInt64(&d.totalSize, off-size)
+	d.sizeCache.Store(path, sizeEntry{size: off, updatedAt: time.Now()})
+	logf.Printf("[DiskWarmup] CUT %s at %d (a piece failed its hash)", filepath.Base(path), off)
 }
 
 func (d *DiskWarmupCache) RemoveHash(hash string) {
@@ -1004,8 +1072,17 @@ func (d *DiskWarmupCache) EnsureTailWhenIdle(hash string, fileID int, fileSize i
 // of stalling): the fill waits and retries instead of giving up. Wired at startup.
 var TailPaused error
 
-// tailPausedRetry spaces the retries while paused; tailPausedMax bounds the wait.
+// tailPausedRetry spaces the retries while paused; tailPausedMax bounds the wait, paused or slow.
 var tailPausedRetry, tailPausedMax = 2 * time.Second, 15 * time.Minute
+
+// tailRetryMax caps the pause between retries of a block that timed out.
+const tailRetryMax = 30 * time.Second
+
+// tailFetchTransient: the block did not arrive before the fetch deadline (the fetch closes its
+// pipe on timeout), as opposed to a torrent that is gone or has no metadata.
+func tailFetchTransient(err error) bool {
+	return errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.DeadlineExceeded)
+}
 
 // EnsureTail fills the whole tail window sequentially in the background so TailReady can
 // actually become true. Opportunistic WriteTail only records the ranges a client happened
@@ -1042,6 +1119,7 @@ func (d *DiskWarmupCache) EnsureTail(hash string, fileID int, fileSize int64) {
 		tr := d.tailRangeFor(path)
 
 		started := time.Now()
+		backoff := pausedRetry
 		var fetched int64
 		buf := make([]byte, tailFillChunk)
 		for rel := int64(0); rel < tailLen; {
@@ -1063,6 +1141,14 @@ func (d *DiskWarmupCache) EnsureTail(hash string, fileID int, fileSize int64) {
 				time.Sleep(pausedRetry)
 				continue
 			}
+			// A block that did not arrive in time (slow swarm) is retried with a growing pause
+			// instead of abandoning the tail until the next playback.
+			if tailFetchTransient(err) && time.Since(started) < pausedMax {
+				time.Sleep(backoff)
+				backoff = min(backoff*2, tailRetryMax)
+				continue
+			}
+			backoff = pausedRetry
 			if err != nil || n <= 0 {
 				logf.Printf("[DiskWarmup] Tail fill stopped at %.1f/%.1fMB for %s: %v",
 					float64(rel)/(1<<20), float64(tailLen)/(1<<20), filepath.Base(path), err)

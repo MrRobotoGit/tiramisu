@@ -36,6 +36,7 @@ type Engine struct {
 
 	ready     chan struct{}
 	readyOnce sync.Once
+	onCorrupt atomic.Pointer[func(hash string, fileID int, off, end int64)]
 
 	// Seams, replaced in tests.
 	now        func() time.Time
@@ -170,7 +171,8 @@ func (e *Engine) clientOptions(cfg Config) bt.Options {
 
 // connect builds a new store and client; the ticker starts only on success.
 func (e *Engine) connect(cfg Config, o bt.Options) error {
-	store := piecestore.New(piecestore.Config{Capacity: cfg.CacheSize, Settings: e.pieceSettings, Logf: e.deps.Logf})
+	store := piecestore.New(piecestore.Config{Capacity: cfg.CacheSize, Settings: e.pieceSettings, Logf: e.deps.Logf,
+		OnCorrupt: e.pieceCorrupt})
 	c, err := e.newClient(o, store, e.deps.Logf)
 	if err != nil {
 		return fmt.Errorf("engine: connect: %w", err)
@@ -268,4 +270,22 @@ func (e *Engine) tickLoop(stop, done chan struct{}) {
 func (e *Engine) tick() {
 	e.updateStats()
 	e.expire()
+}
+
+// SetOnCorrupt installs the hook told, per file, the byte range [off, end) of a piece that
+// failed its hash: the caller drops its copies of those unverified bytes.
+func (e *Engine) SetOnCorrupt(f func(hash string, fileID int, off, end int64)) { e.onCorrupt.Store(&f) }
+
+func (e *Engine) pieceCorrupt(hash string, off, n int64) {
+	f := e.onCorrupt.Load()
+	t := e.Get(hash)
+	if f == nil || t == nil {
+		return
+	}
+	for _, fl := range t.Files() {
+		lo, hi := max(off, fl.Offset), min(off+n, fl.Offset+fl.Length)
+		if lo < hi {
+			(*f)(hash, fl.ID, lo-fl.Offset, hi-fl.Offset)
+		}
+	}
 }

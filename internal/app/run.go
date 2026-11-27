@@ -46,6 +46,7 @@ import (
 	"tiramisu/internal/prowlarr"
 	"tiramisu/internal/ratelimit"
 	"tiramisu/internal/registry"
+	"tiramisu/internal/stallnotice"
 	"tiramisu/internal/streamer"
 	syncercache "tiramisu/internal/syncer/cache"
 	"tiramisu/internal/syncer/engines"
@@ -185,6 +186,9 @@ func Run(version string) {
 	// right after WriteChunk() returns could read stale state, since WriteChunk only enqueues and
 	// returns immediately (see OnWarmupStateChange doc comment in internal/warmup/warmup.go).
 	warmup.OnWarmupStateChange = host.WarmupActive
+	stallNotices = stallnotice.Boot(stallnotice.Options{Enabled: func() bool { return gc().StallNotice },
+		Goodput: host.Streamer.Goodput, GoodputSeq: host.Streamer.GoodputSeq, CopyAny: raCache.CopyAny, Tick: host.Streamer.Tick(), Logf: logger.Printf,
+		Peers: nativeBridge.ActivePeers, UnchokeSettle: nativeBridge.UnchokeSettle, Announce: announceForNotice, Failed: ttffNoticeShown, OnCorrupt: eng.SetOnCorrupt, DropCache: raCache.Drop, Settle: bridge.FetchTimeout()})
 	// Lets the warmup package pull the tail window itself (EnsureTail): a prefetch nobody
 	// waits on; it cannot import the bridge, so the dependency is injected.
 	warmup.TailFetch = nativeBridge.PrefetchBlock
@@ -426,7 +430,7 @@ func Run(version string) {
 
 		jsonString := func(v string) string { b, _ := json.Marshal(v); return string(b) }
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"version":%s, "config_source":%s, "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":%s, "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d, "peer_conns_tcp":%d, "peer_conns_utp":%d, "peer_rated_tcp":%d, "peer_rated_utp":%d, "peer_useful_bps_tcp":%.0f, "peer_useful_bps_utp":%.0f, "peer_eject_count_utp":%d, "peer_churn_count":%d, "peer_churn_count_utp":%d, "deadline_pieces":%d, "audio_namespace_state":%s, "audio_namespace_entries":%d, "gradient2_peers":%d, "gradient2_backing_off":%d, "gradient2_limit_min":%d, "gradient2_limit_max":%d, "shield_active":%t, "shield_last_corruption":%d, "shield_need_s":%d, "github_stars":%d}`,
+		fmt.Fprintf(w, `{"version":%s, "config_source":%s, "uptime":"%s", "cache_entries":%d, "cache_size_mb":%.2f, "cleanup_hashes":%d, "cleanup_offsets":%d, "cleanup_activities":%d, "locks_total":%d, "master_concurrency_limit":%d, "negative_cache_entries":%d, "fullpack_cache_entries":%d, "streaming_threshold_kb":%d, "config_preload_workers":%d, "max_conns_per_host":%d, "read_ahead_total_bytes":%d, "read_ahead_active_bytes":%d, "read_ahead_stale_bytes":%d, "read_ahead_entries":%d, "read_ahead_budget":%d, "read_ahead_percent":%.2f, "read_ahead_active_percent":%.2f, "read_ahead_stale_percent":%.2f, "natpmp_port":%d, "latest_version":%s, "update_available":%t, "warmup_duration_buckets_lt_2_5_10_15_30_60_120_gte120s":%s, "hedge_trigger_count":%d, "hedge_circuit_open":%t, "fetch_singleflight_dedup":%d, "peer_eject_count":%d, "v304_banned_peers":%d, "ip_blocklist_rejections":%d, "ip_blocklist_ips":%d, "fuse_short_reads":%d, "fuse_short_reads_repaired":%d, "fuse_short_reads_failed":%d, "short_read_stream":%d, "short_read_fetch":%d, "short_read_repaired":%d, "short_read_unfilled":%d, "peer_conns_tcp":%d, "peer_conns_utp":%d, "peer_rated_tcp":%d, "peer_rated_utp":%d, "peer_useful_bps_tcp":%.0f, "peer_useful_bps_utp":%.0f, "peer_eject_count_utp":%d, "peer_churn_count":%d, "peer_churn_count_utp":%d, "deadline_pieces":%d, "audio_namespace_state":%s, "audio_namespace_entries":%d, "gradient2_peers":%d, "gradient2_backing_off":%d, "gradient2_limit_min":%d, "gradient2_limit_max":%d, "shield_active":%t, "shield_last_corruption":%d, "shield_need_s":%d, "github_stars":%d, "stall_notices":%d, "stall_notice_ready":%t}`,
 			jsonString(AppVersion),
 			jsonString(gc().ConfigPath),
 			time.Since(startTime),
@@ -452,7 +456,7 @@ func Run(version string) {
 			peerStats.EjectUTP, peerStats.ChurnTotal, peerStats.ChurnUTP, deadlinePieces,
 			jsonString(audioNamespaceState()), audioNamespaceEntries(),
 			g2Stats.Peers, g2Stats.BackingOff, g2Stats.LimitMin, g2Stats.LimitMax,
-			shieldOn, shieldLastCorr, shieldNeed, updater.Stars())
+			shieldOn, shieldLastCorr, shieldNeed, updater.Stars(), stallNotices.Notices(), stallNotices.Ready())
 	})
 
 	// Which blocklist ranges are actually rejecting peers. The aggregate counters say
