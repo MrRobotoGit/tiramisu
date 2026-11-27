@@ -42,6 +42,10 @@ type PeerConn struct {
 	// unchokeKey is the client family and role this connection is filed under by
 	// unchoke-deadline.go, fixed on first use so its waits stay under one key.
 	unchokeKey string
+	// unchokedOnce: the peer unchoked us at least once on this connection.
+	unchokedOnce bool
+	// rechokedAt: when a peer that had unchoked us choked us again (zero: never).
+	rechokedAt time.Time
 
 	// See BEP 3 etc.
 	PeerID             PeerID
@@ -865,6 +869,9 @@ func (c *PeerConn) mainReadLoop() (err error) {
 				// only a single peer, our chunk balancing should smooth over this abuse.
 			}
 			c.peerChoking = true
+			if c.unchokedOnce {
+				c.rechokedAt = time.Now()
+			}
 			c.updateExpectingChunks()
 		case pp.Unchoke:
 			if !c.peerChoking {
