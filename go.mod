@@ -1,8 +1,6 @@
 module tiramisu
 
-go 1.26.0
-
-require github.com/hanwen/go-fuse/v2 v2.12.1
+go 1.27.0
 
 replace (
 	github.com/anacrolix/torrent => ./internal/anacrolix-torrent
@@ -14,6 +12,7 @@ require (
 	github.com/anacrolix/torrent v1.55.0
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/google/uuid v1.6.0
+	github.com/hanwen/go-fuse/v2 v2.12.1
 	github.com/jackpal/go-nat-pmp v1.0.2
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oschwald/maxminddb-golang v1.13.1

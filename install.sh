@@ -728,12 +728,22 @@ ensure_go() {
 
     detect_go_arch
 
-    # Find an existing Go binary that matches the detected OS/arch
+    # The build runs with GOTOOLCHAIN=local, so Go must be at least the go.mod version
+    local go_min
+    go_min=$(awk '/^go /{print $2; exit}' "${INSTALL_DIR}/go.mod" 2>/dev/null)
+    go_min="${go_min:-1.27.0}"
+
+    # Find an existing Go binary that matches the detected OS/arch and the minimum version
     local candidates=("${go_install_dir}/bin/go" "$(command -v go 2>/dev/null)")
     for candidate in "${candidates[@]}"; do
         if [ -x "$candidate" ]; then
-            local info
+            local info have
             info=$("$candidate" version 2>/dev/null)
+            have=$(echo "$info" | awk '{print $3}' | sed 's/^go//')
+            if [ "$(printf '%s\n%s\n' "$go_min" "$have" | sort -V | head -1)" != "$go_min" ]; then
+                print_info "Skipping $info: go.mod needs ${go_min}+"
+                continue
+            fi
             if echo "$info" | grep -q "${GO_OS}/${GO_ARCH}"; then
                 GO_BIN="$candidate"
                 print_ok "Go found: $info"
@@ -746,7 +756,7 @@ ensure_go() {
     local go_version
     go_version=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)
     if [ -z "$go_version" ]; then
-        go_version="go1.26.8"   # fallback if network unavailable
+        go_version="go1.27.4"   # fallback if network unavailable
     fi
 
     print_info "${go_version} (${GO_OS}/${GO_ARCH}) not found — downloading..."
