@@ -696,7 +696,7 @@ pumpSlotResolved:
 			if belowLeader && limit > int64(target) {
 				buf = buf[:target]
 			}
-			nFetch, noticed, err := stallNotices.Await(fuseCtx, h.path, off, h.isPrimaryHandle.Load(), dest[:target], func(d []byte) (int, error) {
+			nFetch, noticed, err := stallNotices.Await(fuseCtx, h.path, off, noticeEligible(h), dest[:target], func(d []byte) (int, error) {
 				return nativeBridge.FetchAhead(h.hash, h.fileID, off, buf, d, func(total int, done bool, _ error) {
 					if total > 0 && !belowLeader {
 						raCache.Put(h.path, off, off+int64(total)-1, buf[:total])
@@ -733,7 +733,7 @@ pumpSlotResolved:
 
 	// Terminal once the bounded retries are spent (EAGAIN would make a scanner loop on bytes
 	// that are never coming); inside the stall notice's window the player gets the notice.
-	if k, noticed := stallNotices.Fail(h.path, off, h.isPrimaryHandle.Load(), dest[:target]); noticed {
+	if k, noticed := stallNotices.Fail(h.path, off, noticeEligible(h), dest[:target]); noticed {
 		h.mu.Lock()
 		h.lastActivityTime = time.Now()
 		h.mu.Unlock()

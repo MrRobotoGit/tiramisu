@@ -121,6 +121,11 @@ func mayTakeOverStreamingPrimary(h, inc *MkvHandle, confirmedAt time.Time) bool 
 	return !h.openedAt.IsZero() && h.openedAt.After(inc.openedAt) && !h.openedAt.After(confirmedAt)
 }
 
+// noticeEligible: the primary, or any reader while no primary is watching (a resume past a probe).
+func noticeEligible(h *MkvHandle) bool {
+	return h.isPrimaryHandle.Load() || activeStreamingPrimary(h.path, h) == nil
+}
+
 // activeStreamingPrimary returns the primary handle on path, other than except, that has streamed
 // like a player and read within primaryActiveWindow, or nil.
 func activeStreamingPrimary(path string, except *MkvHandle) *MkvHandle {
