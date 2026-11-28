@@ -25,11 +25,12 @@ func init() {
 // the peers still waiting go on to unchoke us; "" covers every other key. A connection closed
 // before any unchoke counts as a censored wait, never as a refusal.
 var unchokeDeadline = map[string]time.Duration{
-	"qbittorrent/seed": 20 * time.Second, "qbittorrent/leech": 5 * time.Second,
+	"qbittorrent/seed": 10 * time.Second, "qbittorrent/leech": time.Second,
 	"utorrent/seed": 5 * time.Second, "utorrent/leech": 5 * time.Second,
 	"transmission/seed": 10 * time.Second, "transmission/leech": time.Second,
-	"libtorrent/seed": time.Second, "deluge/seed": 10 * time.Second,
-	"bitcomet/leech": 20 * time.Second, "vuze/leech": 5 * time.Second,
+	"libtorrent/seed": 5 * time.Second, "deluge/seed": 10 * time.Second,
+	"bittorrent/seed": 5 * time.Second, "vuze/seed": 5 * time.Second,
+	"bitcomet/leech": 20 * time.Second, "vuze/leech": 10 * time.Second,
 	"": 10 * time.Second,
 }
 
